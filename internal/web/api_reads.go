@@ -247,8 +247,8 @@ func (s *Server) apiListFindings(w http.ResponseWriter, r *http.Request) {
 	sg := r.URL.Query().Get("scan_group")
 	q := s.DB.Where("repository_id = ?", id)
 	if skill != "" || sg != "" {
-		// Use scan subquery only when filtering by scan-owned attributes
-		// (skill_name, scan_group) that live on the scans table.
+		// skill_name and scan_group live on scans, but keep repository_id
+		// inside the subquery so a guessed group never leaks another repo's findings.
 		scans := s.DB.Model(&db.Scan{}).Select("id").Where("repository_id = ?", id)
 		if skill != "" {
 			scans = scans.Where("skill_name = ?", skill)
