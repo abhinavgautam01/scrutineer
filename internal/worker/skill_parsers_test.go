@@ -829,6 +829,28 @@ func TestParseRevalidate_truePositiveMovesNewToEnriched(t *testing.T) {
 	}
 }
 
+func TestParseRevalidate_alreadyFixedMovesOpenFindingToFixed(t *testing.T) {
+	report := `{"verdict":"already_fixed","reason":"commit abc1234 added a containment check before opening the path"}`
+	f, gdb := runSkillWithFinding(t, "revalidate", report, db.FindingReady)
+	if f.Status != db.FindingFixed {
+		t.Errorf("status = %s, want fixed", f.Status)
+	}
+	if f.LastRevalidateVerdict != "already_fixed" {
+		t.Errorf("last_revalidate_verdict = %q, want already_fixed", f.LastRevalidateVerdict)
+	}
+	notes := findingNotes(gdb, f.ID)
+	if len(notes) == 0 || !strings.Contains(notes[0].Body, "commit abc1234") {
+		t.Errorf("notes missing already_fixed evidence: %+v", notes)
+	}
+	var hist db.FindingHistory
+	if err := gdb.Where("finding_id = ? AND field = ?", f.ID, "status").First(&hist).Error; err != nil {
+		t.Fatalf("status history missing: %v", err)
+	}
+	if hist.By != "revalidate" || hist.OldValue != string(db.FindingReady) || hist.NewValue != string(db.FindingFixed) {
+		t.Errorf("status history = %+v, want ready -> fixed by revalidate", hist)
+	}
+}
+
 func TestParseRevalidate_recordsPrivilegeRequired(t *testing.T) {
 	report := `{"verdict":"true_positive","reason":"trace holds","privilege_required":"authenticated"}`
 	f, gdb := runSkillWithFinding(t, "revalidate", report, db.FindingNew)
