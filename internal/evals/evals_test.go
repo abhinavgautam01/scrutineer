@@ -56,6 +56,7 @@ func TestLoadScenarioDefaultsRequiredButAllowsOptional(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`given: optional case
 fixture: fixtures/x
 skill: security-deep-dive
+schema_skill: security-deep-dive
 should_find:
   - finding: required by default
     evidence_contains:
@@ -82,6 +83,9 @@ must_not_contain:
 	}
 	if got := sc.MustNotContain; len(got) != 1 || got[0] != "Rails::ActiveRecord" {
 		t.Fatalf("must_not_contain = %#v, want [Rails::ActiveRecord]", got)
+	}
+	if sc.SchemaSkill != "security-deep-dive" {
+		t.Fatalf("schema_skill = %q, want security-deep-dive", sc.SchemaSkill)
 	}
 }
 
@@ -168,6 +172,27 @@ func TestScenarioValidate(t *testing.T) {
 				Skill:          "security-deep-dive",
 				ShouldFind:     []Assertion{{Finding: "x"}},
 				MustNotContain: []string{""},
+			},
+		},
+		{
+			name: "invalid skill path",
+			sc: Scenario{
+				Path:       "case.yaml",
+				Given:      "x",
+				Fixture:    "fixtures/x",
+				Skill:      "../security-deep-dive",
+				ShouldFind: []Assertion{{Finding: "x"}},
+			},
+		},
+		{
+			name: "invalid schema skill path",
+			sc: Scenario{
+				Path:        "case.yaml",
+				Given:       "x",
+				Fixture:     "fixtures/x",
+				Skill:       "security-deep-dive",
+				SchemaSkill: "/security-deep-dive",
+				ShouldFind:  []Assertion{{Finding: "x"}},
 			},
 		},
 	}
@@ -318,6 +343,80 @@ func TestHeuristicJudgeFailures(t *testing.T) {
 	}
 	if got[1].Matched {
 		t.Fatalf("should_not_find hit should fail the assertion: %+v", got[1])
+	}
+}
+
+func TestRunnerLoadsEvalSkillWithProductionSchema(t *testing.T) {
+	sc := mustLoadScenario(t, "../../evals/security-deep-dive-short-sqli.yaml")
+	r := Runner{
+		Runner:     fakeSkillRunner{report: validDeepDiveReport()},
+		SkillsRoot: "../../skills",
+		EvalsRoot:  "../../evals",
+		WorkRoot:   t.TempDir(),
+		Model:      "test-model",
+	}
+	skill, err := r.loadSkill(sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skill.Name != "security-deep-dive-short" {
+		t.Fatalf("skill name = %q, want security-deep-dive-short", skill.Name)
+	}
+	if skill.SchemaJSON == "" {
+		t.Fatal("eval skill did not inherit production schema")
+	}
+	res, err := r.RunScenario(context.Background(), sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.FailedRequired != 0 || res.Unexpected != 0 {
+		t.Fatalf("unexpected failures: %+v", res)
+	}
+}
+
+func TestRunnerEvalSkillFileOnlyFallsBackWhenAbsent(t *testing.T) {
+	evalsRoot := t.TempDir()
+	productionRoot := t.TempDir()
+	evalSkill := filepath.Join(evalsRoot, "skills", "variant", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(evalSkill), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(evalsRoot, "missing.md"), evalSkill); err != nil {
+		t.Fatal(err)
+	}
+	writeProductionSkill(t, productionRoot, "variant", "variant")
+
+	r := Runner{EvalsRoot: evalsRoot, SkillsRoot: productionRoot}
+	if got := r.skillFile("variant"); got != evalSkill {
+		t.Fatalf("skillFile = %q, want broken eval skill path %q", got, evalSkill)
+	}
+	_, err := r.loadSkill(Scenario{Path: "case.yaml", Skill: "variant"})
+	if err == nil {
+		t.Fatal("loadSkill succeeded through production fallback, want eval skill parse error")
+	}
+}
+
+func TestRunnerRejectsSkillNameMismatch(t *testing.T) {
+	evalsRoot := t.TempDir()
+	writeEvalSkill(t, evalsRoot, "expected", "actual")
+
+	r := Runner{EvalsRoot: evalsRoot, SkillsRoot: t.TempDir()}
+	_, err := r.loadSkill(Scenario{Path: "case.yaml", Skill: "expected"})
+	if err == nil || !strings.Contains(err.Error(), `skill "expected" loaded SKILL.md with name "actual"`) {
+		t.Fatalf("loadSkill error = %v, want skill name mismatch", err)
+	}
+}
+
+func TestRunnerRejectsSchemaSkillNameMismatch(t *testing.T) {
+	evalsRoot := t.TempDir()
+	skillsRoot := t.TempDir()
+	writeEvalSkill(t, evalsRoot, "variant", "variant")
+	writeProductionSkill(t, skillsRoot, "schema-source", "wrong-schema")
+
+	r := Runner{EvalsRoot: evalsRoot, SkillsRoot: skillsRoot}
+	_, err := r.loadSkill(Scenario{Path: "case.yaml", Skill: "variant", SchemaSkill: "schema-source"})
+	if err == nil || !strings.Contains(err.Error(), `schema_skill "schema-source" loaded SKILL.md with name "wrong-schema"`) {
+		t.Fatalf("loadSkill error = %v, want schema skill name mismatch", err)
 	}
 }
 
@@ -631,6 +730,39 @@ func mustLoadScenario(t *testing.T, path string) Scenario {
 		t.Fatal(err)
 	}
 	return sc
+}
+
+func writeEvalSkill(t *testing.T, root, dirName, skillName string) {
+	t.Helper()
+	writeSkillFile(t, filepath.Join(root, "skills", dirName), skillName)
+}
+
+func writeProductionSkill(t *testing.T, root, dirName, skillName string) {
+	t.Helper()
+	writeSkillFile(t, filepath.Join(root, dirName), skillName)
+}
+
+func writeSkillFile(t *testing.T, dir, skillName string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`---
+name: %s
+description: eval test skill
+license: MIT
+metadata:
+  scrutineer.output_file: report.json
+  scrutineer.output_kind: freeform
+---
+
+# %s
+
+Write report.json.
+`, skillName, skillName)
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func validDeepDiveReport() string {
