@@ -90,7 +90,9 @@ Write `./report.json` matching `./schema.json`:
 Scrutineer applies this:
 
 - `verdict` and `reason` are appended to the finding's notes as a timestamped revalidate record.
-- `true_positive` moves a `new` finding to `enriched`. Any other verdict leaves status alone (rejection is a human act).
+- `true_positive` moves a `new` finding to `enriched`.
+- `already_fixed` moves any open finding to `fixed`; cite the upstream commit or code change in `reason` so the note explains why it was auto-closed.
+- `false_positive` and `uncertain` leave status alone (rejection is a human act).
 - `adjusted_severity` overwrites the finding's severity field, with the change recorded in finding history (so the original is preserved and auditable). The analyst can always change it back.
 - When `verdict` is `true_positive` AND the post-adjustment severity is `High` or `Critical`, scrutineer chains the `verify` skill: a finding-scoped run that actually executes the reproduction against HEAD. The chain reads the adjusted severity, so a Critical you mark down to Medium correctly stops at revalidate.
 

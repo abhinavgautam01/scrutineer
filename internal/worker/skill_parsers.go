@@ -1011,9 +1011,10 @@ func (w *Worker) parseReleaseWatchOutput(scan *db.Scan, report string, emit func
 // parseRevalidateOutput records the cheap classifier verdict for a
 // finding. The verdict and reason become a FindingNote; an adjusted
 // severity overwrites the finding's severity (with the change recorded
-// in finding history via WriteFindingField); status transitions
-// new -> enriched only on true_positive. Rejection of false positives
-// stays a human act, so false_positive does not transition status.
+// in finding history via WriteFindingField); true_positive promotes
+// new -> enriched, and already_fixed closes active findings as fixed.
+// Rejection of false positives stays a human act, so false_positive
+// does not transition status.
 func (w *Worker) parseRevalidateOutput(scan *db.Scan, report string, emit func(Event)) error {
 	if scan.FindingID == nil {
 		return fmt.Errorf("revalidate scan has no finding_id")
@@ -1062,10 +1063,17 @@ func (w *Worker) parseRevalidateOutput(scan *db.Scan, report string, emit func(E
 		return fmt.Errorf("update last_revalidate_verdict: %w", err)
 	}
 
-	// Status transition: only true_positive promotes new -> enriched.
+	// Status transitions: true_positive promotes new -> enriched;
+	// already_fixed auto-closes active findings because the cheap git-history
+	// check found an upstream change that addressed the trace (#112).
 	// false_positive does not auto-reject; the analyst owns rejection.
-	if result.Verdict == "true_positive" && f.Status == db.FindingNew {
+	switch {
+	case result.Verdict == "true_positive" && f.Status == db.FindingNew:
 		if err := db.WriteFindingField(w.DB, f.ID, "status", string(db.FindingEnriched), db.SourceModel, "revalidate"); err != nil {
+			return fmt.Errorf("update status: %w", err)
+		}
+	case result.Verdict == "already_fixed":
+		if err := db.WriteFindingField(w.DB, f.ID, "status", string(db.FindingFixed), db.SourceModel, "revalidate"); err != nil {
 			return fmt.Errorf("update status: %w", err)
 		}
 	}
