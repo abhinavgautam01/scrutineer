@@ -243,19 +243,22 @@ func (s *Server) apiListFindings(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Direct subquery; GORM's Joins("Scan") aliasing doesn't round-trip on
-	// sqlite when the joined struct has its own relations.
-	scans := s.DB.Model(&db.Scan{}).Select("id").Where("repository_id = ?", id)
-	if skill := r.URL.Query().Get("skill"); skill != "" {
-		scans = scans.Where("skill_name = ?", skill)
+	skill := r.URL.Query().Get("skill")
+	sg := r.URL.Query().Get("scan_group")
+	q := s.DB.Where("repository_id = ?", id)
+	if skill != "" || sg != "" {
+		// skill_name and scan_group live on scans, but keep repository_id
+		// inside the subquery so a guessed group never leaks another repo's findings.
+		scans := s.DB.Model(&db.Scan{}).Select("id").Where("repository_id = ?", id)
+		if skill != "" {
+			scans = scans.Where("skill_name = ?", skill)
+		}
+		if sg != "" {
+			scans = scans.Where("scan_group = ?", sg)
+		}
+		q = s.DB.Where("scan_id IN (?)", scans)
 	}
-	// scan_group narrows to one parallel batch so an in-flight audit skill
-	// reads only its siblings' findings. Kept inside the repo-scoped
-	// subquery so a guessed group can never leak another repo's findings.
-	if sg := r.URL.Query().Get("scan_group"); sg != "" {
-		scans = scans.Where("scan_group = ?", sg)
-	}
-	q := s.DB.Where("scan_id IN (?)", scans).Order("id desc")
+	q = q.Order("id desc")
 	if sev := r.URL.Query().Get("severity"); sev != "" {
 		q = q.Where("severity = ?", sev)
 	}
