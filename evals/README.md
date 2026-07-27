@@ -19,10 +19,19 @@ Each scenario YAML names:
 - `given`: short description of the bug or non-bug.
 - `fixture`: directory under `evals/fixtures/`.
 - `skill`: bundled skill to execute.
+- `schema_skill`: optional bundled skill whose JSON schema should validate the
+  report. Use this for eval-only prompt variants that must keep the production
+  output contract.
 - `should_find`: required findings the report must include.
 - `should_not_find`: false positives the report must not include.
 - `must_not_contain`: repo-level terms that must not appear anywhere in the
   report, such as an out-of-scope framework or nonexistent file.
+
+By default `skill` resolves from the bundled `skills/` directory. A scenario can
+also point at an eval-only variant in `evals/skills/<name>/SKILL.md`; this keeps
+prompt experiments out of the production skill set while still letting the same
+fixture harness compare them. Pair those variants with `schema_skill` when the
+variant should emit the same report shape as a production skill.
 
 Each `should_find` or `should_not_find` assertion may include
 `evidence_contains`:

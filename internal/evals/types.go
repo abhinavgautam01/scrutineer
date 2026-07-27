@@ -4,10 +4,13 @@ package evals
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
+
+var scenarioSkillNameRE = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 // Scenario is one YAML eval file under evals/. It points at a fixture
 // repository and names the skill whose output should be judged.
@@ -16,6 +19,7 @@ type Scenario struct {
 	Given          string      `yaml:"given"`
 	Fixture        string      `yaml:"fixture"`
 	Skill          string      `yaml:"skill"`
+	SchemaSkill    string      `yaml:"schema_skill"`
 	ShouldFind     []Assertion `yaml:"should_find"`
 	ShouldNotFind  []Assertion `yaml:"should_not_find"`
 	MustNotContain []string    `yaml:"must_not_contain"`
@@ -95,6 +99,12 @@ func (s Scenario) validate() error {
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("%s missing %s", s.Path, strings.Join(missing, ", "))
+	}
+	if !scenarioSkillNameRE.MatchString(s.Skill) {
+		return fmt.Errorf("%s skill %q is not a valid skill name", s.Path, s.Skill)
+	}
+	if s.SchemaSkill != "" && !scenarioSkillNameRE.MatchString(s.SchemaSkill) {
+		return fmt.Errorf("%s schema_skill %q is not a valid skill name", s.Path, s.SchemaSkill)
 	}
 	if len(s.ShouldFind) == 0 && len(s.ShouldNotFind) == 0 && len(s.MustNotContain) == 0 {
 		return fmt.Errorf("%s has no assertions", s.Path)
