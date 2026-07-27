@@ -392,6 +392,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /repositories/{id}/threat-model/run", s.repoThreatModelRun)
 	mux.HandleFunc("POST /repositories/{id}/threat-model/clear", s.repoThreatModelClear)
 	mux.HandleFunc("POST /repositories/{id}/scan-config", s.repoScanConfigSave)
+	mux.HandleFunc("POST /repositories/{id}/scan-config/ignored-paths", s.repoIgnoredPathAdd)
+	mux.HandleFunc("POST /repositories/{id}/scan-config/ignored-paths/delete", s.repoIgnoredPathDelete)
 	mux.HandleFunc("POST /repositories/{id}/scan-config/clear", s.repoScanConfigClear)
 	mux.HandleFunc("GET /scans", s.jobs)
 	mux.HandleFunc("GET /orgs", s.orgsList)
@@ -2006,6 +2008,7 @@ type repoShowView struct {
 	Maintainers      []db.Maintainer
 	Alternatives     []db.PackageAlternative
 	ShowAlternatives bool
+	IgnoredPaths     []string
 	HealthSummary    string
 	Skills           []db.Skill
 	Workbench        Workbench
@@ -2038,6 +2041,7 @@ func (s *Server) loadRepoShowView(
 	if err != nil {
 		s.Log.Error("load package alternatives", "repo", repo.ID, "err", err)
 	}
+	ignoredPaths := repoIgnoredPaths(repo)
 	// activeScans drives both the delete-confirm warning (a running scan keeps
 	// writing into the repo's clone/workspace until it returns) and the "Cancel
 	// all" button; pausedScans drives "Resume all". Both are counted over every
@@ -2056,6 +2060,7 @@ func (s *Server) loadRepoShowView(
 		Maintainers:        maintainers,
 		Alternatives:       alternatives,
 		ShowAlternatives:   showPackageAlternatives(repo, alternatives),
+		IgnoredPaths:       ignoredPaths,
 		HealthSummary:      health.Summary,
 		Skills:             s.activeRepoSkills(),
 		Workbench:          loadWorkbench(s.DB, &repo, workbenchSeed(tmScan)),
@@ -2106,6 +2111,7 @@ func (v repoShowView) renderData() map[string]any {
 		"Maintainers":        v.Maintainers,
 		"Alternatives":       v.Alternatives,
 		"ShowAlternatives":   v.ShowAlternatives,
+		"IgnoredPaths":       v.IgnoredPaths,
 		"ThreatModel":        v.ThreatModel,
 		"KnownURLs":          v.Inventory.KnownURLs,
 		"KnownPURLs":         v.Inventory.KnownPURLs,
