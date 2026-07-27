@@ -397,25 +397,40 @@ func scanStatusUpdates(status db.ScanStatus, msg string, finishedAt *time.Time, 
 }
 
 func (s *Server) bulkResumePaused(base *gorm.DB) ([]db.Scan, error) {
-	var scans []db.Scan
-	res := base.Model(&scans).Clauses(clause.Returning{
-		Columns: []clause.Column{
-			{Name: "id"},
-			{Name: "kind"},
-			{Name: "finding_id"},
-			{Name: "error"},
-			{Name: "paused_until"},
-		},
-	}).Where("status = ?", db.ScanPaused).Updates(scanStatusUpdates(
-		db.ScanQueued,
-		"",
-		nil,
-		nil,
-	))
-	if res.Error != nil {
-		return nil, res.Error
+	var resumed []db.Scan
+	err := base.Transaction(func(tx *gorm.DB) error {
+		var paused []db.Scan
+		if err := tx.Select("id", "kind", "finding_id", "error", "paused_until").
+			Where("status = ?", db.ScanPaused).
+			Find(&paused).Error; err != nil {
+			return err
+		}
+		if len(paused) == 0 {
+			return nil
+		}
+
+		byID := make(map[uint]db.Scan, len(paused))
+		for _, scan := range paused {
+			byID[scan.ID] = scan
+		}
+		var claimed []db.Scan
+		res := tx.Model(&claimed).Clauses(clause.Returning{
+			Columns: []clause.Column{{Name: "id"}},
+		}).Where("status = ?", db.ScanPaused).
+			Updates(scanStatusUpdates(db.ScanQueued, "", nil, nil))
+		if res.Error != nil {
+			return res.Error
+		}
+		resumed = make([]db.Scan, 0, len(claimed))
+		for _, scan := range claimed {
+			resumed = append(resumed, byID[scan.ID])
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	return scans, nil
+	return resumed, nil
 }
 
 func (s *Server) restorePausedAfterResumeEnqueueFailure(scan db.Scan, err error) error {
