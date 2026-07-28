@@ -41,7 +41,7 @@ func (s *Server) exportHandler() http.Handler {
 }
 
 func (s *Server) apiDeleteRepository(w http.ResponseWriter, r *http.Request) {
-	repo, ok := loadExportRowByID[db.Repository](s, w, r, "repository")
+	repo, ok := s.loadExportRepositoryByID(w, r)
 	if !ok {
 		return
 	}
@@ -55,7 +55,7 @@ func (s *Server) apiDeleteRepository(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiDeleteFinding(w http.ResponseWriter, r *http.Request) {
-	finding, ok := loadExportRowByID[db.Finding](s, w, r, "finding")
+	finding, ok := s.loadExportFindingByID(w, r)
 	if !ok {
 		return
 	}
@@ -68,22 +68,47 @@ func (s *Server) apiDeleteFinding(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func loadExportRowByID[T any](s *Server, w http.ResponseWriter, r *http.Request, name string) (T, bool) {
-	var v T
+func (s *Server) loadExportRepositoryByID(w http.ResponseWriter, r *http.Request) (db.Repository, bool) {
+	var repo db.Repository
+	id, ok := exportPathID(w, r, "repository")
+	if !ok {
+		return repo, false
+	}
+	if err := s.DB.First(&repo, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			writeAPIError(w, http.StatusNotFound, "repository not found")
+			return repo, false
+		}
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return repo, false
+	}
+	return repo, true
+}
+
+func (s *Server) loadExportFindingByID(w http.ResponseWriter, r *http.Request) (db.Finding, bool) {
+	var finding db.Finding
+	id, ok := exportPathID(w, r, "finding")
+	if !ok {
+		return finding, false
+	}
+	if err := s.DB.First(&finding, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			writeAPIError(w, http.StatusNotFound, "finding not found")
+			return finding, false
+		}
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return finding, false
+	}
+	return finding, true
+}
+
+func exportPathID(w http.ResponseWriter, r *http.Request, name string) (int, bool) {
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil || id <= 0 {
 		writeAPIError(w, http.StatusBadRequest, "invalid "+name+" id")
-		return v, false
+		return 0, false
 	}
-	if err := s.DB.First(&v, id).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			writeAPIError(w, http.StatusNotFound, name+" not found")
-			return v, false
-		}
-		writeAPIError(w, http.StatusInternalServerError, err.Error())
-		return v, false
-	}
-	return v, true
+	return id, true
 }
 
 // repositoryExportRow is the selected Repositories-tab projection used by the
