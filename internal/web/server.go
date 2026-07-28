@@ -1805,6 +1805,11 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 	if id, c, ok := LookupCWE(f.CWE); ok {
 		data["CWE"] = map[string]any{"ID": id, "Name": c.Name, "Description": c.Description}
 	}
+	if guide, err := loadFindingMigrationGuide(s.DB, f, repo); err != nil {
+		s.Log.Warn("load finding migration guide", "finding", f.ID, "err", err)
+	} else if guide != nil {
+		data["MigrationGuide"] = guide
+	}
 	if patchScan, patchRep, _ := s.latestPatchScan(f.ID); patchRep != nil {
 		data["PatchScan"] = patchScan
 		data["Patch"] = patchRep
