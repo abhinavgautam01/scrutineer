@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -24,8 +25,10 @@ const exportPrefix = "/api/v1"
 
 func (s *Server) exportHandler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("DELETE /repositories/{id}", s.apiDeleteRepository)
 	mux.HandleFunc("GET /repositories/{id}/findings", s.apiExportRepoFindings)
 	mux.HandleFunc("GET /repositories", s.apiExportRepositories)
+	mux.HandleFunc("DELETE /findings/{id}", s.apiDeleteFinding)
 	mux.HandleFunc("GET /findings", s.apiExportFindings)
 	mux.HandleFunc("GET /scans", s.apiExportScans)
 	mux.HandleFunc("POST /import", s.handleImport)
@@ -35,6 +38,52 @@ func (s *Server) exportHandler() http.Handler {
 	mux.HandleFunc("GET /audit/queue", s.apiAuditQueue)
 	mux.HandleFunc("GET /audit/metrics", s.apiAuditMetrics)
 	return mux
+}
+
+func (s *Server) apiDeleteRepository(w http.ResponseWriter, r *http.Request) {
+	repo, ok := loadExportRowByID[db.Repository](s, w, r, "repository")
+	if !ok {
+		return
+	}
+	deleted, err := s.deleteRepository(repo)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.removeRepositoryArtifacts(deleted)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) apiDeleteFinding(w http.ResponseWriter, r *http.Request) {
+	finding, ok := loadExportRowByID[db.Finding](s, w, r, "finding")
+	if !ok {
+		return
+	}
+	deleted, err := s.deleteFinding(finding)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.removeFindingArtifacts(deleted)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func loadExportRowByID[T any](s *Server, w http.ResponseWriter, r *http.Request, name string) (T, bool) {
+	var v T
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil || id <= 0 {
+		writeAPIError(w, http.StatusBadRequest, "invalid "+name+" id")
+		return v, false
+	}
+	if err := s.DB.First(&v, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			writeAPIError(w, http.StatusNotFound, name+" not found")
+			return v, false
+		}
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return v, false
+	}
+	return v, true
 }
 
 // repositoryExportRow is the selected Repositories-tab projection used by the

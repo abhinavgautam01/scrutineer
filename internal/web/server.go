@@ -2585,16 +2585,38 @@ func (s *Server) repoDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	deleted, err := s.deleteRepository(repo)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.removeRepositoryArtifacts(deleted)
+
+	setFlash(w, Flash{Category: "success", Title: "Repository deleted",
+		Description: repo.Name + " and all its scans, findings and cached clone were removed."})
+	s.redirect(w, r, "/")
+}
+
+type deletedRepository struct {
+	Repo            db.Repository
+	ScanIDs         []uint
+	ConversationIDs []uint
+}
+
+func (s *Server) deleteRepository(repo db.Repository) (deletedRepository, error) {
+	deleted := deletedRepository{Repo: repo}
 	// Collected before the transaction deletes the scan rows: each scan's
 	// per-scan workspace and claude session store under DataDir are reclaimed
 	// after the commit.
-	var scanIDs []uint
-	s.DB.Model(&db.Scan{}).Where("repository_id = ?", repo.ID).Pluck("id", &scanIDs)
+	if err := s.DB.Model(&db.Scan{}).Where("repository_id = ?", repo.ID).Pluck("id", &deleted.ScanIDs).Error; err != nil {
+		return deletedRepository{}, err
+	}
 	// Chat conversation workspaces are reclaimed after the commit, same as
 	// scan workspaces. Finding-scoped conversations carry the finding's
 	// repository_id, so this covers them too.
-	var convIDs []uint
-	s.DB.Model(&db.Conversation{}).Where("repository_id = ?", repo.ID).Pluck("id", &convIDs)
+	if err := s.DB.Model(&db.Conversation{}).Where("repository_id = ?", repo.ID).Pluck("id", &deleted.ConversationIDs).Error; err != nil {
+		return deletedRepository{}, err
+	}
 
 	err := s.DB.Transaction(func(tx *gorm.DB) error {
 		// Match scans by the *finding's* repo, not the scan's own: a finding-
@@ -2615,7 +2637,7 @@ func (s *Server) repoDelete(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, child := range []any{
 			&db.FindingNote{}, &db.FindingCommunication{}, &db.FindingReference{},
-			&db.FindingHistory{}, &db.FindingDependent{},
+			&db.FindingHistory{}, &db.FindingDependent{}, &db.FindingReview{},
 		} {
 			if err := tx.Where(findingsOfRepo, repo.ID).Delete(child).Error; err != nil {
 				return err
@@ -2642,27 +2664,70 @@ func (s *Server) repoDelete(w http.ResponseWriter, r *http.Request) {
 		return tx.Delete(&repo).Error
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return deletedRepository{}, err
 	}
+	return deleted, nil
+}
 
-	if err := os.RemoveAll(worker.RepoCacheRoot(s.Worker.DataDir, repo.URL)); err != nil {
-		s.Log.Error("repoDelete: remove clone cache", "repo", repo.ID, "err", err)
+func (s *Server) removeRepositoryArtifacts(deleted deletedRepository) {
+	if err := os.RemoveAll(worker.RepoCacheRoot(s.Worker.DataDir, deleted.Repo.URL)); err != nil {
+		s.Log.Error("repoDelete: remove clone cache", "repo", deleted.Repo.ID, "err", err)
 	}
-	for _, id := range scanIDs {
+	for _, id := range deleted.ScanIDs {
 		if err := s.Worker.RemoveScanArtifacts(id); err != nil {
 			s.Log.Error("repoDelete: remove scan workspace", "scan", id, "err", err)
 		}
 	}
-	for _, id := range convIDs {
+	for _, id := range deleted.ConversationIDs {
 		if err := s.Worker.RemoveChatArtifacts(id); err != nil {
 			s.Log.Error("repoDelete: remove chat workspace", "conv", id, "err", err)
 		}
 	}
+}
 
-	setFlash(w, Flash{Category: "success", Title: "Repository deleted",
-		Description: repo.Name + " and all its scans, findings and cached clone were removed."})
-	s.redirect(w, r, "/")
+type deletedFinding struct {
+	ConversationIDs []uint
+}
+
+func (s *Server) deleteFinding(finding db.Finding) (deletedFinding, error) {
+	var deleted deletedFinding
+	if err := s.DB.Model(&db.Conversation{}).Where("finding_id = ?", finding.ID).
+		Pluck("id", &deleted.ConversationIDs).Error; err != nil {
+		return deletedFinding{}, err
+	}
+	err := s.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&db.Scan{}).Where("finding_id = ?", finding.ID).
+			Update("finding_id", nil).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec("DELETE FROM finding_labels_join WHERE finding_id = ?", finding.ID).Error; err != nil {
+			return err
+		}
+		for _, child := range []any{
+			&db.FindingNote{}, &db.FindingCommunication{}, &db.FindingReference{},
+			&db.FindingHistory{}, &db.FindingDependent{}, &db.FindingReview{},
+		} {
+			if err := tx.Where("finding_id = ?", finding.ID).Delete(child).Error; err != nil {
+				return err
+			}
+		}
+		if err := deleteFindingConversations(tx, finding.ID); err != nil {
+			return err
+		}
+		return tx.Delete(&finding).Error
+	})
+	if err != nil {
+		return deletedFinding{}, err
+	}
+	return deleted, nil
+}
+
+func (s *Server) removeFindingArtifacts(deleted deletedFinding) {
+	for _, id := range deleted.ConversationIDs {
+		if err := s.Worker.RemoveChatArtifacts(id); err != nil {
+			s.Log.Error("deleteFinding: remove chat workspace", "conv", id, "err", err)
+		}
+	}
 }
 
 // deleteRepoConversations removes a repository's chat conversations and their
@@ -2673,6 +2738,13 @@ func deleteRepoConversations(tx *gorm.DB, repoID uint) error {
 		return err
 	}
 	return tx.Where("repository_id = ?", repoID).Delete(&db.Conversation{}).Error
+}
+
+func deleteFindingConversations(tx *gorm.DB, findingID uint) error {
+	if err := tx.Exec("DELETE FROM chat_messages WHERE conversation_id IN (SELECT id FROM conversations WHERE finding_id = ?)", findingID).Error; err != nil {
+		return err
+	}
+	return tx.Where("finding_id = ?", findingID).Delete(&db.Conversation{}).Error
 }
 
 // repoDisclosureChannel lets the analyst overwrite (or clear) the

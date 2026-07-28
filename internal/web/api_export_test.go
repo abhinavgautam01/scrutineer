@@ -245,6 +245,126 @@ func TestExportRepoFindings_unknownRepo(t *testing.T) {
 	}
 }
 
+func TestAPIv1DeleteRepository(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	s.Worker.DataDir = t.TempDir()
+
+	repo := db.Repository{URL: "https://github.com/acme/delete-me", Name: "delete-me"}
+	s.DB.Create(&repo)
+	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName}
+	s.DB.Create(&scan)
+	finding := db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "doomed", Severity: sevHigh}
+	s.DB.Create(&finding)
+	s.DB.Create(&db.FindingReview{FindingID: finding.ID, Verdict: "true_positive", Reviewer: "analyst"})
+	s.DB.Create(&db.FindingNote{FindingID: finding.ID, Body: "note"})
+
+	r := httptest.NewRequest("DELETE", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10), nil)
+	r.Host = testHost
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status %d, want 204. body=%s", w.Code, w.Body)
+	}
+	for name, n := range map[string]int64{
+		"repositories": countRows(t, s, &db.Repository{}, "id = ?", repo.ID),
+		"scans":        countRows(t, s, &db.Scan{}, "repository_id = ?", repo.ID),
+		"findings":     countRows(t, s, &db.Finding{}, "repository_id = ?", repo.ID),
+		"reviews":      countRows(t, s, &db.FindingReview{}, "finding_id = ?", finding.ID),
+		"notes":        countRows(t, s, &db.FindingNote{}, "finding_id = ?", finding.ID),
+	} {
+		if n != 0 {
+			t.Fatalf("%s rows survived repository delete: %d", name, n)
+		}
+	}
+}
+
+func TestAPIv1DeleteFinding(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	s.Worker.DataDir = t.TempDir()
+
+	repo := db.Repository{URL: "https://github.com/acme/keep-repo", Name: "keep-repo"}
+	s.DB.Create(&repo)
+	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName}
+	s.DB.Create(&scan)
+	finding := db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "delete finding", Severity: sevHigh}
+	s.DB.Create(&finding)
+	other := db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "keep finding", Severity: "Low"}
+	s.DB.Create(&other)
+	findingScopedScan := db.Scan{RepositoryID: repo.ID, FindingID: &finding.ID, Kind: "skill", Status: db.ScanDone, SkillName: "verify"}
+	s.DB.Create(&findingScopedScan)
+
+	s.DB.Create(&db.FindingNote{FindingID: finding.ID, Body: "note"})
+	s.DB.Create(&db.FindingCommunication{FindingID: finding.ID, Channel: "email", Direction: "outbound"})
+	s.DB.Create(&db.FindingReference{FindingID: finding.ID, URL: "https://example.com/ref"})
+	s.DB.Create(&db.FindingHistory{FindingID: finding.ID, Field: "status", NewValue: "new"})
+	s.DB.Create(&db.FindingReview{FindingID: finding.ID, Verdict: "true_positive", Reviewer: "analyst"})
+	dependent := db.Dependent{RepositoryID: repo.ID, Name: "downstream", Ecosystem: "npm"}
+	s.DB.Create(&dependent)
+	s.DB.Create(&db.FindingDependent{FindingID: finding.ID, DependentID: dependent.ID, Status: db.ExposureKnownAffected})
+	label := db.FindingLabel{Name: "delete-me"}
+	s.DB.Create(&label)
+	if err := s.DB.Model(&finding).Association("Labels").Append(&label); err != nil {
+		t.Fatal(err)
+	}
+	conv := db.Conversation{RepositoryID: repo.ID, FindingID: &finding.ID, Title: "finding chat"}
+	s.DB.Create(&conv)
+	s.DB.Create(&db.ChatMessage{ConversationID: conv.ID, Role: db.ChatRoleUser, Content: "hello"})
+
+	r := httptest.NewRequest("DELETE", "/api/v1/findings/"+strconv.FormatUint(uint64(finding.ID), 10), nil)
+	r.Host = testHost
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status %d, want 204. body=%s", w.Code, w.Body)
+	}
+	for name, n := range map[string]int64{
+		"finding":      countRows(t, s, &db.Finding{}, "id = ?", finding.ID),
+		"notes":        countRows(t, s, &db.FindingNote{}, "finding_id = ?", finding.ID),
+		"comms":        countRows(t, s, &db.FindingCommunication{}, "finding_id = ?", finding.ID),
+		"refs":         countRows(t, s, &db.FindingReference{}, "finding_id = ?", finding.ID),
+		"history":      countRows(t, s, &db.FindingHistory{}, "finding_id = ?", finding.ID),
+		"reviews":      countRows(t, s, &db.FindingReview{}, "finding_id = ?", finding.ID),
+		"exposure":     countRows(t, s, &db.FindingDependent{}, "finding_id = ?", finding.ID),
+		"conversation": countRows(t, s, &db.Conversation{}, "finding_id = ?", finding.ID),
+		"messages":     countRows(t, s, &db.ChatMessage{}, "conversation_id = ?", conv.ID),
+	} {
+		if n != 0 {
+			t.Fatalf("%s rows survived finding delete: %d", name, n)
+		}
+	}
+	var labelLinks int64
+	s.DB.Raw("SELECT COUNT(*) FROM finding_labels_join WHERE finding_id = ?", finding.ID).Scan(&labelLinks)
+	if labelLinks != 0 {
+		t.Fatalf("label join rows survived finding delete: %d", labelLinks)
+	}
+	if n := countRows(t, s, &db.Repository{}, "id = ?", repo.ID); n != 1 {
+		t.Fatalf("repository count = %d, want 1", n)
+	}
+	if n := countRows(t, s, &db.Finding{}, "id = ?", other.ID); n != 1 {
+		t.Fatalf("unrelated finding count = %d, want 1", n)
+	}
+	var survivingScan db.Scan
+	if err := s.DB.First(&survivingScan, findingScopedScan.ID).Error; err != nil {
+		t.Fatalf("finding-scoped scan should survive: %v", err)
+	}
+	if survivingScan.FindingID != nil {
+		t.Fatalf("finding-scoped scan finding_id = %v, want nil", *survivingScan.FindingID)
+	}
+}
+
+func countRows(t *testing.T, s *Server, model any, where string, args ...any) int64 {
+	t.Helper()
+	var n int64
+	if err := s.DB.Model(model).Where(where, args...).Count(&n).Error; err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
 func TestExportFindings_acrossRepos(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
