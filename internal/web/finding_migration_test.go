@@ -20,7 +20,6 @@ func TestFindingShowMigrationGuideRendersAlternativesAndDependents(t *testing.T)
 		Name:     "zombie",
 		FullName: "example/zombie",
 		Archived: true,
-		Health:   db.RepositoryHealthZombie,
 	}
 	if err := s.DB.Create(&repo).Error; err != nil {
 		t.Fatal(err)
@@ -77,6 +76,41 @@ func TestFindingShowMigrationGuideRendersAlternativesAndDependents(t *testing.T)
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
+	needsReview := db.Dependent{
+		RepositoryID:   repo.ID,
+		Name:           "needs-review",
+		Ecosystem:      "npm",
+		RepositoryURL:  "https://github.com/example/needs-review",
+		DependentRepos: 200,
+	}
+	if err := s.DB.Create(&needsReview).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.Create(&db.FindingDependent{
+		FindingID:   finding.ID,
+		DependentID: needsReview.ID,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	for i := range migrationGuideRowLimit {
+		safe := db.Dependent{
+			RepositoryID:   repo.ID,
+			Name:           fmt.Sprintf("safe-%02d", i),
+			Ecosystem:      "npm",
+			RepositoryURL:  fmt.Sprintf("https://github.com/example/safe-%02d", i),
+			DependentRepos: 1000 - i,
+		}
+		if err := s.DB.Create(&safe).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := s.DB.Create(&db.FindingDependent{
+			FindingID:   finding.ID,
+			DependentID: safe.ID,
+			Status:      db.ExposureKnownNotAffected,
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, localReq(http.MethodGet, fmt.Sprintf("/findings/%d", finding.ID)))
@@ -91,10 +125,23 @@ func TestFindingShowMigrationGuideRendersAlternativesAndDependents(t *testing.T)
 		"pkg:npm/zombie-next",
 		"Maintained successor",
 		"consumer reaches the vulnerable parser",
+		"needs-review",
+		db.ExposureUnderInvestigation,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("finding page missing %q:\n%s", want, body)
 		}
+	}
+	guideStart := strings.Index(body, "Migration guide")
+	if guideStart < 0 {
+		t.Fatalf("finding page missing migration guide:\n%s", body)
+	}
+	guide := body[guideStart:]
+	if end := strings.Index(guide, "Fix validation"); end >= 0 {
+		guide = guide[:end]
+	}
+	if strings.Contains(guide, "safe-00") {
+		t.Fatalf("known-not-affected dependent should not be prioritized in migration guide:\n%s", guide)
 	}
 }
 

@@ -37,12 +37,6 @@ func loadFindingMigrationGuide(gdb *gorm.DB, f db.Finding, repo db.Repository) (
 	if err != nil {
 		return nil, err
 	}
-	show := len(alternatives) > 0 ||
-		repo.Health == db.RepositoryHealthAbandoned ||
-		repo.Health == db.RepositoryHealthZombie
-	if !show {
-		return nil, nil
-	}
 
 	var packages []db.Package
 	if err := gdb.Where("repository_id = ?", repo.ID).
@@ -59,6 +53,12 @@ func loadFindingMigrationGuide(gdb *gorm.DB, f db.Finding, repo db.Repository) (
 	health := db.AssessRepositoryHealth(repo, packages, maintainers, time.Now())
 	if health.Health == "" {
 		health.Health = repo.Health
+	}
+	show := len(alternatives) > 0 ||
+		health.Health == db.RepositoryHealthAbandoned ||
+		health.Health == db.RepositoryHealthZombie
+	if !show {
+		return nil, nil
 	}
 
 	guide := findingMigrationGuide{
@@ -83,18 +83,22 @@ func loadMigrationGuideDependents(gdb *gorm.DB, findingID uint, guide *findingMi
 		return nil
 	}
 
-	dependentIDs := make([]uint, 0, len(exposureRows))
+	actionableIDs := make([]uint, 0, len(exposureRows))
 	statusByDependent := make(map[uint]db.FindingDependent, len(exposureRows))
 	for _, row := range exposureRows {
-		dependentIDs = append(dependentIDs, row.DependentID)
+		row.Status = migrationExposureStatus(row.Status)
 		statusByDependent[row.DependentID] = row
 		if row.Status == db.ExposureKnownNotAffected {
 			guide.KnownSafeCount++
+			continue
 		}
+		actionableIDs = append(actionableIDs, row.DependentID)
 	}
-
+	if len(actionableIDs) == 0 {
+		return nil
+	}
 	var dependents []db.Dependent
-	if err := gdb.Where("id IN ?", dependentIDs).
+	if err := gdb.Where("id IN ?", actionableIDs).
 		Order("dependent_repos desc, downloads desc, id asc").
 		Limit(migrationGuideRowLimit).
 		Find(&dependents).Error; err != nil {
@@ -116,4 +120,11 @@ func loadMigrationGuideDependents(gdb *gorm.DB, findingID uint, guide *findingMi
 		})
 	}
 	return nil
+}
+
+func migrationExposureStatus(status string) string {
+	if status == "" {
+		return db.ExposureUnderInvestigation
+	}
+	return status
 }
