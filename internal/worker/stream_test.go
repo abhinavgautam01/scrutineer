@@ -13,6 +13,7 @@ func TestParseStream(t *testing.T) {
 	in := `
 {"type":"assistant","message":{"content":[{"type":"thinking","thinking":"hmm"}]}}
 {"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"ls -la"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"x","content":"file contents"}]}}
 {"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}
 not json at all
 {"type":"result","result":"ok","total_cost_usd":0.42,"num_turns":7,"duration_ms":1000,"usage":{"input_tokens":10,"output_tokens":66,"cache_read_input_tokens":1200,"cache_creation_input_tokens":34000}}
@@ -21,6 +22,7 @@ not json at all
 	var got []Event
 	ParseStream(strings.NewReader(in), func(e Event) { got = append(got, e) })
 
+	// The user/tool_result line is dropped, not passed through as text.
 	if len(got) != 5 {
 		t.Fatalf("want 5 events, got %d: %+v", len(got), got)
 	}
@@ -42,6 +44,19 @@ not json at all
 	wantU := Usage{InputTokens: 10, OutputTokens: 66, CacheReadTokens: 1200, CacheWriteTokens: 34000}
 	if got[4].Usage != wantU {
 		t.Errorf("ev4 usage: %+v", got[4].Usage)
+	}
+}
+
+func TestParseStream_UnknownEventPassedThrough(t *testing.T) {
+	in := `{"type":"future_event","payload":{"value":1}}`
+	var got []Event
+	ParseStream(strings.NewReader(in), func(e Event) { got = append(got, e) })
+
+	if len(got) != 1 {
+		t.Fatalf("want 1 event, got %d: %+v", len(got), got)
+	}
+	if got[0].Kind != KindText || got[0].Text != in {
+		t.Errorf("unknown event = %+v, want raw text", got[0])
 	}
 }
 
