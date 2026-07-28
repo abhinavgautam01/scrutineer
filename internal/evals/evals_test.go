@@ -13,7 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"scrutineer/internal/llm"
+	"github.com/alpha-omega-security/harness/llm"
+
 	"scrutineer/internal/worker"
 )
 
