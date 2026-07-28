@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -95,7 +96,7 @@ func TestStreamJSONLRowsErrorReturns500(t *testing.T) {
 	defer done()
 
 	w := httptest.NewRecorder()
-	streamJSONL[db.Finding](w, s.DB.Raw("SELECT * FROM missing_export_table"), findingExport)
+	streamJSONL[db.Finding](w, s.DB.Raw("SELECT * FROM missing_export_table"), s.Log, findingExport)
 
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status %d, want 500. body=%s", w.Code, w.Body)
@@ -110,6 +111,105 @@ func TestStreamJSONLRowsErrorReturns500(t *testing.T) {
 	if body[errorKey] == "" {
 		t.Fatalf("error response missing %q: %+v", errorKey, body)
 	}
+}
+
+func TestStreamJSONLRowsErrAbortsPartialResponse(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	type exportRow struct {
+		Value string
+	}
+	w := httptest.NewRecorder()
+	defer func() {
+		if got := recover(); got != http.ErrAbortHandler {
+			t.Fatalf("recover() = %v, want http.ErrAbortHandler", got)
+		}
+		rows := readJSONL(t, w.Body.String())
+		if len(rows) != 1 || rows[0]["value"] != "ok" {
+			t.Fatalf("streamed rows = %#v, want one successful row before abort", rows)
+		}
+	}()
+
+	q := s.DB.Raw(`WITH rows(value) AS (
+		VALUES ('ok'), (json_extract('not-json', '$'))
+	) SELECT value FROM rows`)
+	streamJSONL[exportRow](w, q, s.Log, func(row exportRow) map[string]any {
+		return map[string]any{"value": row.Value}
+	})
+}
+
+func TestStreamJSONLWriteErrorAfterPartialWriteAborts(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	type exportRow struct {
+		Value string
+	}
+	w := &failResponseWriter{writeBytes: 1}
+	defer func() {
+		if got := recover(); got != http.ErrAbortHandler {
+			t.Fatalf("recover() = %v, want http.ErrAbortHandler", got)
+		}
+		if strings.Contains(w.body.String(), errorKey) {
+			t.Fatalf("partial stream appended API error: %q", w.body.String())
+		}
+	}()
+
+	q := s.DB.Raw(`SELECT 'ok' AS value`)
+	streamJSONL[exportRow](w, q, s.Log, func(row exportRow) map[string]any {
+		return map[string]any{"value": row.Value}
+	})
+}
+
+func TestStreamJSONLWriteErrorAfterZeroByteWriteAborts(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	type exportRow struct {
+		Value string
+	}
+	w := &failResponseWriter{}
+	defer func() {
+		if got := recover(); got != http.ErrAbortHandler {
+			t.Fatalf("recover() = %v, want http.ErrAbortHandler", got)
+		}
+		if w.body.Len() != 0 {
+			t.Fatalf("zero-byte write unexpectedly wrote body: %q", w.body.String())
+		}
+	}()
+
+	q := s.DB.Raw(`SELECT 'ok' AS value`)
+	streamJSONL[exportRow](w, q, s.Log, func(row exportRow) map[string]any {
+		return map[string]any{"value": row.Value}
+	})
+}
+
+type failResponseWriter struct {
+	header     http.Header
+	body       bytes.Buffer
+	status     int
+	writeBytes int
+}
+
+func (w *failResponseWriter) Header() http.Header {
+	if w.header == nil {
+		w.header = make(http.Header)
+	}
+	return w.header
+}
+
+func (w *failResponseWriter) Write(p []byte) (int, error) {
+	n := w.writeBytes
+	if n > len(p) {
+		n = len(p)
+	}
+	w.body.Write(p[:n])
+	return n, errors.New("write failed")
+}
+
+func (w *failResponseWriter) WriteHeader(status int) {
+	w.status = status
 }
 
 func TestExportRepoFindings_severityFilter(t *testing.T) {

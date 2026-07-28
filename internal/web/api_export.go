@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os/exec"
@@ -93,7 +94,7 @@ func (s *Server) apiExportRepositories(w http.ResponseWriter, r *http.Request) {
 			LIMIT 1
 		)`).
 		Order("repositories.updated_at desc")
-	streamJSONL(w, q, repositoryExport)
+	streamJSONL(w, q, s.Log, repositoryExport)
 }
 
 func (s *Server) apiExportRepoFindings(w http.ResponseWriter, r *http.Request) {
@@ -153,7 +154,7 @@ func (s *Server) apiExportRepoFindings(w http.ResponseWriter, r *http.Request) {
 		Where("repository_id = ?", id).
 		Order("id desc")
 	q = applyFindingFilters(q, r)
-	streamJSONL(w, q, findingExport)
+	streamJSONL(w, q, s.Log, findingExport)
 }
 
 // sharingBundle is the self-contained sharing format that round-trips
@@ -531,7 +532,7 @@ func (s *Server) apiExportFindings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := applyFindingFilters(s.DB.Model(&db.Finding{}).Order("id desc"), r)
-	streamJSONL(w, q, findingExport)
+	streamJSONL(w, q, s.Log, findingExport)
 }
 
 func (s *Server) apiExportScans(w http.ResponseWriter, r *http.Request) {
@@ -545,7 +546,7 @@ func (s *Server) apiExportScans(w http.ResponseWriter, r *http.Request) {
 	if v := r.URL.Query().Get("skill"); v != "" {
 		q = q.Where("skill_name = ?", v)
 	}
-	streamJSONL(w, q, scanExport)
+	streamJSONL(w, q, s.Log, scanExport)
 }
 
 // repositoryExport maps a repositoryExportRow to the public JSON object. Repos
@@ -616,9 +617,10 @@ func applyFindingFilters(q *gorm.DB, r *http.Request) *gorm.DB {
 }
 
 // streamJSONL iterates rows incrementally so a million-row export never
-// preloads into memory. The body is partial on mid-stream errors: once
-// we have committed to 200, a truncated stream is the only honest signal.
-func streamJSONL[T any](w http.ResponseWriter, q *gorm.DB, project func(T) map[string]any) {
+// preloads into memory. Before the first row, errors can still return a normal
+// 500; after the stream is committed, errors abort the connection so clients do
+// not mistake a truncated export for a clean EOF.
+func streamJSONL[T any](w http.ResponseWriter, q *gorm.DB, log *slog.Logger, project func(T) map[string]any) {
 	rows, err := q.Rows()
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
@@ -626,20 +628,46 @@ func streamJSONL[T any](w http.ResponseWriter, q *gorm.DB, project func(T) map[s
 	}
 	defer func() { _ = rows.Close() }()
 	w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
-	enc := json.NewEncoder(w)
+	cw := &commitTrackingResponseWriter{ResponseWriter: w}
+	enc := json.NewEncoder(cw)
 	flusher, _ := w.(http.Flusher)
 	for rows.Next() {
 		var item T
 		if err := q.ScanRows(rows, &item); err != nil {
+			handleJSONLStreamError(w, log, err, cw.committed)
 			return
 		}
 		if err := enc.Encode(project(item)); err != nil {
+			handleJSONLStreamError(w, log, err, cw.committed)
 			return
 		}
 		if flusher != nil {
 			flusher.Flush()
 		}
 	}
+	if err := rows.Err(); err != nil {
+		handleJSONLStreamError(w, log, err, cw.committed)
+	}
+}
+
+type commitTrackingResponseWriter struct {
+	http.ResponseWriter
+	committed bool
+}
+
+func (w *commitTrackingResponseWriter) Write(p []byte) (int, error) {
+	w.committed = true
+	n, err := w.ResponseWriter.Write(p)
+	return n, err
+}
+
+func handleJSONLStreamError(w http.ResponseWriter, log *slog.Logger, err error, committed bool) {
+	if !committed {
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	log.Error("jsonl export stream failed", "err", err)
+	panic(http.ErrAbortHandler)
 }
 
 // findingExport mirrors every db.Finding column. Relations (labels, notes,
