@@ -1,6 +1,8 @@
 package web
 
 import (
+	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -109,7 +111,6 @@ func sample(mux interface {
 }) {
 	mux.HandleFunc("GET /repositories", nil)
 	mux.Handle("HEAD /repositories", nil)
-	mux.HandleFunc("/claim-check", nil)
 }
 `
 	file, err := parser.ParseFile(token.NewFileSet(), "sample.go", src, 0)
@@ -123,6 +124,58 @@ func sample(mux interface {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("routes = %#v, want %#v", got, want)
+	}
+}
+
+func TestRoutesInFunctionRejectsUnmappableRegistrations(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "methodless handlefunc",
+			body: `mux.HandleFunc("/repositories", nil)`,
+			want: "method-qualified",
+		},
+		{
+			name: "methodless handle",
+			body: `mux.Handle("/repositories", nil)`,
+			want: "method-qualified",
+		},
+		{
+			name: "non literal handlefunc",
+			body: `pattern := "GET /repositories"
+	mux.HandleFunc(pattern, nil)`,
+			want: "non-literal route pattern",
+		},
+		{
+			name: "non literal handle",
+			body: `pattern := "GET /repositories"
+	mux.Handle(pattern, nil)`,
+			want: "non-literal route pattern",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src := `package web
+
+func sample(mux interface {
+	Handle(string, any)
+	HandleFunc(string, any)
+}) {
+	` + tt.body + `
+}
+`
+			file, err := parser.ParseFile(token.NewFileSet(), "sample.go", src, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = routesInParsedFileResult(file, "sample.go", "sample", "/v1")
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+		})
 	}
 }
 
@@ -160,12 +213,21 @@ func routesInFunction(t *testing.T, filename, funcName, pathPrefix string) []reg
 
 func routesInParsedFile(t *testing.T, file *ast.File, filename, funcName, pathPrefix string) []registeredAPIRoute {
 	t.Helper()
+	routes, err := routesInParsedFileResult(file, filename, funcName, pathPrefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return routes
+}
+
+func routesInParsedFileResult(file *ast.File, filename, funcName, pathPrefix string) ([]registeredAPIRoute, error) {
 	var routes []registeredAPIRoute
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Name.Name != funcName {
 			continue
 		}
+		var extractErr error
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok || len(call.Args) == 0 {
@@ -176,25 +238,32 @@ func routesInParsedFile(t *testing.T, file *ast.File, filename, funcName, pathPr
 			}
 			lit, ok := call.Args[0].(*ast.BasicLit)
 			if !ok || lit.Kind != token.STRING {
-				return true
+				extractErr = fmt.Errorf("%s: non-literal route pattern in %s", filename, funcName)
+				return false
 			}
 			pattern, err := strconv.Unquote(lit.Value)
 			if err != nil {
-				t.Fatalf("%s: unquote route pattern: %v", filename, err)
+				extractErr = fmt.Errorf("%s: unquote route pattern: %w", filename, err)
+				return false
 			}
 			route, ok, err := apiRouteFromPattern(pathPrefix, pattern)
 			if err != nil {
-				t.Fatalf("%s: unsupported route pattern %q: %v", filename, pattern, err)
+				extractErr = fmt.Errorf("%s: unsupported route pattern %q: %w", filename, pattern, err)
+				return false
 			}
-			if ok {
-				routes = append(routes, route)
+			if !ok {
+				extractErr = fmt.Errorf("%s: route pattern %q must be method-qualified for OpenAPI coverage", filename, pattern)
+				return false
 			}
+			routes = append(routes, route)
 			return true
 		})
-		return routes
+		if extractErr != nil {
+			return nil, extractErr
+		}
+		return routes, nil
 	}
-	t.Fatalf("%s: function %s not found", filename, funcName)
-	return nil
+	return nil, fmt.Errorf("%s: function %s not found", filename, funcName)
 }
 
 func isRouteRegistration(call *ast.CallExpr) bool {
@@ -209,7 +278,7 @@ func apiRouteFromPattern(pathPrefix, pattern string) (registeredAPIRoute, bool, 
 	fields := strings.Fields(pattern)
 	switch len(fields) {
 	case 1:
-		return registeredAPIRoute{}, false, nil
+		return registeredAPIRoute{}, false, errors.New("route pattern must be method-qualified")
 	case 2:
 	default:
 		return registeredAPIRoute{}, false, strconv.ErrSyntax
