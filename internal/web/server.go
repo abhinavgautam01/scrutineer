@@ -2689,8 +2689,19 @@ type deletedFinding struct {
 	ConversationIDs []uint
 }
 
+var errFindingDeleteInFlight = errors.New("finding has queued, running, or paused scans")
+
 func (s *Server) deleteFinding(finding db.Finding) (deletedFinding, error) {
 	var deleted deletedFinding
+	var inFlight int64
+	if err := s.DB.Model(&db.Scan{}).
+		Where("finding_id = ? AND status IN ?", finding.ID, []db.ScanStatus{db.ScanQueued, db.ScanRunning, db.ScanPaused}).
+		Count(&inFlight).Error; err != nil {
+		return deletedFinding{}, err
+	}
+	if inFlight > 0 {
+		return deletedFinding{}, fmt.Errorf("%w; cancel or wait for %d linked scan(s) before deleting", errFindingDeleteInFlight, inFlight)
+	}
 	if err := s.DB.Model(&db.Conversation{}).Where("finding_id = ?", finding.ID).
 		Pluck("id", &deleted.ConversationIDs).Error; err != nil {
 		return deletedFinding{}, err

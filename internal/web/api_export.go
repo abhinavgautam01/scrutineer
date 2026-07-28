@@ -61,6 +61,10 @@ func (s *Server) apiDeleteFinding(w http.ResponseWriter, r *http.Request) {
 	}
 	deleted, err := s.deleteFinding(finding)
 	if err != nil {
+		if errors.Is(err, errFindingDeleteInFlight) {
+			writeAPIError(w, http.StatusConflict, err.Error())
+			return
+		}
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

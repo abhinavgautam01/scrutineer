@@ -356,6 +356,54 @@ func TestAPIv1DeleteFinding(t *testing.T) {
 	}
 }
 
+func TestAPIv1DeleteFindingRejectsInFlightScans(t *testing.T) {
+	for _, status := range []db.ScanStatus{db.ScanQueued, db.ScanRunning} {
+		t.Run(string(status), func(t *testing.T) {
+			s, done := newTestServer(t)
+			defer done()
+
+			repo := db.Repository{URL: "https://github.com/acme/busy", Name: "busy"}
+			if err := s.DB.Create(&repo).Error; err != nil {
+				t.Fatal(err)
+			}
+			scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName}
+			if err := s.DB.Create(&scan).Error; err != nil {
+				t.Fatal(err)
+			}
+			finding := db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "busy finding", Severity: sevHigh}
+			if err := s.DB.Create(&finding).Error; err != nil {
+				t.Fatal(err)
+			}
+			linked := db.Scan{RepositoryID: repo.ID, FindingID: &finding.ID, Kind: "skill", Status: status, SkillName: "verify"}
+			if err := s.DB.Create(&linked).Error; err != nil {
+				t.Fatal(err)
+			}
+
+			r := httptest.NewRequest("DELETE", "/api/v1/findings/"+strconv.FormatUint(uint64(finding.ID), 10), nil)
+			r.Host = testHost
+			w := httptest.NewRecorder()
+			s.Handler().ServeHTTP(w, r)
+
+			if w.Code != http.StatusConflict {
+				t.Fatalf("status %d, want 409. body=%s", w.Code, w.Body)
+			}
+			if !strings.Contains(w.Body.String(), "queued, running, or paused scans") {
+				t.Fatalf("body %q missing in-flight scan explanation", w.Body.String())
+			}
+			if n := countRows(t, s, &db.Finding{}, "id = ?", finding.ID); n != 1 {
+				t.Fatalf("finding count = %d, want 1 after rejected delete", n)
+			}
+			var got db.Scan
+			if err := s.DB.First(&got, linked.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if got.FindingID == nil || *got.FindingID != finding.ID {
+				t.Fatalf("linked scan finding_id = %v, want %d", got.FindingID, finding.ID)
+			}
+		})
+	}
+}
+
 func countRows(t *testing.T, s *Server, model any, where string, args ...any) int64 {
 	t.Helper()
 	var n int64
