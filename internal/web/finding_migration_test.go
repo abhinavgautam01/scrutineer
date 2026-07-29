@@ -20,6 +20,7 @@ func TestFindingShowMigrationGuideRendersAlternativesAndDependents(t *testing.T)
 		Name:     "zombie",
 		FullName: "example/zombie",
 		Archived: true,
+		Health:   db.RepositoryHealthAbandoned,
 	}
 	if err := s.DB.Create(&repo).Error; err != nil {
 		t.Fatal(err)
@@ -137,7 +138,7 @@ func TestFindingShowMigrationGuideRendersAlternativesAndDependents(t *testing.T)
 	body := w.Body.String()
 	for _, want := range []string{
 		"Migration guide",
-		"repository is archived",
+		string(db.RepositoryHealthAbandoned),
 		"pkg:npm/zombie",
 		"pkg:npm/zombie-next",
 		"Maintained successor",
@@ -174,6 +175,7 @@ func TestFindingShowMigrationGuideSummarizesNonActionableDependents(t *testing.T
 		Name:     "quiet-zombie",
 		FullName: "example/quiet-zombie",
 		Archived: true,
+		Health:   db.RepositoryHealthAbandoned,
 	}
 	if err := s.DB.Create(&repo).Error; err != nil {
 		t.Fatal(err)

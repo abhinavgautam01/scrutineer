@@ -191,7 +191,7 @@ Every index page has a search box plus filter and sort dropdowns; the specifics 
 
 - **Repositories** -- your scanned repos with language, last-scan status, and finding counts. Click into one for tabs covering Summary, Findings, Threat Model, Packages, Dependencies, Dependents, Advisories, Maintainers, Data, Scans, and Chat, plus an "Export report" button for a markdown rollup.
 - **Organizations** -- repos, findings, and maintainers grouped by owning org, with per-org markdown exports.
-- **Findings** -- every vulnerability across all repos. A finding page shows the six-step analysis (trace, boundary, validation, prior art, reach, rating), scoring fields, migration guidance for abandoned/zombie packages, notes, communications log, references, labels, and a change history.
+- **Findings** -- every vulnerability across all repos. A finding page shows the six-step analysis (trace, boundary, validation, prior art, reach, rating), scoring fields, notes, communications log, references, labels, and a change history.
 - **Packages** -- registry entries discovered across all repos.
 - **Advisories** -- known CVEs and security advisories pulled for any scanned package.
 - **Maintainers** -- people identified as maintainers, with their linked repos and findings.

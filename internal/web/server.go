@@ -1758,6 +1758,7 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 	var fdRows []db.FindingDependent
 	s.DB.Where("finding_id = ?", f.ID).Find(&fdRows)
 	exposures := make([]exposureRow, 0, len(fdRows))
+	dependentsByID := make(map[uint]db.Dependent)
 	if len(fdRows) > 0 {
 		depIDs := make([]uint, len(fdRows))
 		for i, r := range fdRows {
@@ -1765,13 +1766,13 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 		}
 		var depRows []db.Dependent
 		s.DB.Where("id IN ?", depIDs).Find(&depRows)
-		byID := make(map[uint]db.Dependent, len(depRows))
+		dependentsByID = make(map[uint]db.Dependent, len(depRows))
 		for _, d := range depRows {
-			byID[d.ID] = d
+			dependentsByID[d.ID] = d
 		}
 		for _, r := range fdRows {
 			exposures = append(exposures, exposureRow{
-				Dep:    byID[r.DependentID],
+				Dep:    dependentsByID[r.DependentID],
 				Status: r.Status,
 				Justif: r.Justification,
 				Why:    r.Rationale,
@@ -1805,7 +1806,7 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 	if id, c, ok := LookupCWE(f.CWE); ok {
 		data["CWE"] = map[string]any{"ID": id, "Name": c.Name, "Description": c.Description}
 	}
-	if guide, err := loadFindingMigrationGuide(s.DB, f, repo); err != nil {
+	if guide, err := loadFindingMigrationGuide(s.DB, repo, fdRows, dependentsByID); err != nil {
 		s.Log.Warn("load finding migration guide", "finding", f.ID, "err", err)
 	} else if guide != nil {
 		data["MigrationGuide"] = guide
