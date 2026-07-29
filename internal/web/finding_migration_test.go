@@ -111,6 +111,23 @@ func TestFindingShowMigrationGuideRendersAlternativesAndDependents(t *testing.T)
 			t.Fatal(err)
 		}
 	}
+	fixed := db.Dependent{
+		RepositoryID:   repo.ID,
+		Name:           "fixed-consumer",
+		Ecosystem:      "npm",
+		RepositoryURL:  "https://github.com/example/fixed-consumer",
+		DependentRepos: 700,
+	}
+	if err := s.DB.Create(&fixed).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.Create(&db.FindingDependent{
+		FindingID:   finding.ID,
+		DependentID: fixed.ID,
+		Status:      db.ExposureFixed,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, localReq(http.MethodGet, fmt.Sprintf("/findings/%d", finding.ID)))
@@ -142,6 +159,80 @@ func TestFindingShowMigrationGuideRendersAlternativesAndDependents(t *testing.T)
 	}
 	if strings.Contains(guide, "safe-00") {
 		t.Fatalf("known-not-affected dependent should not be prioritized in migration guide:\n%s", guide)
+	}
+	if strings.Contains(guide, "fixed-consumer") {
+		t.Fatalf("fixed dependent should not be prioritized in migration guide:\n%s", guide)
+	}
+}
+
+func TestFindingShowMigrationGuideSummarizesNonActionableDependents(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{
+		URL:      "https://github.com/example/quiet-zombie",
+		Name:     "quiet-zombie",
+		FullName: "example/quiet-zombie",
+		Archived: true,
+	}
+	if err := s.DB.Create(&repo).Error; err != nil {
+		t.Fatal(err)
+	}
+	scan := db.Scan{RepositoryID: repo.ID, Kind: worker.JobSkill, Status: db.ScanDone, SkillName: "security-deep-dive"}
+	if err := s.DB.Create(&scan).Error; err != nil {
+		t.Fatal(err)
+	}
+	finding := db.Finding{
+		RepositoryID: repo.ID,
+		ScanID:       scan.ID,
+		Title:        "Fixed everywhere",
+		Severity:     "High",
+		Status:       db.FindingTriaged,
+	}
+	if err := s.DB.Create(&finding).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []struct {
+		name   string
+		status string
+	}{
+		{name: "safe-consumer", status: db.ExposureKnownNotAffected},
+		{name: "fixed-consumer", status: db.ExposureFixed},
+	} {
+		dep := db.Dependent{
+			RepositoryID:   repo.ID,
+			Name:           row.name,
+			Ecosystem:      "npm",
+			RepositoryURL:  "https://github.com/example/" + row.name,
+			DependentRepos: 100,
+		}
+		if err := s.DB.Create(&dep).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := s.DB.Create(&db.FindingDependent{
+			FindingID:   finding.ID,
+			DependentID: dep.ID,
+			Status:      row.status,
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq(http.MethodGet, fmt.Sprintf("/findings/%d", finding.ID)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		"Exposure tracking has 2 rows",
+		"1 known not affected",
+		"1 fixed",
+		"No affected or under-investigation dependents need migration follow-up yet",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("finding page missing %q:\n%s", want, body)
+		}
 	}
 }
 

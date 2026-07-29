@@ -19,6 +19,7 @@ type findingMigrationGuide struct {
 
 	PriorityDependents []migrationDependentRow
 	KnownSafeCount     int
+	FixedCount         int
 	TotalExposureRows  int
 }
 
@@ -92,6 +93,10 @@ func loadMigrationGuideDependents(gdb *gorm.DB, findingID uint, guide *findingMi
 			guide.KnownSafeCount++
 			continue
 		}
+		if row.Status == db.ExposureFixed {
+			guide.FixedCount++
+			continue
+		}
 		actionableIDs = append(actionableIDs, row.DependentID)
 	}
 	if len(actionableIDs) == 0 {
@@ -106,7 +111,7 @@ func loadMigrationGuideDependents(gdb *gorm.DB, findingID uint, guide *findingMi
 	}
 	for _, dep := range dependents {
 		row := statusByDependent[dep.ID]
-		if row.Status == db.ExposureKnownNotAffected {
+		if row.Status == db.ExposureKnownNotAffected || row.Status == db.ExposureFixed {
 			continue
 		}
 		guide.PriorityDependents = append(guide.PriorityDependents, migrationDependentRow{

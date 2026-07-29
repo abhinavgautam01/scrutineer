@@ -392,7 +392,7 @@
         </table>
         {{else if $g.TotalExposureRows}}
         <p class="text-sm text-muted-foreground">
-          Exposure tracking has {{$g.TotalExposureRows}} row{{if ne $g.TotalExposureRows 1}}s{{end}}, with {{$g.KnownSafeCount}} known not affected. No affected or under-investigation dependents need migration follow-up yet.
+          Exposure tracking has {{$g.TotalExposureRows}} row{{if ne $g.TotalExposureRows 1}}s{{end}}, with {{$g.KnownSafeCount}} known not affected{{if $g.FixedCount}} and {{$g.FixedCount}} fixed{{end}}. No affected or under-investigation dependents need migration follow-up yet.
         </p>
         {{else}}
         <p class="text-sm text-muted-foreground">
