@@ -12,8 +12,7 @@ import (
 const migrationGuideRowLimit = 10
 
 type findingMigrationGuide struct {
-	Health        db.RepositoryHealth
-	HealthSummary string
+	Health db.RepositoryHealth
 
 	Packages     []db.Package
 	Alternatives []db.PackageAlternative
@@ -44,6 +43,9 @@ func loadFindingMigrationGuide(
 	if err != nil {
 		return nil, err
 	}
+	if !showPackageAlternatives(repo, alternatives) {
+		return nil, nil
+	}
 
 	var packages []db.Package
 	if err := gdb.Where("repository_id = ?", repo.ID).
@@ -51,9 +53,6 @@ func loadFindingMigrationGuide(
 		Limit(migrationGuideRowLimit).
 		Find(&packages).Error; err != nil {
 		return nil, err
-	}
-	if !showPackageAlternatives(repo, alternatives) {
-		return nil, nil
 	}
 
 	guide := findingMigrationGuide{
