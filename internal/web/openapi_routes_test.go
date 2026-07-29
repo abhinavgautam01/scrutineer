@@ -184,7 +184,7 @@ func TestAPIRouteFromPatternRejectsUnsupportedMethod(t *testing.T) {
 		"BREW /coffee",
 		"CONNECT /tunnel",
 	} {
-		if _, _, err := apiRouteFromPattern("", pattern); err == nil {
+		if _, err := apiRouteFromPattern("", pattern); err == nil {
 			t.Fatalf("apiRouteFromPattern accepted unsupported method-qualified pattern %q", pattern)
 		}
 	}
@@ -193,6 +193,9 @@ func TestAPIRouteFromPatternRejectsUnsupportedMethod(t *testing.T) {
 func registeredOpenAPIRoutes(t *testing.T) []registeredAPIRoute {
 	t.Helper()
 	routes := append(routesInFunction(t, "api.go", "apiHandler", ""), routesInFunction(t, "api_export.go", "exportHandler", "/v1")...)
+	// claim-check is documented in openapi.yaml but registered on the root
+	// browser mux, outside apiHandler/exportHandler.
+	routes = append(routes, registeredAPIRoute{Method: "POST", Path: "/claim-check"})
 	sort.Slice(routes, func(i, j int) bool {
 		if routes[i].Path == routes[j].Path {
 			return routes[i].Method < routes[j].Method
@@ -246,13 +249,9 @@ func routesInParsedFileResult(file *ast.File, filename, funcName, pathPrefix str
 				extractErr = fmt.Errorf("%s: unquote route pattern: %w", filename, err)
 				return false
 			}
-			route, ok, err := apiRouteFromPattern(pathPrefix, pattern)
+			route, err := apiRouteFromPattern(pathPrefix, pattern)
 			if err != nil {
 				extractErr = fmt.Errorf("%s: unsupported route pattern %q: %w", filename, pattern, err)
-				return false
-			}
-			if !ok {
-				extractErr = fmt.Errorf("%s: route pattern %q must be method-qualified for OpenAPI coverage", filename, pattern)
 				return false
 			}
 			routes = append(routes, route)
@@ -274,19 +273,19 @@ func isRouteRegistration(call *ast.CallExpr) bool {
 	return sel.Sel.Name == "Handle" || sel.Sel.Name == "HandleFunc"
 }
 
-func apiRouteFromPattern(pathPrefix, pattern string) (registeredAPIRoute, bool, error) {
+func apiRouteFromPattern(pathPrefix, pattern string) (registeredAPIRoute, error) {
 	fields := strings.Fields(pattern)
 	switch len(fields) {
 	case 1:
-		return registeredAPIRoute{}, false, errors.New("route pattern must be method-qualified")
+		return registeredAPIRoute{}, errors.New("route pattern must be method-qualified")
 	case 2:
 	default:
-		return registeredAPIRoute{}, false, strconv.ErrSyntax
+		return registeredAPIRoute{}, strconv.ErrSyntax
 	}
 	switch fields[0] {
 	case "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE":
-		return registeredAPIRoute{Method: fields[0], Path: pathPrefix + fields[1]}, true, nil
+		return registeredAPIRoute{Method: fields[0], Path: pathPrefix + fields[1]}, nil
 	default:
-		return registeredAPIRoute{}, false, strconv.ErrSyntax
+		return registeredAPIRoute{}, strconv.ErrSyntax
 	}
 }
