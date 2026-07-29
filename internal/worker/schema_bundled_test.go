@@ -160,7 +160,7 @@ func TestBundledSchemas_compileAndAcceptSamples(t *testing.T) {
 		{
 			"../../skills/audit-exfil/schema.json",
 			`{"findings":[{"id":"F001","title":"Webhook URL fetch can reach internal metadata service",
-			  "severity":"High","confidence":"high","cwe":"CWE-918","location":"internal/webhooks/fetch.go:91",
+			  "severity":"High","confidence":"high","cwe":"CWE-918","location":"internal/webhooks/route:v2/fetch.go:91",
 			  "reachability":"reachable","quality_tier":"high",
 			  "trace":"The webhook endpoint stores a caller-provided callback URL and later passes it to http.Client.Do.",
 			  "boundary":"An authenticated project member controls the callback URL, while the worker can reach internal services.",

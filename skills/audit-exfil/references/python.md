@@ -56,10 +56,14 @@ or external resource loading enabled.
 
 Parser defaults and false positives:
 
-- CPython's Expat-backed `xml.etree`, `xml.dom`, and `xml.sax` parsers do not
-  access local files or create network connections by default. A bare
-  `ElementTree.fromstring()` is not evidence of XXE file read or SSRF. Custom
-  external-entity handlers and wrappers can change that.
+- CPython's `xml.etree.ElementTree` rejects undefined external entities, and
+  `xml.dom.minidom` leaves them unexpanded. A bare
+  `ElementTree.fromstring()` is not evidence of XXE file read or SSRF.
+- Starting with Python 3.7.1, `xml.sax` no longer processes general external
+  entities by default. Earlier runtimes could load local files or make
+  network requests for DTDs and entities. Check the pinned runtime version and
+  any `setFeature(feature_external_ges, true)` call or custom entity resolver;
+  enabling that feature on a newer runtime restores the unsafe behavior.
 - `lxml.etree.XMLParser` historically defaults `no_network=True` while entity
   substitution has been enabled in older releases. `no_network` does not prove
   local `file:` entities are blocked. For untrusted XML, look for

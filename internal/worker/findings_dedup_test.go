@@ -169,7 +169,7 @@ func TestParseFindingsOutput_auditSchemasReferencesIngest(t *testing.T) {
 				"severity":"High",
 				"confidence":"high",
 				"cwe":"CWE-918",
-				"location":"internal/webhooks/fetch.go:91",
+				"location":"internal/webhooks/route:v2/fetch.go:91",
 				"reachability":"reachable",
 				"quality_tier":"high",
 				"trace":"The webhook endpoint stores a caller-provided callback URL and later passes it to http.Client.Do.",

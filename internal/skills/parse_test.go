@@ -907,6 +907,15 @@ func TestBundledAuditExfilMetadata(t *testing.T) {
 		t.Errorf("audit-exfil metadata = kind %q, turns %d, model %q, confidence %q",
 			auditExfil.OutputKind, auditExfil.MaxTurns, auditExfil.Model, auditExfil.MinConfidence)
 	}
+	if !strings.Contains(auditExfil.Compatibility, "external network") ||
+		!strings.Contains(auditExfil.Compatibility, "api_base is allowed") {
+		t.Errorf("audit-exfil compatibility does not distinguish external network from api_base: %q",
+			auditExfil.Compatibility)
+	}
+	if !strings.Contains(auditExfil.Body, "external network access") ||
+		!strings.Contains(auditExfil.Body, "api_base is allowed") {
+		t.Error("audit-exfil body does not distinguish external network from api_base")
+	}
 	if !slices.Equal(auditExfil.Paths, []string{"**"}) {
 		t.Errorf("audit-exfil paths = %v, want [**]", auditExfil.Paths)
 	}
@@ -953,6 +962,23 @@ func TestBundledAuditExfilMetadata(t *testing.T) {
 		}
 		if !strings.HasPrefix(string(data), "# ") {
 			t.Errorf("audit-exfil reference %s has no heading", name)
+		}
+	}
+	requiredReferenceGuidance := map[string][]string{
+		"python.md": {"Python 3.7.1", "feature_external_ges"},
+		"node.md":   {">=13.4.0", "<14.1.1", "self-hosted", "`Host` header"},
+		"go.md":     {"follows symlinks outside the root", "serves dotfiles", "fs.Sub(os.DirFS(root), dir)"},
+	}
+	for name, required := range requiredReferenceGuidance {
+		data, err := os.ReadFile(filepath.Join(dir, "references", name))
+		if err != nil {
+			t.Errorf("read audit-exfil reference %s: %v", name, err)
+			continue
+		}
+		for _, text := range required {
+			if !strings.Contains(string(data), text) {
+				t.Errorf("audit-exfil reference %s missing %q", name, text)
+			}
 		}
 	}
 }

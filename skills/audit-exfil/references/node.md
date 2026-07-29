@@ -21,9 +21,12 @@ Concrete defaults:
 - Node's built-in HTTP(S) clients do not fetch `file:` or `gopher:` URLs.
   Do not claim alternate-scheme SSRF unless the selected client or wrapper
   actually supports the scheme.
-- Next.js Server Actions SSRF CVE-2024-34351 affects releases before 14.1.1.
-  Only apply that cutoff when the source uses the affected Server Action
-  redirect flow; an arbitrary `fetch()` elsewhere is a separate trace.
+- Next.js Server Actions SSRF CVE-2024-34351 affects versions `>=13.4.0,
+  <14.1.1`. Apply this advisory only when Next.js is self-hosted, an attacker
+  can modify the `Host` header reaching the application, Server Actions are in
+  use, and a Server Action redirects to a relative path beginning with `/`.
+  Managed routing that fixes the host or an arbitrary `fetch()` elsewhere is
+  outside this advisory and needs a separate trace.
 
 ## File Reads
 

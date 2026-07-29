@@ -34,9 +34,15 @@ Standard-library behavior and false positives:
   `name` argument supplied by the application. Go's documentation explicitly
   requires sanitizing a user-derived `name`; the URL-path check does not make
   `ServeFile(w, r, userPath)` safe.
-- `http.FileServer(http.Dir(fixedRoot))` and `fs.Sub` with a fixed root provide
-  a useful namespace boundary. Review custom `Open` implementations and any
-  attacker-controlled root separately.
+- `http.FileServer(http.Dir(fixedRoot))` prevents lexical URL traversal, but
+  `http.Dir` follows symlinks outside the root and serves dotfiles such as
+  `.git` and `.htpasswd`. It is not a chroot: inspect root contents, who can
+  create symlinks, and whether sensitive dotfiles are reachable.
+- `fs.Sub` restricts names to a subtree but inherits the underlying
+  filesystem's symlink behavior. In particular, `fs.Sub(os.DirFS(root), dir)`
+  can follow a symlink outside that subtree. Treat it as a containment defense
+  only when the underlying filesystem cannot escape (for example, a vetted
+  immutable `embed.FS`) or the application separately rejects unsafe links.
 - `filepath.Clean`, `Abs`, and `IsLocal` are lexical checks. For existing
   filesystem targets that must remain under a root, account for symlinks with
   `EvalSymlinks`/opened-file verification and compare using path components,
