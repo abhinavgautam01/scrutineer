@@ -846,6 +846,27 @@ paths:
         '403':
           description: Host header is not localhost
 
+  /v1/repositories/{id}:
+    delete:
+      summary: Delete a repository and its linked data
+      description: |
+        Host-only operator endpoint for local automation. Removes the
+        repository, its scans, findings, repository-scoped rows, chat
+        conversations, and cached clone/workspace artifacts using the same
+        cleanup path as the browser delete action. Not reachable with a
+        per-scan bearer token.
+      operationId: deleteRepository
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RepositoryID'
+      responses:
+        '204': { description: Repository deleted }
+        '400': { description: Invalid repository id }
+        '403': { description: Host header is not localhost }
+        '404': { description: Repository not found }
+        '409': { description: Repository has queued, running, or paused scans }
+        '500': { description: Delete failed }
+
   /v1/repositories/{id}/findings:
     get:
       summary: Export findings for a repository (JSONL, or a shareable bundle)
@@ -974,6 +995,30 @@ paths:
           description: Unsupported format query value, or `encrypt`/`scope`/`include` requested (only valid on per-repository bundle exports).
         '403':
           description: Host header is not localhost
+
+  /v1/findings/{id}:
+    delete:
+      summary: Delete one finding and its linked data
+      description: |
+        Host-only operator endpoint for local automation. Removes the finding,
+        labels join rows, notes, communications, references, history, reviews,
+        exposure rows, and finding-scoped chat conversations. Scans that
+        pointed at the finding are preserved with `finding_id` cleared. Not
+        reachable with a per-scan bearer token.
+      operationId: deleteFinding
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '204': { description: Finding deleted }
+        '400': { description: Invalid finding id }
+        '403': { description: Host header is not localhost }
+        '404': { description: Finding not found }
+        '409': { description: Finding has queued, running, or paused scans }
+        '500': { description: Delete failed }
 
   /v1/scans:
     get:

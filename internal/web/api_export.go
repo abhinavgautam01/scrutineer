@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -24,8 +25,10 @@ const exportPrefix = "/api/v1"
 
 func (s *Server) exportHandler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("DELETE /repositories/{id}", s.apiDeleteRepository)
 	mux.HandleFunc("GET /repositories/{id}/findings", s.apiExportRepoFindings)
 	mux.HandleFunc("GET /repositories", s.apiExportRepositories)
+	mux.HandleFunc("DELETE /findings/{id}", s.apiDeleteFinding)
 	mux.HandleFunc("GET /findings", s.apiExportFindings)
 	mux.HandleFunc("GET /scans", s.apiExportScans)
 	mux.HandleFunc("POST /import", s.handleImport)
@@ -35,6 +38,85 @@ func (s *Server) exportHandler() http.Handler {
 	mux.HandleFunc("GET /audit/queue", s.apiAuditQueue)
 	mux.HandleFunc("GET /audit/metrics", s.apiAuditMetrics)
 	return mux
+}
+
+func (s *Server) apiDeleteRepository(w http.ResponseWriter, r *http.Request) {
+	repo, ok := s.loadExportRepositoryByID(w, r)
+	if !ok {
+		return
+	}
+	deleted, err := s.deleteRepository(repo)
+	if err != nil {
+		if errors.Is(err, errRepositoryDeleteInFlight) {
+			writeAPIError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.removeRepositoryArtifacts(deleted)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) apiDeleteFinding(w http.ResponseWriter, r *http.Request) {
+	finding, ok := s.loadExportFindingByID(w, r)
+	if !ok {
+		return
+	}
+	deleted, err := s.deleteFinding(finding)
+	if err != nil {
+		if errors.Is(err, errFindingDeleteInFlight) {
+			writeAPIError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.removeFindingArtifacts(deleted)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) loadExportRepositoryByID(w http.ResponseWriter, r *http.Request) (db.Repository, bool) {
+	var repo db.Repository
+	id, ok := exportPathID(w, r, "repository")
+	if !ok {
+		return repo, false
+	}
+	if err := s.DB.First(&repo, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			writeAPIError(w, http.StatusNotFound, "repository not found")
+			return repo, false
+		}
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return repo, false
+	}
+	return repo, true
+}
+
+func (s *Server) loadExportFindingByID(w http.ResponseWriter, r *http.Request) (db.Finding, bool) {
+	var finding db.Finding
+	id, ok := exportPathID(w, r, "finding")
+	if !ok {
+		return finding, false
+	}
+	if err := s.DB.First(&finding, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			writeAPIError(w, http.StatusNotFound, "finding not found")
+			return finding, false
+		}
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return finding, false
+	}
+	return finding, true
+}
+
+func exportPathID(w http.ResponseWriter, r *http.Request, name string) (int, bool) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil || id <= 0 {
+		writeAPIError(w, http.StatusBadRequest, "invalid "+name+" id")
+		return 0, false
+	}
+	return id, true
 }
 
 // repositoryExportRow is the selected Repositories-tab projection used by the
