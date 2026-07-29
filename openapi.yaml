@@ -860,6 +860,7 @@ paths:
         '400': { description: Invalid repository id }
         '403': { description: Host header is not localhost }
         '404': { description: Repository not found }
+        '409': { description: Repository has queued, running, or paused scans }
         '500': { description: Delete failed }
 
   /v1/repositories/{id}/findings:
@@ -1012,6 +1013,7 @@ paths:
         '400': { description: Invalid finding id }
         '403': { description: Host header is not localhost }
         '404': { description: Finding not found }
+        '409': { description: Finding has queued, running, or paused scans }
         '500': { description: Delete failed }
 
   /v1/scans:

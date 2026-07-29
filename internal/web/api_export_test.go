@@ -280,6 +280,83 @@ func TestAPIv1DeleteRepository(t *testing.T) {
 	}
 }
 
+func TestAPIv1DeleteRepositoryRejectsInFlightScans(t *testing.T) {
+	for _, status := range []db.ScanStatus{db.ScanQueued, db.ScanRunning} {
+		t.Run(string(status), func(t *testing.T) {
+			s, done := newTestServer(t)
+			defer done()
+
+			repo := db.Repository{URL: "https://github.com/acme/busy-repo", Name: "busy-repo"}
+			if err := s.DB.Create(&repo).Error; err != nil {
+				t.Fatal(err)
+			}
+			scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: status, SkillName: deepDiveSkillName}
+			if err := s.DB.Create(&scan).Error; err != nil {
+				t.Fatal(err)
+			}
+
+			r := httptest.NewRequest("DELETE", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10), nil)
+			r.Host = testHost
+			w := httptest.NewRecorder()
+			s.Handler().ServeHTTP(w, r)
+
+			if w.Code != http.StatusConflict {
+				t.Fatalf("status %d, want 409. body=%s", w.Code, w.Body)
+			}
+			if !strings.Contains(w.Body.String(), "queued, running, or paused scans") {
+				t.Fatalf("body %q missing in-flight scan explanation", w.Body.String())
+			}
+			if n := countRows(t, s, &db.Repository{}, "id = ?", repo.ID); n != 1 {
+				t.Fatalf("repository count = %d, want 1 after rejected delete", n)
+			}
+			if n := countRows(t, s, &db.Scan{}, "id = ?", scan.ID); n != 1 {
+				t.Fatalf("scan count = %d, want 1 after rejected delete", n)
+			}
+		})
+	}
+}
+
+func TestAPIv1DeleteRepositoryRejectsInFlightFindingScopedScans(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://github.com/acme/busy-finding-repo", Name: "busy-finding-repo"}
+	if err := s.DB.Create(&repo).Error; err != nil {
+		t.Fatal(err)
+	}
+	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName}
+	if err := s.DB.Create(&scan).Error; err != nil {
+		t.Fatal(err)
+	}
+	finding := db.Finding{RepositoryID: repo.ID, ScanID: scan.ID, Title: "busy finding", Severity: sevHigh}
+	if err := s.DB.Create(&finding).Error; err != nil {
+		t.Fatal(err)
+	}
+	otherRepo := db.Repository{URL: "https://github.com/acme/worker-repo", Name: "worker-repo"}
+	if err := s.DB.Create(&otherRepo).Error; err != nil {
+		t.Fatal(err)
+	}
+	linked := db.Scan{RepositoryID: otherRepo.ID, FindingID: &finding.ID, Kind: "skill", Status: db.ScanPaused, SkillName: "verify"}
+	if err := s.DB.Create(&linked).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	r := httptest.NewRequest("DELETE", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10), nil)
+	r.Host = testHost
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status %d, want 409. body=%s", w.Code, w.Body)
+	}
+	if n := countRows(t, s, &db.Repository{}, "id = ?", repo.ID); n != 1 {
+		t.Fatalf("repository count = %d, want 1 after rejected delete", n)
+	}
+	if n := countRows(t, s, &db.Scan{}, "id = ?", linked.ID); n != 1 {
+		t.Fatalf("finding-scoped scan count = %d, want 1 after rejected delete", n)
+	}
+}
+
 func TestAPIv1DeleteFinding(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()

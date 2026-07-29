@@ -2587,6 +2587,10 @@ func (s *Server) repoDelete(w http.ResponseWriter, r *http.Request) {
 
 	deleted, err := s.deleteRepository(repo)
 	if err != nil {
+		if errors.Is(err, errRepositoryDeleteInFlight) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -2603,20 +2607,10 @@ type deletedRepository struct {
 	ConversationIDs []uint
 }
 
+var errRepositoryDeleteInFlight = errors.New("repository has queued, running, or paused scans")
+
 func (s *Server) deleteRepository(repo db.Repository) (deletedRepository, error) {
 	deleted := deletedRepository{Repo: repo}
-	// Collected before the transaction deletes the scan rows: each scan's
-	// per-scan workspace and claude session store under DataDir are reclaimed
-	// after the commit.
-	if err := s.DB.Model(&db.Scan{}).Where("repository_id = ?", repo.ID).Pluck("id", &deleted.ScanIDs).Error; err != nil {
-		return deletedRepository{}, err
-	}
-	// Chat conversation workspaces are reclaimed after the commit, same as
-	// scan workspaces. Finding-scoped conversations carry the finding's
-	// repository_id, so this covers them too.
-	if err := s.DB.Model(&db.Conversation{}).Where("repository_id = ?", repo.ID).Pluck("id", &deleted.ConversationIDs).Error; err != nil {
-		return deletedRepository{}, err
-	}
 
 	err := s.DB.Transaction(func(tx *gorm.DB) error {
 		// Match scans by the *finding's* repo, not the scan's own: a finding-
@@ -2625,6 +2619,27 @@ func (s *Server) deleteRepository(repo db.Repository) (deletedRepository, error)
 		// must have its NO ACTION link cleared or the finding delete 787s. The
 		// subquery also avoids materialising a (possibly >999) id list.
 		const findingsOfRepo = "finding_id IN (SELECT id FROM findings WHERE repository_id = ?)"
+		var inFlight int64
+		if err := tx.Model(&db.Scan{}).
+			Where("(repository_id = ? OR "+findingsOfRepo+") AND status IN ?", repo.ID, repo.ID, inFlightScanStatuses()).
+			Count(&inFlight).Error; err != nil {
+			return err
+		}
+		if inFlight > 0 {
+			return fmt.Errorf("%w; cancel or wait for %d linked scan(s) before deleting", errRepositoryDeleteInFlight, inFlight)
+		}
+		// Collected before the transaction deletes the scan rows: each scan's
+		// per-scan workspace and claude session store under DataDir are reclaimed
+		// after the commit.
+		if err := tx.Model(&db.Scan{}).Where("repository_id = ?", repo.ID).Pluck("id", &deleted.ScanIDs).Error; err != nil {
+			return err
+		}
+		// Chat conversation workspaces are reclaimed after the commit, same as
+		// scan workspaces. Finding-scoped conversations carry the finding's
+		// repository_id, so this covers them too.
+		if err := tx.Model(&db.Conversation{}).Where("repository_id = ?", repo.ID).Pluck("id", &deleted.ConversationIDs).Error; err != nil {
+			return err
+		}
 		if err := tx.Model(&db.Scan{}).Where(findingsOfRepo, repo.ID).
 			Update("finding_id", nil).Error; err != nil {
 			return err
@@ -2693,20 +2708,20 @@ var errFindingDeleteInFlight = errors.New("finding has queued, running, or pause
 
 func (s *Server) deleteFinding(finding db.Finding) (deletedFinding, error) {
 	var deleted deletedFinding
-	var inFlight int64
-	if err := s.DB.Model(&db.Scan{}).
-		Where("finding_id = ? AND status IN ?", finding.ID, []db.ScanStatus{db.ScanQueued, db.ScanRunning, db.ScanPaused}).
-		Count(&inFlight).Error; err != nil {
-		return deletedFinding{}, err
-	}
-	if inFlight > 0 {
-		return deletedFinding{}, fmt.Errorf("%w; cancel or wait for %d linked scan(s) before deleting", errFindingDeleteInFlight, inFlight)
-	}
-	if err := s.DB.Model(&db.Conversation{}).Where("finding_id = ?", finding.ID).
-		Pluck("id", &deleted.ConversationIDs).Error; err != nil {
-		return deletedFinding{}, err
-	}
 	err := s.DB.Transaction(func(tx *gorm.DB) error {
+		var inFlight int64
+		if err := tx.Model(&db.Scan{}).
+			Where("finding_id = ? AND status IN ?", finding.ID, inFlightScanStatuses()).
+			Count(&inFlight).Error; err != nil {
+			return err
+		}
+		if inFlight > 0 {
+			return fmt.Errorf("%w; cancel or wait for %d linked scan(s) before deleting", errFindingDeleteInFlight, inFlight)
+		}
+		if err := tx.Model(&db.Conversation{}).Where("finding_id = ?", finding.ID).
+			Pluck("id", &deleted.ConversationIDs).Error; err != nil {
+			return err
+		}
 		if err := tx.Model(&db.Scan{}).Where("finding_id = ?", finding.ID).
 			Update("finding_id", nil).Error; err != nil {
 			return err
@@ -2731,6 +2746,10 @@ func (s *Server) deleteFinding(finding db.Finding) (deletedFinding, error) {
 		return deletedFinding{}, err
 	}
 	return deleted, nil
+}
+
+func inFlightScanStatuses() []db.ScanStatus {
+	return []db.ScanStatus{db.ScanQueued, db.ScanRunning, db.ScanPaused}
 }
 
 func (s *Server) removeFindingArtifacts(deleted deletedFinding) {
