@@ -372,6 +372,10 @@ func (s *Server) apiRunSkill(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusNotFound, err.Error())
 			return
 		}
+		if errors.Is(err, ErrRepoFederationOptOut) {
+			writeAPIError(w, http.StatusConflict, err.Error())
+			return
+		}
 		if errors.Is(err, ErrSkillProfileMismatch) {
 			writeAPIError(w, http.StatusBadRequest, err.Error())
 			return
@@ -431,6 +435,10 @@ func (s *Server) apiRunFindingSkill(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, ErrSkillRequiresRemote) {
 			writeAPIError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, ErrRepoFederationOptOut) {
+			writeAPIError(w, http.StatusConflict, err.Error())
 			return
 		}
 		writeAPIError(w, http.StatusInternalServerError, err.Error())

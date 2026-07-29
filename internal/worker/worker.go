@@ -3,6 +3,7 @@
 package worker
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -124,7 +125,7 @@ type Worker struct {
 	SchemaStrict bool
 
 	mu      sync.Mutex
-	running map[uint]context.CancelFunc
+	running map[uint]*runningScan
 
 	// cacheMu serialises clone/fetch on the per-URL repo and dependent
 	// caches. One Mutex per URL keeps two scans from racing inside the
@@ -301,17 +302,53 @@ func (w *Worker) maxRateLimitAutoResumeDelay() time.Duration {
 	return defaultMaxRateLimitAutoResumeAge
 }
 
-// Cancel aborts an in-flight scan. Returns true if a running job was found and
-// signalled; false means the scan is queued (or already finished) and the
-// caller should flip the DB row itself so the queue handler drops it.
-func (w *Worker) Cancel(scanID uint) bool {
+// CancelledByUser is the default reason recorded on a cancelled scan, and the
+// one an operator's Cancel button carries. Exported so the web layer records
+// the same text on a queued row it flips itself.
+const CancelledByUser = "cancelled by user"
+
+// errorColumn names scans.error in the Updates maps and Select lists below, the
+// way internal/web names it errorKey. The column is written from a dozen places
+// in this file, and spelling it out once more collides with the KindError event
+// kind, which carries the same string for an unrelated reason.
+const errorColumn = "error"
+
+// runningScan tracks one in-flight scan: the func that aborts it, plus the
+// reason the abort should be recorded under. Without the reason, every
+// cancellation reads "cancelled by user" whatever asked for it, so a scan
+// stopped by a maintainer's opt-out would be misattributed to the operator.
+type runningScan struct {
+	cancel context.CancelFunc
+	reason string
+}
+
+// Cancel aborts an in-flight scan and records reason as the row's error when it
+// unwinds; an empty reason falls back to CancelledByUser. Returns true if a
+// running job was found and signalled; false means the scan is queued (or
+// already finished) and the caller should flip the DB row itself so the queue
+// handler drops it.
+func (w *Worker) Cancel(scanID uint, reason string) bool {
 	w.mu.Lock()
-	cancel, ok := w.running[scanID]
+	rs, ok := w.running[scanID]
+	if ok {
+		rs.reason = reason
+	}
 	w.mu.Unlock()
 	if ok {
-		cancel()
+		rs.cancel()
 	}
 	return ok
+}
+
+// cancelReason is the reason the in-flight scan was cancelled under, empty when
+// nothing asked for a specific one (a shutdown, or a job that is not running).
+func (w *Worker) cancelReason(scanID uint) string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if rs, ok := w.running[scanID]; ok {
+		return rs.reason
+	}
+	return ""
 }
 
 func (w *Worker) publish(scanID, repoID uint, name, data string) {
@@ -570,6 +607,10 @@ func (w *Worker) wrap(h handler) func(context.Context, []byte) error {
 			w.Log.Info("dropping stale job", "scan", scan.ID, "status", scan.Status)
 			return nil
 		}
+		if scan.Repository.FederationOptedOut() {
+			w.cancelOptedOut(&scan)
+			return nil
+		}
 
 		if scan.Kind == JobSkill {
 			deferred, err := w.preflightSkill(ctx, &scan, p.Attempt)
@@ -589,9 +630,9 @@ func (w *Worker) wrap(h handler) func(context.Context, []byte) error {
 		defer cancel()
 		w.mu.Lock()
 		if w.running == nil {
-			w.running = make(map[uint]context.CancelFunc)
+			w.running = make(map[uint]*runningScan)
 		}
-		w.running[scan.ID] = cancel
+		w.running[scan.ID] = &runningScan{cancel: cancel}
 		w.mu.Unlock()
 		defer func() {
 			w.mu.Lock()
@@ -600,7 +641,7 @@ func (w *Worker) wrap(h handler) func(context.Context, []byte) error {
 		}()
 
 		if err := w.startScan(&scan); err != nil {
-			return err
+			return w.dropUnclaimedScan(&scan, err)
 		}
 
 		if w.RefreshEcosystemsCache != nil && !scan.Repository.IsLocal() {
@@ -616,23 +657,105 @@ func (w *Worker) wrap(h handler) func(context.Context, []byte) error {
 	}
 }
 
-// startScan records the running state and its audit event in one transaction
-// so a scan never appears to have started without a corresponding timeline
-// entry.
+// OptOutCancelReason is the error text left on a scan stopped because the
+// repository's maintainer asked federated instances not to scan it. Shared
+// with the web layer so the reason reads the same whether the sweep on the
+// opt-out itself or this gate flipped the row.
+const OptOutCancelReason = "cancelled: maintainer opted out of federated scanning"
+
+// cancelOptedOut drops a job whose repository opted out between enqueue and
+// dispatch. The enqueue gate refuses new scans, but a row already on the
+// queue still reaches the worker, and running it is exactly what the opt-out
+// forbids; the web sweep cannot close that window on its own because a scan
+// can be claimed from the queue while it runs.
+func (w *Worker) cancelOptedOut(scan *db.Scan) {
+	now := time.Now()
+	scan.Status = db.ScanCancelled
+	scan.StatusPriority = db.StatusPriorityFor(db.ScanCancelled)
+	scan.Error = OptOutCancelReason
+	scan.FinishedAt = &now
+	if err := w.DB.Save(scan).Error; err != nil {
+		w.Log.Error("save opted-out scan", "scan", scan.ID, "err", err)
+		return
+	}
+	w.publish(scan.ID, scan.RepositoryID, "scan-status", string(scan.Status))
+	w.Log.Warn("dropping job: maintainer opted out of federated scanning",
+		"scan", scan.ID, "repo", scan.RepositoryID)
+}
+
+// errScanClaimLost means the row left `queued` between the dispatch gate
+// reading it and this worker claiming it, so whoever moved it already owns its
+// fate. errRepoOptedOut means the maintainer opted out in that same window.
+// Neither is a job failure: wrap drops the job.
+var (
+	errScanClaimLost = errors.New("scan is no longer queued")
+	errRepoOptedOut  = errors.New("repository opted out of federated scanning")
+)
+
+// dropUnclaimedScan turns a claim startScan refused into the job's outcome: nil
+// when the row was taken out from under this pickup, so goqite drops the job
+// instead of retrying expensive work, and err itself for a real failure. An
+// opt-out gets its terminal row written here, since the rolled-back claim left
+// the scan queued with nothing else about to run it.
+func (w *Worker) dropUnclaimedScan(scan *db.Scan, err error) error {
+	switch {
+	case errors.Is(err, errRepoOptedOut):
+		w.cancelOptedOut(scan)
+		return nil
+	case errors.Is(err, errScanClaimLost):
+		w.Log.Info("dropping job: scan left the queue during pickup", "scan", scan.ID)
+		return nil
+	}
+	return err
+}
+
+// startScan claims a queued scan for this worker and records its audit event in
+// one transaction, so a scan never appears to have started without a
+// corresponding timeline entry.
+//
+// The claim is conditional rather than a blind Save, because nothing serialises
+// the dispatch gate above against the opt-out sweep: a Save would write every
+// column and resurrect as running a row the sweep had just cancelled. The
+// opt-out re-read comes after the UPDATE on purpose: the row is write-locked
+// from there until commit, so an opt-out either landed before it, and is seen
+// here in time to roll the claim back, or lands after and finds a running row
+// for its own sweep to stop. Reading first would leave a gap between the read
+// and the write for exactly the interleaving this closes.
 func (w *Worker) startScan(scan *db.Scan) error {
 	now := time.Now()
-	scan.Status = db.ScanRunning
-	scan.StatusPriority = db.StatusPriorityFor(db.ScanRunning)
-	scan.StartedAt = &now
-	scan.Log = ""
-	scan.Error = ""
+	backend := scan.Backend
 	if br, ok := w.Runner.(BackendReporter); ok {
-		scan.Backend = br.Backend()
+		backend = br.Backend()
 	}
 	return w.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Save(scan).Error; err != nil {
+		res := tx.Model(&db.Scan{}).Where("id = ? AND status = ?", scan.ID, db.ScanQueued).
+			Updates(map[string]any{
+				"status":          db.ScanRunning,
+				"status_priority": db.StatusPriorityFor(db.ScanRunning),
+				"started_at":      &now,
+				"log":             "",
+				errorColumn:       "",
+				"backend":         backend,
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return errScanClaimLost
+		}
+		var repo db.Repository
+		if err := tx.Select("id, federation_opt_out_at").First(&repo, scan.RepositoryID).Error; err != nil {
 			return err
 		}
+		if repo.FederationOptedOut() {
+			return errRepoOptedOut
+		}
+		scan.Status = db.ScanRunning
+		scan.StatusPriority = db.StatusPriorityFor(db.ScanRunning)
+		scan.StartedAt = &now
+		scan.Log = ""
+		scan.Error = ""
+		scan.Backend = backend
 		return db.LogScanEvent(tx, db.AuditEventScanStarted, scan)
 	})
 }
@@ -643,7 +766,9 @@ func (w *Worker) startScan(scan *db.Scan) error {
 // the status. It returns an error only when the terminal save fails, which
 // wrap propagates to goqite.
 func (w *Worker) finalizeScan(ctx context.Context, scan *db.Scan, report string, err error, timeout time.Duration, emit func(Event), snapshotLog func()) error {
-	finishScan(ctx, scan, report, err, timeout, emit)
+	// Read before wrap's deferred cleanup drops the entry, so a cancellation
+	// that named a reason keeps it instead of falling back to the operator's.
+	finishScan(ctx, scan, report, err, timeout, w.cancelReason(scan.ID), emit)
 	snapshotLog()
 	if scan.Status == db.ScanDone && !scan.MaxTurnsHit {
 		w.clearSessionStore(scan)
@@ -739,7 +864,7 @@ func (w *Worker) maybeFireScanFailed(scan *db.Scan) {
 	}
 }
 
-func finishScan(ctx context.Context, scan *db.Scan, report string, err error, timeout time.Duration, emit func(Event)) {
+func finishScan(ctx context.Context, scan *db.Scan, report string, err error, timeout time.Duration, cancelReason string, emit func(Event)) {
 	scan.FinishedAt = new(time.Now())
 	scan.MaxTurnsHit = false
 	switch {
@@ -749,7 +874,7 @@ func finishScan(ctx context.Context, scan *db.Scan, report string, err error, ti
 		emit(Event{Kind: KindError, Text: scan.Error})
 	case errors.Is(ctx.Err(), context.Canceled):
 		scan.Status = db.ScanCancelled
-		scan.Error = "cancelled by user"
+		scan.Error = cmp.Or(cancelReason, CancelledByUser)
 		emit(Event{Kind: KindError, Text: scan.Error})
 	case err != nil:
 		finishErroredScan(scan, report, err, emit)
@@ -850,7 +975,7 @@ func (w *Worker) pauseQueuedOnAccountError(triggerID uint) {
 		Updates(map[string]any{
 			"status":          db.ScanPaused,
 			"status_priority": db.StatusPriorityFor(db.ScanPaused),
-			"error":           reason,
+			errorColumn:       reason,
 			"finished_at":     &now,
 		})
 	if res.Error != nil {
@@ -893,7 +1018,7 @@ func (w *Worker) applyAccountPauseReset(triggerID uint, baseError string, resetA
 	trigRes := w.DB.Model(&db.Scan{}).
 		Where("id = ? AND status = ? AND (paused_until IS NULL OR paused_until < ?)", triggerID, db.ScanPaused, effective).
 		Updates(map[string]any{
-			"error":        appendAutoResume(baseError, effective),
+			errorColumn:    appendAutoResume(baseError, effective),
 			"paused_until": effective,
 		})
 	if trigRes.Error != nil {
@@ -920,7 +1045,7 @@ func (w *Worker) applyAccountPauseReset(triggerID uint, baseError string, resetA
 		Where("id != ? AND status = ? AND error LIKE ? AND (paused_until IS NULL OR paused_until < ?)",
 			triggerID, db.ScanPaused, accountPauseReasonBase+"%", effective).
 		Updates(map[string]any{
-			"error":        accountPauseReason(effective),
+			errorColumn:    accountPauseReason(effective),
 			"paused_until": effective,
 		}).Error; err != nil {
 		return nil, err
@@ -928,7 +1053,7 @@ func (w *Worker) applyAccountPauseReset(triggerID uint, baseError string, resetA
 	// Trigger rows carry Claude detail, so rewrite them individually. The
 	// update re-checks the guard to avoid clobbering concurrent changes.
 	var triggers []db.Scan
-	if err := w.DB.Select("id", "error").
+	if err := w.DB.Select("id", errorColumn).
 		Where("id != ? AND status = ? AND error LIKE ? AND error NOT LIKE ? AND (paused_until IS NULL OR paused_until < ?)",
 			triggerID, db.ScanPaused, AccountPausePrefix+"%", accountPauseReasonBase+"%", effective).
 		Find(&triggers).Error; err != nil {
@@ -939,7 +1064,7 @@ func (w *Worker) applyAccountPauseReset(triggerID uint, baseError string, resetA
 			Where("id = ? AND status = ? AND error LIKE ? AND error NOT LIKE ? AND (paused_until IS NULL OR paused_until < ?)",
 				tr.ID, db.ScanPaused, AccountPausePrefix+"%", accountPauseReasonBase+"%", effective).
 			Updates(map[string]any{
-				"error":        replaceAutoResume(tr.Error, effective),
+				errorColumn:    replaceAutoResume(tr.Error, effective),
 				"paused_until": effective,
 			})
 		if res.Error != nil {
@@ -1020,7 +1145,7 @@ func (w *Worker) resumeAccountPaused(ctx context.Context) (int, error) {
 		return 0, errors.New("queue not configured")
 	}
 	var scans []db.Scan
-	if err := w.DB.Select("id", "kind", "finding_id", "error", "paused_until").
+	if err := w.DB.Select("id", "kind", "finding_id", errorColumn, "paused_until").
 		Where("status = ? AND error LIKE ? AND paused_until IS NOT NULL AND paused_until <= ?",
 			db.ScanPaused, AccountPausePrefix+"%", w.now().UTC()).
 		Order("id").
@@ -1032,7 +1157,7 @@ func (w *Worker) resumeAccountPaused(ctx context.Context) (int, error) {
 		updates := map[string]any{
 			"status":          db.ScanQueued,
 			"status_priority": db.StatusPriorityFor(db.ScanQueued),
-			"error":           "",
+			errorColumn:       "",
 			"finished_at":     nil,
 			"paused_until":    nil,
 		}
@@ -1052,7 +1177,7 @@ func (w *Worker) resumeAccountPaused(ctx context.Context) (int, error) {
 			restoreErr := w.DB.Model(&db.Scan{}).Where("id = ?", sc.ID).Updates(map[string]any{
 				"status":          db.ScanPaused,
 				"status_priority": db.StatusPriorityFor(db.ScanPaused),
-				"error":           appendAutoResumeFailure(sc.Error, err),
+				errorColumn:       appendAutoResumeFailure(sc.Error, err),
 				"finished_at":     &now,
 				"paused_until":    sc.PausedUntil,
 			}).Error

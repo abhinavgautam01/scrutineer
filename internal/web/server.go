@@ -44,6 +44,12 @@ var ErrSkillRequiresRemote = errors.New("skill requires a remote repository")
 // instead of a ghost scan failing on the worker.
 var ErrSkillProfileMismatch = errors.New("skill requires a different runner profile")
 
+// ErrRepoFederationOptOut is returned by enqueueSkillWith for a repository
+// whose maintainer asked federated instances not to scan it. The gate sits on
+// the single enqueue choke point rather than on each caller, so it also stops
+// the scheduler, triage fan-out and every button on the repo page.
+var ErrRepoFederationOptOut = errors.New("repository maintainer opted out of federated scanning")
+
 // ErrInvalidRef is returned by enqueueSkillWith when opts.Ref fails the
 // shared ref-charset validation. Mirrors ErrSkillProfileMismatch so the
 // API path rejects a bad ref at the boundary (400) instead of enqueueing
@@ -158,6 +164,13 @@ type Server struct {
 	// agentEnqueueMu makes check-then-enqueue flows atomic within this server
 	// process, including scan-token API deduplication and automatic fan-out.
 	agentEnqueueMu sync.Mutex
+
+	// repoFederationLocks serialises, per repository, recording a federation
+	// opt-out against the scheduler firing that repository. See
+	// lockRepoFederation. repoFederationMu guards the map itself, not the
+	// sections.
+	repoFederationMu    sync.Mutex
+	repoFederationLocks map[uint]*sync.Mutex
 
 	// runnerStatus is the result of the boot-time runner-image staleness check
 	// (issue #337), set once by main shortly after startup and read by the
@@ -422,6 +435,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /repositories/{id}/validate-fix", s.validateFix)
 	mux.HandleFunc("POST /repositories/{id}/delete", s.repoDelete)
 	mux.HandleFunc("POST /repositories/{id}/disclosure-channel", s.repoDisclosureChannel)
+	mux.HandleFunc("POST /repositories/{id}/federation-opt-out", s.repoFederationOptOut)
 	mux.HandleFunc("POST /repositories/{id}/schedule", s.repoScheduleUpdate)
 	mux.HandleFunc("POST /repositories/{id}/threat-model", s.repoThreatModelSave)
 	mux.HandleFunc("POST /repositories/{id}/threat-model/run", s.repoThreatModelRun)
@@ -2783,8 +2797,11 @@ func (s *Server) enqueueSkillScoped(ctx context.Context, repoID, skillID uint, f
 // explicit opts.Effort > the runtime default effort.
 func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opts ScanOpts) (uint, error) {
 	var repo db.Repository
-	if err := s.DB.Select("id, url").First(&repo, repoID).Error; err != nil {
+	if err := s.DB.Select("id, url, federation_opt_out_at").First(&repo, repoID).Error; err != nil {
 		return 0, err
+	}
+	if repo.FederationOptedOut() {
+		return 0, ErrRepoFederationOptOut
 	}
 	var sk db.Skill
 	hasSkill := s.DB.Select("name, version, metadata, requires_remote, requires_profile, model").First(&sk, skillID).Error == nil
@@ -2858,7 +2875,26 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 		SkillsRepoSHA:      s.SkillsRepoSHA,
 		APIToken:           NewAPIToken(),
 	}
-	if err := s.DB.Create(&scan).Error; err != nil {
+	// The opt-out check at the top of this function ran before every field above
+	// was resolved, so re-check it inside the creating transaction: the row is
+	// write-locked from the INSERT until commit, which leaves an opt-out only two
+	// places to land. Before the INSERT, and the read below sees it and rolls the
+	// scan back; after the commit, and the sweep that follows recording it finds a
+	// queued row to cancel. Reading before the INSERT instead would put the window
+	// back where it was, just narrower.
+	if err := s.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&scan).Error; err != nil {
+			return err
+		}
+		var live db.Repository
+		if err := tx.Select("id, federation_opt_out_at").First(&live, repoID).Error; err != nil {
+			return err
+		}
+		if live.FederationOptedOut() {
+			return ErrRepoFederationOptOut
+		}
+		return nil
+	}); err != nil {
 		return 0, err
 	}
 	prio := worker.PrioScan
