@@ -896,6 +896,67 @@ func TestBundledAuditInjectionMetadata(t *testing.T) {
 	}
 }
 
+func TestBundledAuditExfilMetadata(t *testing.T) {
+	dir := filepath.Join("..", "..", "skills", "audit-exfil")
+	auditExfil, err := ParseFile(filepath.Join(dir, "SKILL.md"))
+	if err != nil {
+		t.Fatalf("parse audit-exfil: %v", err)
+	}
+	if auditExfil.OutputKind != "findings" || auditExfil.MaxTurns != 48 ||
+		auditExfil.Model != "high" || auditExfil.MinConfidence != "high" {
+		t.Errorf("audit-exfil metadata = kind %q, turns %d, model %q, confidence %q",
+			auditExfil.OutputKind, auditExfil.MaxTurns, auditExfil.Model, auditExfil.MinConfidence)
+	}
+	if !slices.Equal(auditExfil.Paths, []string{"**"}) {
+		t.Errorf("audit-exfil paths = %v, want [**]", auditExfil.Paths)
+	}
+	wantIgnores := []string{
+		"**/node_modules/**",
+		"**/dist/**",
+		"**/generated/**",
+		"**/__generated__/**",
+		"**/*.min.js",
+		"**/*.min.css",
+	}
+	if !slices.Equal(auditExfil.IgnorePaths, wantIgnores) {
+		t.Errorf("audit-exfil ignore paths = %v, want %v", auditExfil.IgnorePaths, wantIgnores)
+	}
+	for _, name := range []string{
+		"pnpm-lock.yaml",
+		"package-lock.json",
+		"yarn.lock",
+		"Cargo.lock",
+		"go.sum",
+		"Gemfile.lock",
+		"poetry.lock",
+		"composer.lock",
+		"Package.resolved",
+	} {
+		if !PathIncluded(name, auditExfil.Paths, auditExfil.IgnorePaths) {
+			t.Errorf("audit-exfil path filters exclude lockfile %q", name)
+		}
+	}
+	for _, name := range []string{"node_modules/pkg/index.js", "dist/app.js", "app.min.js"} {
+		if PathIncluded(name, auditExfil.Paths, auditExfil.IgnorePaths) {
+			t.Errorf("audit-exfil path filters include ignored path %q", name)
+		}
+	}
+	const wantTools = "Read,Write,Bash,Grep,Glob"
+	if auditExfil.AllowedTools != wantTools {
+		t.Errorf("audit-exfil allowed tools = %q, want %q", auditExfil.AllowedTools, wantTools)
+	}
+	for _, name := range []string{"python.md", "node.md", "ruby.md", "java-jvm.md", "go.md", "php.md"} {
+		data, err := os.ReadFile(filepath.Join(dir, "references", name))
+		if err != nil {
+			t.Errorf("read audit-exfil reference %s: %v", name, err)
+			continue
+		}
+		if !strings.HasPrefix(string(data), "# ") {
+			t.Errorf("audit-exfil reference %s has no heading", name)
+		}
+	}
+}
+
 func TestParseFile_requiresWrongType(t *testing.T) {
 	dir := t.TempDir()
 	path := writeSkill(t, dir, "bad-req", `---

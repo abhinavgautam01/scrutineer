@@ -11,6 +11,15 @@ metadata:
   scrutineer.max_turns: 48
   scrutineer.model: high
   scrutineer.min_confidence: high
+  scrutineer.paths:
+    - "**"
+  scrutineer.ignore_paths:
+    - "**/node_modules/**"
+    - "**/dist/**"
+    - "**/generated/**"
+    - "**/__generated__/**"
+    - "**/*.min.js"
+    - "**/*.min.css"
 ---
 
 # audit-exfil
@@ -72,7 +81,7 @@ that no prior finding exists.
 ## Review method
 
 Read the reference files for every ecosystem present in the repository before
-reporting. Prefer source and local manifests over memory; every
+reporting. Prefer source, lockfiles, and local manifests over memory; every
 version-sensitive claim must name the installed version or framework default it
 was checked against.
 
