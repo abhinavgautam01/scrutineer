@@ -66,6 +66,7 @@ func (s *Server) apiAuth(next http.Handler) http.Handler {
 
 const apiMaxBody = 1 << 20
 
+//nolint:ireturn // T is a concrete struct at every call site, not an interface
 func decodeAPIBody[T any](w http.ResponseWriter, r *http.Request, errorMessage string) (T, bool) {
 	var body T
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
