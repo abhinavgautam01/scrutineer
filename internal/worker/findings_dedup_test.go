@@ -181,6 +181,26 @@ func TestParseFindingsOutput_auditSchemasReferencesIngest(t *testing.T) {
 			}]}`,
 			wantTags: "advisory,audit-exfil",
 		},
+		{
+			skillName: "audit-authz",
+			report: `{"findings":[{
+				"id":"F001",
+				"title":"Invoice lookup omits tenant ownership",
+				"severity":"High",
+				"confidence":"high",
+				"cwe":"CWE-639",
+				"location":"internal/invoices/show.go:74",
+				"reachability":"reachable",
+				"quality_tier":"high",
+				"trace":"The authenticated endpoint passes the caller-controlled invoice ID to a global lookup and returns the row.",
+				"boundary":"A tenant member may supply another tenant's invoice ID.",
+				"validation":"Static review resolved the route middleware and repository helper, then confirmed neither checks invoice tenant membership.",
+				"discovered_via":"source",
+				"rating":"High because any authenticated tenant member can read another tenant's billing record.",
+				"references":[{"url":"https://example.com/advisory","summary":"Related advisory","tags":"advisory,audit-authz"}]
+			}]}`,
+			wantTags: "advisory,audit-authz",
+		},
 	}
 
 	for _, tc := range cases {
