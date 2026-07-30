@@ -52,8 +52,8 @@ the parsed result, rather than the original body, reaches persistence.
 
 ## JWT Claims
 
-Distinguish `decode` from cryptographic verification. For authorization claims,
-confirm an explicit expected algorithm/key family and the issuer, audience,
-token purpose, tenant, and scope bindings required by the application.
-JavaScript truthiness checks on arrays or strings can also turn malformed
-claims into allow decisions; trace the exact predicate.
+Read `jwt.md` for algorithm, key-selection, claim-validation, and version
+checks. Distinguish `decode` from cryptographic verification and identify the
+actual package (`jsonwebtoken`, `jose`, framework wrappers, or another
+implementation). JavaScript truthiness checks on arrays or strings can also
+turn malformed claims into allow decisions; trace the exact predicate.

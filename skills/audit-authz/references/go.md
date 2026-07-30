@@ -41,7 +41,7 @@ field-level authority.
 
 ## JWT And Context Principals
 
-Determine the JWT package and version from go.mod/go.sum. Confirm signature
-validation, expected methods, issuer/audience/purpose, and expiry before claims
-drive access. Context values are trusted only if every reachable registration
-path installs the middleware that creates them and rejects invalid input.
+Read `jwt.md` and determine the JWT package and version from go.mod/go.sum
+before evaluating parser options or error handling. Context values are trusted
+only if every reachable registration path installs the middleware that creates
+them and rejects invalid input.

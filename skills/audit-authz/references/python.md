@@ -9,6 +9,11 @@ class mixins, middleware, and the object query.
 - Django 5.1 introduced `LoginRequiredMiddleware`. It can supply a global
   authentication requirement, but it does not add ownership, tenant, or role
   checks. Views marked with `login_not_required` are deliberate exceptions.
+- Django REST Framework views opt out of Django 5.1+
+  `LoginRequiredMiddleware`. For DRF, inspect
+  `DEFAULT_AUTHENTICATION_CLASSES`, `DEFAULT_PERMISSION_CLASSES`, and
+  per-view overrides instead of assuming the Django middleware protects the
+  API. See https://www.django-rest-framework.org/api-guide/authentication/#django-51-loginrequiredmiddleware.
 - `LoginRequiredMixin` and `@login_required` prove authentication only.
   `PermissionRequiredMixin`, `UserPassesTestMixin`, model permissions, or an
   application policy may add function-level authorization.
@@ -49,11 +54,8 @@ it rather than judging the query alone.
 
 ## JWT And Session Claims
 
-`jwt.decode` APIs vary by package. Determine the imported module and pinned
-version before evaluating options. Claims used for authorization must come
-from signature-verified tokens with an explicit expected algorithm and the
-required issuer, audience, token-type, and expiry checks for that trust domain.
-
-Do not report a decoded claim merely because it exists. Report only when that
-claim actually grants a role, tenant, scope, ownership decision, or privileged
-operation without the required verification or binding.
+Read `jwt.md` for algorithm, key-selection, claim-validation, and version
+checks. Determine the imported Python module before interpreting a
+`jwt.decode` call because PyJWT and python-jose expose different contracts.
+Do not report a decoded claim unless it actually grants a role, tenant, scope,
+ownership decision, or privileged operation.

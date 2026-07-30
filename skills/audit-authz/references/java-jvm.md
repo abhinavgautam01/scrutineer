@@ -34,7 +34,8 @@ workflow state.
 
 ## JWT And Delegated Authorization
 
-Spring resource-server validation can verify signatures while application code
-still misuses claims. Confirm expected issuer and audience, token type/purpose,
+Read `jwt.md` for shared token-verification and claim-binding checks. Spring
+resource-server validation can verify signatures while application code still
+misuses claims. Confirm expected issuer and audience, token type/purpose,
 scope-to-operation mapping, and tenant/resource binding. Do not report a claim
 unless it drives an actual protected decision.

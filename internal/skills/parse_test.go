@@ -999,6 +999,10 @@ func TestBundledAuditAuthzMetadata(t *testing.T) {
 		t.Errorf("audit-authz compatibility does not distinguish external network from api_base: %q",
 			auditAuthz.Compatibility)
 	}
+	if !strings.Contains(auditAuthz.Body, "external network access") ||
+		!strings.Contains(auditAuthz.Body, "api_base is allowed") {
+		t.Error("audit-authz body does not distinguish external network from api_base")
+	}
 	if !slices.Equal(auditAuthz.Paths, []string{"**"}) {
 		t.Errorf("audit-authz paths = %v, want [**]", auditAuthz.Paths)
 	}
@@ -1045,6 +1049,7 @@ func TestBundledAuditAuthzMetadata(t *testing.T) {
 		"go.md",
 		"php.md",
 		"graphql.md",
+		"jwt.md",
 	} {
 		data, err := os.ReadFile(filepath.Join(dir, "references", name))
 		if err != nil {
@@ -1056,9 +1061,10 @@ func TestBundledAuditAuthzMetadata(t *testing.T) {
 		}
 	}
 	requiredReferenceGuidance := map[string][]string{
-		"python.md":  {"Django 5.1", "check_object_permissions", "get_queryset"},
+		"python.md":  {"Django 5.1", "opt out", "check_object_permissions", "get_queryset"},
 		"node.md":    {"registration order", "Server Actions", "APP_GUARD"},
-		"graphql.md": {"global IDs", "subscriptions", "runtime code"},
+		"graphql.md": {"global IDs", "subscriptions", "runtime code", "each request"},
+		"jwt.md":     {"before 9.0.0", "before 2.4.0", "through 4.5.0", "4.5.1"},
 	}
 	for name, required := range requiredReferenceGuidance {
 		data, err := os.ReadFile(filepath.Join(dir, "references", name))

@@ -41,7 +41,9 @@ Relay/global IDs are identifiers, not authorization tokens. Decode paths must
 still bind the loaded object to the actor's owner, tenant, membership, or
 permission set. Data loaders and caches must include authorization-relevant
 tenant/principal context in their key or ensure they cannot return a row loaded
-for another actor.
+for another actor. A loader instantiated separately for each request is a
+common safe design because its cache cannot cross principals; confirm its
+lifetime before requiring principal data in every key.
 
 List/connection resolvers need scoped querysets; checking each item only on a
 detail resolver does not protect a list. Mutations must authorize the exact

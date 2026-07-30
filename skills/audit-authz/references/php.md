@@ -33,7 +33,6 @@ shape, not authorization.
 
 ## Tokens And Sessions
 
-Determine the JWT/OAuth library and pinned version. Claims used for role,
-scope, tenant, or ownership decisions need signature verification plus the
-issuer, audience, token-purpose, and resource bindings required by the
-application. Session authentication does not replace object authorization.
+Read `jwt.md` and determine the JWT/OAuth library and pinned version before
+interpreting verification options. Session authentication does not replace
+object authorization.

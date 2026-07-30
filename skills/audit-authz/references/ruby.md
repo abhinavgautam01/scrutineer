@@ -37,8 +37,7 @@ write operation and a sensitive field a lower-privileged actor can control.
 
 ## Tokens And Sessions
 
-Determine which JWT gem is used and read its pinned version and decode options.
-Claims used for role, scope, or tenant decisions need verified signatures and
-the application's issuer, audience, purpose, and expiry bindings. Rails signed
-or encrypted cookies provide integrity/confidentiality for cookie contents but
-do not prove that a referenced object belongs to the current actor.
+Read `jwt.md` when JWT claims drive authorization and determine which JWT gem
+is used before interpreting decode options. Rails signed or encrypted cookies
+provide integrity/confidentiality for cookie contents but do not prove that a
+referenced object belongs to the current actor.
