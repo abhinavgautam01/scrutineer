@@ -167,6 +167,7 @@ func (w *Worker) doSkill(ctx context.Context, scan *db.Scan, emit func(Event)) (
 		}
 		scan.Commit = gitHead(filepath.Join(workRoot, "src"))
 	} else {
+		w.prepareNoveltyHistory(ctx, scan, &skill)
 		cacheCommit, err := w.PrepareSrc(ctx, scan.Repository.URL, scan.Ref, workRoot, emit)
 		if err != nil {
 			if report, ok := w.handleCloneError(scan, err, emit); ok {
@@ -1195,11 +1196,7 @@ func (w *Worker) metadataDir() string {
 }
 
 func stageContext(workRoot, apiBase, forkOrg, metadataDir string, scan *db.Scan, repo *db.Repository) error {
-	return stageContextWithRecon(workRoot, apiBase, forkOrg, metadataDir, scan, repo, nil)
-}
-
-func stageContextWithRecon(workRoot, apiBase, forkOrg, metadataDir string, scan *db.Scan, repo *db.Repository, recon *skillContextRecon) error {
-	return stageContextWithInputs(workRoot, apiBase, forkOrg, metadataDir, scan, repo, recon, nil)
+	return stageContextWithInputs(workRoot, apiBase, forkOrg, metadataDir, scan, repo, nil, nil)
 }
 
 func stageContextWithInputs(
@@ -1312,11 +1309,7 @@ func (w *Worker) stageWorkspace(ctx context.Context, workRoot, skillDir string, 
 // rendered skill bundle, and optional import payloads. Production adds recon
 // context for threat-model in Worker.stageWorkspace.
 func StageWorkspace(workRoot, skillDir, apiBase, forkOrg, metadataDir string, scan *db.Scan, skill *db.Skill) error {
-	return stageWorkspace(workRoot, skillDir, apiBase, forkOrg, metadataDir, scan, skill, nil)
-}
-
-func stageWorkspace(workRoot, skillDir, apiBase, forkOrg, metadataDir string, scan *db.Scan, skill *db.Skill, recon *skillContextRecon) error {
-	return stageWorkspaceWithInputs(workRoot, skillDir, apiBase, forkOrg, metadataDir, scan, skill, recon, nil)
+	return stageWorkspaceWithInputs(workRoot, skillDir, apiBase, forkOrg, metadataDir, scan, skill, nil, nil)
 }
 
 func stageWorkspaceWithInputs(

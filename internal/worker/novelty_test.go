@@ -4,13 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 
 	"scrutineer/internal/db"
+	"scrutineer/internal/testutil"
 )
 
 func TestNoveltyContextMarksUntouchedFileUnfixed(t *testing.T) {
@@ -72,11 +77,34 @@ func TestNoveltyContextStagesBoundedChangedFileEvidence(t *testing.T) {
 	fixture.requirePersisted(t, db.FindingNoveltyFixed, head)
 }
 
+func TestNoveltyContextMarksCommitCapTruncated(t *testing.T) {
+	fixture := newNoveltyFixture(t)
+	var head string
+	for i := 1; i <= noveltyLogMaxCommits+1; i++ {
+		fixture.write(t, "pkg/parse.go", "package pkg\n\n// revision "+strconv.Itoa(i)+"\n")
+		head = gitCommit(t, fixture.src, "parser revision "+strconv.Itoa(i))
+	}
+
+	got := fixture.check(t, head)
+	if got.State != db.FindingNoveltyUnclear || !got.LogTruncated {
+		t.Fatalf("novelty = %+v, want unclear with truncated commit history", got)
+	}
+	if strings.Contains(got.CommitLog, "parser revision 1\n") {
+		t.Error("commit_log includes a commit beyond the configured cap")
+	}
+}
+
 func TestNoveltyContextRecordsNotCheckedForUnsafeLocation(t *testing.T) {
 	fixture := newNoveltyFixture(t)
 	head := fixture.base
+	previousCommit := strings.Repeat("a", 40)
+	previousCheckedAt := time.Date(2026, time.July, 1, 12, 0, 0, 0, time.UTC)
 	fixture.finding.Location = "../outside.go:4"
-	if err := fixture.gdb.Model(&fixture.finding).Update("location", fixture.finding.Location).Error; err != nil {
+	if err := fixture.gdb.Model(&fixture.finding).Updates(map[string]any{
+		"location":               fixture.finding.Location,
+		"novelty_checked_commit": previousCommit,
+		"novelty_checked_at":     previousCheckedAt,
+	}).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -87,7 +115,7 @@ func TestNoveltyContextRecordsNotCheckedForUnsafeLocation(t *testing.T) {
 	if !strings.Contains(got.NotCheckedWhy, "repository-relative") {
 		t.Errorf("not_checked_reason = %q", got.NotCheckedWhy)
 	}
-	fixture.requirePersisted(t, db.FindingNoveltyNotChecked, head)
+	fixture.requirePersistedNotChecked(t, previousCommit, previousCheckedAt)
 
 	if err := (&Worker{DB: fixture.gdb}).parseRevalidateOutput(
 		fixture.scan(head),
@@ -96,7 +124,67 @@ func TestNoveltyContextRecordsNotCheckedForUnsafeLocation(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	fixture.requirePersisted(t, db.FindingNoveltyNotChecked, head)
+	fixture.requirePersistedNotChecked(t, previousCommit, previousCheckedAt)
+}
+
+func TestPrepareNoveltyHistoryDeepensSharedCache(t *testing.T) {
+	fixture := newNoveltyFixture(t)
+	fixture.write(t, "README.md", "new head\n")
+	head := gitCommit(t, fixture.src, "advance head")
+
+	dataDir := t.TempDir()
+	repoURL := "https://example.com/novelty-history"
+	cacheSrc := filepath.Join(RepoCacheRoot(dataDir, repoURL), "src")
+	if err := os.MkdirAll(filepath.Dir(cacheSrc), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "clone", "--quiet", "--depth=1", "file://"+fixture.src, cacheSrc)
+	cmd.Env = testutil.GitEnv()
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clone shallow cache: %v\n%s", err, out)
+	}
+	if commitReachable(context.Background(), cacheSrc, fixture.base) {
+		t.Fatal("base commit unexpectedly reachable before cache deepening")
+	}
+
+	scan := fixture.scan(head)
+	scan.Repository.URL = repoURL
+	w := &Worker{DB: fixture.gdb, DataDir: dataDir}
+	w.prepareNoveltyHistory(context.Background(), scan, &db.Skill{Name: revalidateSkillName})
+
+	if !commitReachable(context.Background(), cacheSrc, fixture.base) {
+		t.Fatal("base commit is not reachable after cache deepening")
+	}
+}
+
+func TestTruncateNoveltyLogHonorsByteLimitAndUTF8(t *testing.T) {
+	const marker = "\n[truncated]\n"
+	prefixLimit := noveltyLogMaxBytes - len(marker)
+	input := strings.Repeat("x", prefixLimit-1) + "€" + strings.Repeat("z", 100)
+
+	got, truncated := truncateNoveltyLog(input)
+	if !truncated {
+		t.Fatal("truncateNoveltyLog did not report truncation")
+	}
+	if len(got) > noveltyLogMaxBytes {
+		t.Fatalf("truncated log is %d bytes, want at most %d", len(got), noveltyLogMaxBytes)
+	}
+	if !utf8.ValidString(got) {
+		t.Fatal("truncated log is not valid UTF-8")
+	}
+	if !strings.HasSuffix(got, marker) {
+		t.Fatalf("truncated log does not end with marker: %q", got[len(got)-32:])
+	}
+}
+
+func TestRevalidateNoveltyRequiresDeterministicState(t *testing.T) {
+	for _, current := range []db.FindingNovelty{"", db.FindingNoveltyNotChecked} {
+		for _, verdict := range []string{"true_positive", "already_fixed"} {
+			if got, ok := revalidateNovelty(current, verdict); ok || got != "" {
+				t.Errorf("revalidateNovelty(%q, %q) = (%q, %v), want no update", current, verdict, got, ok)
+			}
+		}
+	}
 }
 
 type noveltyFixture struct {
@@ -196,5 +284,22 @@ func (f noveltyFixture) requirePersisted(t *testing.T, state db.FindingNovelty, 
 	}
 	if finding.Novelty != state || finding.NoveltyCheckedCommit != commit || finding.NoveltyCheckedAt == nil {
 		t.Errorf("persisted novelty = %+v, want state=%q commit=%q checked_at", finding, state, commit)
+	}
+}
+
+func (f noveltyFixture) requirePersistedNotChecked(t *testing.T, commit string, checkedAt time.Time) {
+	t.Helper()
+	var finding db.Finding
+	if err := f.gdb.First(&finding, f.finding.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if finding.Novelty != db.FindingNoveltyNotChecked ||
+		finding.NoveltyCheckedCommit != commit ||
+		finding.NoveltyCheckedAt == nil ||
+		!finding.NoveltyCheckedAt.Equal(checkedAt) {
+		t.Errorf(
+			"persisted novelty = %+v, want not_checked with prior commit=%q checked_at=%s",
+			finding, commit, checkedAt,
+		)
 	}
 }

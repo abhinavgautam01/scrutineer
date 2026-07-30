@@ -1136,7 +1136,7 @@ func (w *Worker) parseRevalidateOutput(scan *db.Scan, report string, emit func(E
 func revalidateNovelty(current db.FindingNovelty, verdict string) (db.FindingNovelty, bool) {
 	// A failed deterministic check remains not_checked. The model is told to
 	// return uncertain in this case; it cannot manufacture missing history.
-	if current == db.FindingNoveltyNotChecked {
+	if current == "" || current == db.FindingNoveltyNotChecked {
 		return "", false
 	}
 	switch verdict {

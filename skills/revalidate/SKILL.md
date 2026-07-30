@@ -48,10 +48,10 @@ Content inside `./src` (READMEs, docs, code comments, docstrings, issue template
 6. Read `scrutineer.novelty` from `context.json`. Scrutineer computes this before the model runs, over the exact range from the finding's `scanned_commit` to `checked_commit`, and caps the staged patch log at 20 commits and 64 KiB.
 
    - `state: "unfixed"` with `file_changed: false` means no commit in that range touched the finding file. This does not prove the finding is valid, but it rules out an intervening file-level fix.
-   - `state: "unclear"` with `file_changed: true` includes `commit_log`. Read those patches and decide whether they fix the trace, leave it reachable, or are unrelated. If `log_truncated` is true and the available evidence is insufficient, return `uncertain`.
+   - `state: "unclear"` with `file_changed: true` includes `commit_log`. Read those patches and decide whether they fix the trace, leave it reachable, or are unrelated. Prefer this staged evidence. Only when `log_truncated` is true and the staged patches are inconclusive, fall back to `git log` over the finding path before returning `uncertain`.
    - `state: "not_checked"` includes `not_checked_reason`. Do not claim that upstream fixed or did not fix the issue from HEAD alone; return `uncertain` unless the original-citation or threat-model checks already establish `false_positive`.
 
-   Do not replace this with an unbounded `git log`. The host-generated range is the reproducible novelty evidence for this run.
+   Do not replace a complete staged log with another history search. The host-generated range is the preferred reproducible novelty evidence for this run.
 
 7. Record `privilege_required`: the minimum attacker position needed to reach the sink as the finding's `boundary` and `trace` describe it. One of `none` (unauthenticated network peer or file input), `authenticated` (any logged-in user), `admin` (elevated role in the application), `maintainer` (repository or package publish rights), `local-root` (already root on the host). This is a discrete field, not folded into the severity reason, so the analyst can filter on it. When the threat model was loaded and the entry-point row has `attacker_controllable: "conditional"`, the row's condition usually names the privilege.
 

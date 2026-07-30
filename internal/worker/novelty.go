@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"scrutineer/internal/db"
@@ -47,22 +48,43 @@ func (w *Worker) noveltyContext(
 		return nil, nil
 	}
 
-	novelty := checkFindingNovelty(ctx, filepath.Join(workRoot, "src"), scan.Repository.IsLocal(), &finding, scan.Commit)
-	now := w.now().UTC()
-	if err := w.DB.Model(&db.Finding{}).Where("id = ?", finding.ID).Updates(map[string]any{
-		"novelty":                novelty.State,
-		"novelty_checked_commit": novelty.CheckedCommit,
-		"novelty_checked_at":     &now,
-	}).Error; err != nil {
+	novelty := checkFindingNovelty(ctx, filepath.Join(workRoot, "src"), &finding, scan.Commit)
+	updates := map[string]any{"novelty": novelty.State}
+	if novelty.State != db.FindingNoveltyNotChecked {
+		now := w.now().UTC()
+		updates["novelty_checked_commit"] = novelty.CheckedCommit
+		updates["novelty_checked_at"] = &now
+	}
+	if err := w.DB.Model(&db.Finding{}).Where("id = ?", finding.ID).Updates(updates).Error; err != nil {
 		return nil, fmt.Errorf("persist finding novelty: %w", err)
 	}
 	return novelty, nil
 }
 
+// prepareNoveltyHistory deepens the persistent clone cache before PrepareSrc
+// snapshots it into the per-scan workspace. Fetch failures remain best-effort:
+// checkFindingNovelty will mark the comparison not_checked if the historical
+// commit is still unavailable.
+func (w *Worker) prepareNoveltyHistory(ctx context.Context, scan *db.Scan, skill *db.Skill) {
+	if skill.Name != revalidateSkillName || scan.FindingID == nil {
+		return
+	}
+	var finding db.Finding
+	if err := w.DB.Select("commit").First(&finding, *scan.FindingID).Error; err != nil {
+		return
+	}
+	commit := strings.TrimSpace(finding.Commit)
+	if !validGitOID(commit) {
+		return
+	}
+	if err := w.EnsureCommit(ctx, scan.Repository.URL, commit); err != nil && w.Log != nil {
+		w.Log.Warn("novelty history unavailable", "repo", scan.RepositoryID, "commit", commit, "err", err)
+	}
+}
+
 func checkFindingNovelty(
 	ctx context.Context,
 	src string,
-	local bool,
 	finding *db.Finding,
 	headCommit string,
 ) *skillContextNovelty {
@@ -85,10 +107,8 @@ func checkFindingNovelty(
 		return result
 	}
 	if !commitReachable(ctx, src, result.ScannedCommit) {
-		if local || fetchNoveltyHistory(ctx, src) != nil || !commitReachable(ctx, src, result.ScannedCommit) {
-			result.NotCheckedWhy = "scanned commit is unavailable from repository history"
-			return result
-		}
+		result.NotCheckedWhy = "scanned commit is unavailable from repository history"
+		return result
 	}
 	if _, err := git(ctx, "-C", src, "merge-base", "--is-ancestor", result.ScannedCommit, result.CheckedCommit); err != nil {
 		result.NotCheckedWhy = "scanned commit is not an ancestor of checked HEAD"
@@ -96,6 +116,16 @@ func checkFindingNovelty(
 	}
 
 	revisionRange := result.ScannedCommit + ".." + result.CheckedCommit
+	countOutput, err := git(ctx, "-C", src, "rev-list", "--count", revisionRange, "--", result.FindingFile)
+	if err != nil {
+		result.NotCheckedWhy = "git history check failed"
+		return result
+	}
+	commitCount, err := strconv.Atoi(strings.TrimSpace(countOutput))
+	if err != nil {
+		result.NotCheckedWhy = "git history check failed"
+		return result
+	}
 	logOutput, err := git(ctx, "-C", src, "log",
 		fmt.Sprintf("--max-count=%d", noveltyLogMaxCommits),
 		"--format=commit %H%nAuthorDate: %aI%nSubject: %s",
@@ -111,7 +141,9 @@ func checkFindingNovelty(
 
 	result.State = db.FindingNoveltyUnclear
 	result.FileChanged = true
-	result.CommitLog, result.LogTruncated = truncateNoveltyLog(logOutput)
+	var bytesTruncated bool
+	result.CommitLog, bytesTruncated = truncateNoveltyLog(logOutput)
+	result.LogTruncated = bytesTruncated || commitCount > noveltyLogMaxCommits
 	return result
 }
 
@@ -140,23 +172,14 @@ func validGitOID(value string) bool {
 	return true
 }
 
-func fetchNoveltyHistory(ctx context.Context, src string) error {
-	shallow, err := git(ctx, "-C", src, "rev-parse", "--is-shallow-repository")
-	if err != nil {
-		return err
-	}
-	args := []string{"-C", src, "fetch", "--quiet"}
-	if strings.TrimSpace(shallow) == "true" {
-		args = append(args, "--unshallow")
-	}
-	args = append(args, "origin")
-	_, err = git(ctx, args...)
-	return err
-}
-
 func truncateNoveltyLog(logOutput string) (string, bool) {
 	if len(logOutput) <= noveltyLogMaxBytes {
 		return logOutput, false
 	}
-	return logOutput[:noveltyLogMaxBytes] + "\n[truncated]\n", true
+	const marker = "\n[truncated]\n"
+	prefix := logOutput[:noveltyLogMaxBytes-len(marker)]
+	if newline := strings.LastIndexByte(prefix, '\n'); newline >= 0 {
+		prefix = prefix[:newline]
+	}
+	return strings.ToValidUTF8(prefix, "") + marker, true
 }
