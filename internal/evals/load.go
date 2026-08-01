@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
+
+const minExperimentVariants = 2
 
 // LoadScenarios reads every top-level .yaml/.yml file under root.
 func LoadScenarios(root string) ([]Scenario, error) {
@@ -36,7 +39,85 @@ func LoadScenarios(root string) ([]Scenario, error) {
 		scenarios = append(scenarios, sc)
 	}
 	sort.Slice(scenarios, func(i, j int) bool { return scenarios[i].Path < scenarios[j].Path })
+	if err := validateExperimentPairs(scenarios); err != nil {
+		return nil, err
+	}
 	return scenarios, nil
+}
+
+func validateExperimentPairs(scenarios []Scenario) error {
+	type fixtureScenarios map[string]Scenario
+	experiments := make(map[string]map[string]fixtureScenarios)
+	for _, sc := range scenarios {
+		if sc.Experiment == "" {
+			continue
+		}
+		variants := experiments[sc.Experiment]
+		if variants == nil {
+			variants = make(map[string]fixtureScenarios)
+			experiments[sc.Experiment] = variants
+		}
+		fixtures := variants[sc.Variant]
+		if fixtures == nil {
+			fixtures = make(fixtureScenarios)
+			variants[sc.Variant] = fixtures
+		}
+		if previous, exists := fixtures[sc.Fixture]; exists {
+			return fmt.Errorf("experiment %q variant %q repeats fixture %q in %s and %s",
+				sc.Experiment, sc.Variant, sc.Fixture, previous.Path, sc.Path)
+		}
+		fixtures[sc.Fixture] = sc
+	}
+
+	for experiment, variants := range experiments {
+		if len(variants) < minExperimentVariants {
+			return fmt.Errorf("experiment %q has %d variant; need at least 2", experiment, len(variants))
+		}
+		variantNames := make([]string, 0, len(variants))
+		for variant := range variants {
+			variantNames = append(variantNames, variant)
+		}
+		sort.Strings(variantNames)
+		baselineName := variantNames[0]
+		baseline := variants[baselineName]
+		for _, variant := range variantNames[1:] {
+			fixtures := variants[variant]
+			if missing, extra := fixtureDifference(baseline, fixtures); len(missing) > 0 || len(extra) > 0 {
+				return fmt.Errorf("experiment %q variants %q and %q use different fixtures (missing=%v extra=%v)",
+					experiment, baselineName, variant, missing, extra)
+			}
+			for fixture, baselineScenario := range baseline {
+				if !sameScenarioRubric(baselineScenario, fixtures[fixture]) {
+					return fmt.Errorf("experiment %q variants %q and %q use different assertions for fixture %q",
+						experiment, baselineName, variant, fixture)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func fixtureDifference(want, got map[string]Scenario) (missing, extra []string) {
+	for fixture := range want {
+		if _, ok := got[fixture]; !ok {
+			missing = append(missing, fixture)
+		}
+	}
+	for fixture := range got {
+		if _, ok := want[fixture]; !ok {
+			extra = append(extra, fixture)
+		}
+	}
+	sort.Strings(missing)
+	sort.Strings(extra)
+	return missing, extra
+}
+
+func sameScenarioRubric(a, b Scenario) bool {
+	return a.Given == b.Given &&
+		reflect.DeepEqual(a.ShouldFind, b.ShouldFind) &&
+		reflect.DeepEqual(a.ShouldNotFind, b.ShouldNotFind) &&
+		reflect.DeepEqual(a.MustNotContain, b.MustNotContain)
 }
 
 // LoadScenario parses one scenario YAML file.

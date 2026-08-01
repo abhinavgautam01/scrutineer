@@ -22,6 +22,8 @@ Each scenario YAML names:
 - `schema_skill`: optional bundled skill whose JSON schema should validate the
   report. Use this for eval-only prompt variants that must keep the production
   output contract.
+- `experiment` and `variant`: optional paired identifiers used to compare
+  multiple prompt variants over the same fixture set. Set both or neither.
 - `should_find`: required findings the report must include.
 - `should_not_find`: false positives the report must not include.
 - `must_not_contain`: repo-level terms that must not appear anywhere in the
@@ -32,6 +34,15 @@ also point at an eval-only variant in `evals/skills/<name>/SKILL.md`; this keeps
 prompt experiments out of the production skill set while still letting the same
 fixture harness compare them. Pair those variants with `schema_skill` when the
 variant should emit the same report shape as a production skill.
+
+Live runs print an aggregate line for every `experiment`/`variant` pair after
+the per-scenario results. The aggregate includes scenario passes, runner
+errors, assertion misses, unexpected findings, turns, tokens, and cost. Use the
+same model and the same paired fixtures in one invocation so the production
+baseline and candidate are directly comparable. For example, the
+`security-deep-dive-prompt` experiment compares `production` with
+`reference-driven`; the latter keeps intent and phase order in `SKILL.md` and
+loads sink taxonomy and report policy from `references/` when needed.
 
 Each `should_find` or `should_not_find` assertion may include
 `evidence_contains`:
