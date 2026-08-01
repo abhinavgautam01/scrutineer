@@ -7,8 +7,8 @@
 # update the selected asset and checksum atomically. A mismatched tag/digest in
 # a Renovate PR fails sha256sum below and usually means asset identification
 # failed upstream.
-ARG CLAUDE_AMD64_LOCK=v2.1.218@sha256:7b7af9375bbd9dd5ec02d0b193b7f6fbbdd08fc6e6964426c1e4f537fc9161c3
-ARG CLAUDE_ARM64_LOCK=v2.1.218@sha256:15c3d42a60170aa93d4335d7c1466d6c877ddb6c8d360a7081d222d4b1390223
+ARG CLAUDE_AMD64_LOCK=v2.1.220@sha256:e69e7f72d784c243bcc377a578ad9ff8e65ae14da672fbbf9f2ba7bf47eca7ec
+ARG CLAUDE_ARM64_LOCK=v2.1.220@sha256:a4f2e93621b1521731d1f132c83f8266384403ab29e14986d67e3b4a805bf454
 ARG CODEX_VERSION=0.142.5
 ARG OPENCODE_VERSION=1.17.12
 ARG SEMGREP_VERSION=1.167.0
