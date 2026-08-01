@@ -110,8 +110,20 @@ should_find:
 
 func TestValidateExperimentPairs(t *testing.T) {
 	paired := []Scenario{
-		{Path: "a.yaml", Fixture: "fixtures/a", Experiment: "prompt", Variant: "production"},
-		{Path: "a-short.yaml", Fixture: "fixtures/a", Experiment: "prompt", Variant: "candidate"},
+		{
+			Path:       "a.yaml",
+			Fixture:    "fixtures/a",
+			Experiment: "prompt",
+			Variant:    "production",
+			ShouldFind: []Assertion{{Finding: "SQL injection", Required: true}},
+		},
+		{
+			Path:       "a-short.yaml",
+			Fixture:    "fixtures/a",
+			Experiment: "prompt",
+			Variant:    "candidate",
+			ShouldFind: []Assertion{{Finding: "SQL injection", Required: true, requiredSet: true}},
+		},
 	}
 	if err := validateExperimentPairs(paired); err != nil {
 		t.Fatalf("validateExperimentPairs() = %v, want nil", err)
@@ -285,6 +297,30 @@ func TestScenarioValidate(t *testing.T) {
 				Skill:      "security-deep-dive",
 				Experiment: "prompt-test",
 				Variant:    "candidate/one",
+				ShouldFind: []Assertion{{Finding: "x"}},
+			},
+		},
+		{
+			name: "experiment surrounding whitespace",
+			sc: Scenario{
+				Path:       "case.yaml",
+				Given:      "x",
+				Fixture:    "fixtures/x",
+				Skill:      "security-deep-dive",
+				Experiment: " prompt-test",
+				Variant:    "candidate",
+				ShouldFind: []Assertion{{Finding: "x"}},
+			},
+		},
+		{
+			name: "variant surrounding whitespace",
+			sc: Scenario{
+				Path:       "case.yaml",
+				Given:      "x",
+				Fixture:    "fixtures/x",
+				Skill:      "security-deep-dive",
+				Experiment: "prompt-test",
+				Variant:    "candidate ",
 				ShouldFind: []Assertion{{Finding: "x"}},
 			},
 		},

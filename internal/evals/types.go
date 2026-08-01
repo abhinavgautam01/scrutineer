@@ -134,6 +134,12 @@ func (s Scenario) validateExperiment() error {
 	if (experiment == "") != (variant == "") {
 		return fmt.Errorf("%s experiment and variant must be set together", s.Path)
 	}
+	if s.Experiment != experiment {
+		return fmt.Errorf("%s experiment %q has surrounding whitespace", s.Path, s.Experiment)
+	}
+	if s.Variant != variant {
+		return fmt.Errorf("%s variant %q has surrounding whitespace", s.Path, s.Variant)
+	}
 	if experiment != "" && !scenarioIdentifierRE.MatchString(experiment) {
 		return fmt.Errorf("%s experiment %q is not a valid identifier", s.Path, s.Experiment)
 	}

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
+	"slices"
 	"sort"
 	"strings"
 
@@ -15,6 +15,8 @@ import (
 )
 
 const minExperimentVariants = 2
+
+type fixtureScenarios map[string]Scenario
 
 // LoadScenarios reads every top-level .yaml/.yml file under root.
 func LoadScenarios(root string) ([]Scenario, error) {
@@ -46,7 +48,6 @@ func LoadScenarios(root string) ([]Scenario, error) {
 }
 
 func validateExperimentPairs(scenarios []Scenario) error {
-	type fixtureScenarios map[string]Scenario
 	experiments := make(map[string]map[string]fixtureScenarios)
 	for _, sc := range scenarios {
 		if sc.Experiment == "" {
@@ -97,7 +98,7 @@ func validateExperimentPairs(scenarios []Scenario) error {
 	return nil
 }
 
-func fixtureDifference(want, got map[string]Scenario) (missing, extra []string) {
+func fixtureDifference(want, got fixtureScenarios) (missing, extra []string) {
 	for fixture := range want {
 		if _, ok := got[fixture]; !ok {
 			missing = append(missing, fixture)
@@ -115,9 +116,26 @@ func fixtureDifference(want, got map[string]Scenario) (missing, extra []string) 
 
 func sameScenarioRubric(a, b Scenario) bool {
 	return a.Given == b.Given &&
-		reflect.DeepEqual(a.ShouldFind, b.ShouldFind) &&
-		reflect.DeepEqual(a.ShouldNotFind, b.ShouldNotFind) &&
-		reflect.DeepEqual(a.MustNotContain, b.MustNotContain)
+		sameAssertions(a.ShouldFind, b.ShouldFind) &&
+		sameAssertions(a.ShouldNotFind, b.ShouldNotFind) &&
+		slices.Equal(a.MustNotContain, b.MustNotContain)
+}
+
+func sameAssertions(a, b []Assertion) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Finding != b[i].Finding ||
+			a[i].Severity != b[i].Severity ||
+			a[i].CWE != b[i].CWE ||
+			a[i].Path != b[i].Path ||
+			a[i].Required != b[i].Required ||
+			!slices.Equal(a[i].Evidence, b[i].Evidence) {
+			return false
+		}
+	}
+	return true
 }
 
 // LoadScenario parses one scenario YAML file.
