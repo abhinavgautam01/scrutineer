@@ -435,6 +435,67 @@ func TestResumeScan_enqueueFailureLeavesScanPaused(t *testing.T) {
 	}
 }
 
+func TestResumeScan_updateFailureLeavesPausedScanAndStaleJob(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://example.com/r", Name: "r"}
+	if err := s.DB.Create(&repo).Error; err != nil {
+		t.Fatal(err)
+	}
+	scan := db.Scan{
+		RepositoryID:   repo.ID,
+		Kind:           worker.JobSkill,
+		Status:         db.ScanPaused,
+		StatusPriority: db.StatusPriorityFor(db.ScanPaused),
+		Error:          "paused by operator",
+	}
+	if err := s.DB.Create(&scan).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	updateErr := errors.New("injected resume update failure")
+	const callback = "test:fail-single-resume-update"
+	if err := s.DB.Callback().Update().Before("gorm:update").Register(callback, func(tx *gorm.DB) {
+		_ = tx.AddError(updateErr)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = s.DB.Callback().Update().Remove(callback)
+	}()
+
+	if err := s.resumeScan(t.Context(), &scan); !errors.Is(err, updateErr) {
+		t.Fatalf("resume error = %v, want %v", err, updateErr)
+	}
+
+	var got db.Scan
+	if err := s.DB.First(&got, scan.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != db.ScanPaused || got.StatusPriority != db.StatusPriorityFor(db.ScanPaused) {
+		t.Errorf("status = %q priority = %d, want paused/%d",
+			got.Status, got.StatusPriority, db.StatusPriorityFor(db.ScanPaused))
+	}
+	if got.Error != scan.Error {
+		t.Errorf("error = %q, want %q", got.Error, scan.Error)
+	}
+
+	sqldb, err := s.DB.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var jobs int
+	if err := sqldb.QueryRow("SELECT COUNT(*) FROM goqite").Scan(&jobs); err != nil {
+		t.Fatal(err)
+	}
+	if jobs != 1 {
+		t.Errorf("queued jobs = %d, want one stale job", jobs)
+	}
+	// TestWorker_skipsPausedScan covers the pickup side: the worker discards
+	// this job without running it because the scan never became queued.
+}
+
 func TestEnqueueResumedScan_restoresPausedUntilOnEnqueueFailure(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
