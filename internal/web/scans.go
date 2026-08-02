@@ -448,12 +448,16 @@ func (s *Server) restorePausedAfterResumeEnqueueFailure(scan db.Scan, err error)
 	)).Error
 }
 
-func (s *Server) enqueueResumedScan(ctx context.Context, scan db.Scan) error {
+func (s *Server) enqueueResumeJob(ctx context.Context, scan db.Scan) error {
 	priority := worker.PrioScan
 	if scan.FindingID != nil {
 		priority = worker.PrioFinding
 	}
-	if err := s.Queue.Enqueue(ctx, scan.Kind, scan.ID, priority); err != nil {
+	return s.Queue.Enqueue(ctx, scan.Kind, scan.ID, priority)
+}
+
+func (s *Server) enqueueResumedScan(ctx context.Context, scan db.Scan) error {
+	if err := s.enqueueResumeJob(ctx, scan); err != nil {
 		return errors.Join(err, s.restorePausedAfterResumeEnqueueFailure(scan, err))
 	}
 	return nil
@@ -522,20 +526,15 @@ func (s *Server) resumeScan(ctx context.Context, scan *db.Scan) error {
 	if optedOut {
 		return ErrRepoFederationOptOut
 	}
-	priority := worker.PrioScan
-	if scan.FindingID != nil {
-		priority = worker.PrioFinding
-	}
-	if err := s.Queue.Enqueue(ctx, scan.Kind, scan.ID, priority); err != nil {
+	// The single path intentionally queues first. If the following update fails,
+	// the worker drops the job because the row is still paused; the operator can
+	// retry. Updating first could instead leave a queued row with no job if both
+	// enqueue and rollback failed.
+	if err := s.enqueueResumeJob(ctx, *scan); err != nil {
 		return err
 	}
-	return s.DB.Model(&db.Scan{}).Where("id = ? AND status = ?", scan.ID, db.ScanPaused).Updates(map[string]any{
-		statusKey:         db.ScanQueued,
-		"status_priority": db.StatusPriorityFor(db.ScanQueued),
-		errorKey:          "",
-		"finished_at":     nil,
-		"paused_until":    nil,
-	}).Error
+	return s.DB.Model(&db.Scan{}).Where("id = ? AND status = ?", scan.ID, db.ScanPaused).
+		Updates(scanStatusUpdates(db.ScanQueued, "", nil, nil)).Error
 }
 
 func retryFailedToast(retried, skipped, errored int) Flash {

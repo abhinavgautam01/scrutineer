@@ -355,6 +355,86 @@ func TestScansResumePaused(t *testing.T) {
 	}
 }
 
+func TestEnqueueResumeJob_usesFindingPriority(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	findingID := uint(1)
+	scans := []db.Scan{
+		{ID: 1, Kind: worker.JobSkill},
+		{ID: 2, Kind: worker.JobSkill, FindingID: &findingID},
+	}
+	for _, scan := range scans {
+		if err := s.enqueueResumeJob(t.Context(), scan); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sqldb, err := s.DB.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := sqldb.Query("SELECT priority FROM goqite ORDER BY priority")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var priorities []int
+	for rows.Next() {
+		var priority int
+		if err := rows.Scan(&priority); err != nil {
+			t.Fatal(err)
+		}
+		priorities = append(priorities, priority)
+	}
+	if len(priorities) != 2 || priorities[0] != worker.PrioScan || priorities[1] != worker.PrioFinding {
+		t.Errorf("resume queue priorities = %v, want [%d %d]", priorities, worker.PrioScan, worker.PrioFinding)
+	}
+}
+
+func TestResumeScan_enqueueFailureLeavesScanPaused(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://example.com/r", Name: "r"}
+	if err := s.DB.Create(&repo).Error; err != nil {
+		t.Fatal(err)
+	}
+	pausedUntil := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+	scan := db.Scan{
+		RepositoryID:   repo.ID,
+		Kind:           worker.JobSkill,
+		Status:         db.ScanPaused,
+		StatusPriority: db.StatusPriorityFor(db.ScanPaused),
+		Error:          "paused by operator",
+		PausedUntil:    &pausedUntil,
+	}
+	if err := s.DB.Create(&scan).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := s.resumeScan(ctx, &scan); !errors.Is(err, context.Canceled) {
+		t.Fatalf("resume error = %v, want context canceled", err)
+	}
+
+	var got db.Scan
+	if err := s.DB.First(&got, scan.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != db.ScanPaused || got.StatusPriority != db.StatusPriorityFor(db.ScanPaused) {
+		t.Errorf("status = %q priority = %d, want paused/%d",
+			got.Status, got.StatusPriority, db.StatusPriorityFor(db.ScanPaused))
+	}
+	if got.Error != scan.Error {
+		t.Errorf("error = %q, want %q", got.Error, scan.Error)
+	}
+	if got.PausedUntil == nil || !got.PausedUntil.Equal(pausedUntil) {
+		t.Errorf("paused_until = %v, want %v", got.PausedUntil, pausedUntil)
+	}
+}
+
 func TestEnqueueResumedScan_restoresPausedUntilOnEnqueueFailure(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
