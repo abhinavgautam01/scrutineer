@@ -457,6 +457,15 @@ const (
 	FindingDuplicate    FindingLifecycle = "duplicate"
 )
 
+type FindingNovelty string
+
+const (
+	FindingNoveltyUnfixed    FindingNovelty = "unfixed"
+	FindingNoveltyFixed      FindingNovelty = "fixed"
+	FindingNoveltyUnclear    FindingNovelty = "unclear"
+	FindingNoveltyNotChecked FindingNovelty = "not_checked"
+)
+
 // FindingLifecycles lists every finding status in workflow order. Used to
 // render the Status filter on the findings index.
 var FindingLifecycles = []FindingLifecycle{
@@ -758,6 +767,12 @@ type Finding struct {
 	// queue can filter on an indexed column rather than LIKE-scanning
 	// finding_notes for the revalidate header.
 	LastRevalidateVerdict string `gorm:"index"`
+	// Novelty records whether the finding's source location changed between
+	// the scanned commit and the HEAD inspected by revalidate. A touched file
+	// starts as unclear until revalidate classifies the staged diff.
+	Novelty              FindingNovelty `gorm:"index"`
+	NoveltyCheckedCommit string
+	NoveltyCheckedAt     *time.Time
 	// SuggestedFix is a unified diff from the patch skill that has passed
 	// the applicability gate (parses, targets real files, touches a file
 	// named in Location, git apply --check clean). Empty when no patch has

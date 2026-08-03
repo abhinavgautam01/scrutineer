@@ -242,6 +242,9 @@ One row per vulnerability. Lifecycle columns are mutated through `db.WriteFindin
 | mitigation | text | Markdown body from the `mitigate` skill: workarounds consumers can apply before the fix ships, plus detection guidance. |
 | mitigation_semgrep | text | Optional YAML semgrep rule from the same skill that flags the vulnerable pattern. Empty when no rule was warranted. |
 | last_revalidate_verdict | text | Cached latest verdict from the `revalidate` skill (`true_positive`, `false_positive`, `already_fixed`, `uncertain`). Indexed so the audit queue can filter without scanning `finding_notes`. Empty when revalidate has not run on this finding. |
+| novelty | text | Upstream novelty state from the bounded host-side history check and revalidate classification: `unfixed`, `fixed`, `unclear`, or `not_checked`. Indexed; empty before a novelty check has run. |
+| novelty_checked_commit | text | Repository HEAD compared with the finding's scanned commit by the latest novelty check. |
+| novelty_checked_at | datetime | When the latest novelty check ran. Null before the first check. |
 | trace | text | Step 1 prose. Markdown. |
 | boundary | text | Step 2. |
 | validation | text | Step 3: reproduction. |
