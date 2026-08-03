@@ -1,10 +1,44 @@
 package worker
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
 )
+
+func TestAuditFindingSchemasStayAligned(t *testing.T) {
+	paths := []string{
+		"../../skills/audit-injection/schema.json",
+		"../../skills/audit-exfil/schema.json",
+		"../../skills/audit-authz/schema.json",
+	}
+
+	var baseline string
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		var schema map[string]any
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			t.Fatalf("decode %s: %v", path, err)
+		}
+		delete(schema, "title")
+		normalized, err := json.MarshalIndent(schema, "", "  ")
+		if err != nil {
+			t.Fatalf("normalize %s: %v", path, err)
+		}
+		if baseline == "" {
+			baseline = string(normalized)
+			continue
+		}
+		if got := string(normalized); got != baseline {
+			t.Errorf("%s differs from %s beyond title\n%s:\n%s\n%s:\n%s",
+				path, paths[0], paths[0], baseline, path, got)
+		}
+	}
+}
 
 // TestBundledSchemas_compileAndAcceptSamples checks that the three schemas
 // added for #182 compile and accept a representative report. repo-overview
