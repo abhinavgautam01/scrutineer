@@ -112,17 +112,33 @@ func TestValidateExperimentPairs(t *testing.T) {
 	paired := []Scenario{
 		{
 			Path:       "a.yaml",
+			Given:      "same fixture and rubric",
 			Fixture:    "fixtures/a",
 			Experiment: "prompt",
 			Variant:    "production",
-			ShouldFind: []Assertion{{Finding: "SQL injection", Required: true}},
+			ShouldFind: []Assertion{
+				{Finding: "SQL injection", Required: true},
+				{Finding: "command injection", Required: true},
+			},
+			ShouldNotFind: []Assertion{
+				{Finding: "unused import"},
+				{Finding: "dead code"},
+			},
 		},
 		{
 			Path:       "a-short.yaml",
+			Given:      "same fixture and rubric",
 			Fixture:    "fixtures/a",
 			Experiment: "prompt",
 			Variant:    "candidate",
-			ShouldFind: []Assertion{{Finding: "SQL injection", Required: true, requiredSet: true}},
+			ShouldFind: []Assertion{
+				{Finding: "command injection", Required: true, requiredSet: true},
+				{Finding: "SQL injection", Required: true, requiredSet: true},
+			},
+			ShouldNotFind: []Assertion{
+				{Finding: "dead code"},
+				{Finding: "unused import"},
+			},
 		},
 	}
 	if err := validateExperimentPairs(paired); err != nil {
@@ -157,6 +173,28 @@ func TestValidateExperimentPairs(t *testing.T) {
 				{Path: "candidate.yaml", Fixture: "fixtures/a", Experiment: "prompt", Variant: "candidate"},
 			},
 			want: "repeats fixture",
+		},
+		{
+			name: "different given",
+			scenarios: []Scenario{
+				{
+					Path:       "a.yaml",
+					Given:      "SQL injection reaches the database",
+					Fixture:    "fixtures/a",
+					Experiment: "prompt",
+					Variant:    "production",
+					ShouldFind: []Assertion{{Finding: "SQL injection"}},
+				},
+				{
+					Path:       "candidate.yaml",
+					Given:      "An injection reaches the database",
+					Fixture:    "fixtures/a",
+					Experiment: "prompt",
+					Variant:    "candidate",
+					ShouldFind: []Assertion{{Finding: "SQL injection"}},
+				},
+			},
+			want: "different given text",
 		},
 		{
 			name: "different assertions",

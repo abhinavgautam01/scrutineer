@@ -82,17 +82,28 @@ func validateExperimentPairs(scenarios []Scenario) error {
 		baselineName := variantNames[0]
 		baseline := variants[baselineName]
 		for _, variant := range variantNames[1:] {
-			fixtures := variants[variant]
-			if missing, extra := fixtureDifference(baseline, fixtures); len(missing) > 0 || len(extra) > 0 {
-				return fmt.Errorf("experiment %q variants %q and %q use different fixtures (missing=%v extra=%v)",
-					experiment, baselineName, variant, missing, extra)
+			if err := validateExperimentVariant(experiment, baselineName, variant, baseline, variants[variant]); err != nil {
+				return err
 			}
-			for fixture, baselineScenario := range baseline {
-				if !sameScenarioRubric(baselineScenario, fixtures[fixture]) {
-					return fmt.Errorf("experiment %q variants %q and %q use different assertions for fixture %q",
-						experiment, baselineName, variant, fixture)
-				}
-			}
+		}
+	}
+	return nil
+}
+
+func validateExperimentVariant(experiment, baselineName, variant string, baseline, candidate fixtureScenarios) error {
+	if missing, extra := fixtureDifference(baseline, candidate); len(missing) > 0 || len(extra) > 0 {
+		return fmt.Errorf("experiment %q variants %q and %q use different fixtures (missing=%v extra=%v)",
+			experiment, baselineName, variant, missing, extra)
+	}
+	for fixture, baselineScenario := range baseline {
+		candidateScenario := candidate[fixture]
+		if baselineScenario.Given != candidateScenario.Given {
+			return fmt.Errorf("experiment %q variants %q and %q use different given text for fixture %q",
+				experiment, baselineName, variant, fixture)
+		}
+		if !sameScenarioRubric(baselineScenario, candidateScenario) {
+			return fmt.Errorf("experiment %q variants %q and %q use different assertions for fixture %q",
+				experiment, baselineName, variant, fixture)
 		}
 	}
 	return nil
@@ -115,8 +126,7 @@ func fixtureDifference(want, got fixtureScenarios) (missing, extra []string) {
 }
 
 func sameScenarioRubric(a, b Scenario) bool {
-	return a.Given == b.Given &&
-		sameAssertions(a.ShouldFind, b.ShouldFind) &&
+	return sameAssertions(a.ShouldFind, b.ShouldFind) &&
 		sameAssertions(a.ShouldNotFind, b.ShouldNotFind) &&
 		slices.Equal(a.MustNotContain, b.MustNotContain)
 }
@@ -125,17 +135,31 @@ func sameAssertions(a, b []Assertion) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	for i := range a {
-		if a[i].Finding != b[i].Finding ||
-			a[i].Severity != b[i].Severity ||
-			a[i].CWE != b[i].CWE ||
-			a[i].Path != b[i].Path ||
-			a[i].Required != b[i].Required ||
-			!slices.Equal(a[i].Evidence, b[i].Evidence) {
+	matched := make([]bool, len(b))
+	for _, assertion := range a {
+		found := false
+		for i, candidate := range b {
+			if matched[i] || !sameAssertion(assertion, candidate) {
+				continue
+			}
+			matched[i] = true
+			found = true
+			break
+		}
+		if !found {
 			return false
 		}
 	}
 	return true
+}
+
+func sameAssertion(a, b Assertion) bool {
+	return a.Finding == b.Finding &&
+		a.Severity == b.Severity &&
+		a.CWE == b.CWE &&
+		a.Path == b.Path &&
+		a.Required == b.Required &&
+		slices.Equal(a.Evidence, b.Evidence)
 }
 
 // LoadScenario parses one scenario YAML file.

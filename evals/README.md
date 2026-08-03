@@ -24,6 +24,9 @@ Each scenario YAML names:
   output contract.
 - `experiment` and `variant`: optional paired identifiers used to compare
   multiple prompt variants over the same fixture set. Set both or neither.
+  Every variant must use byte-for-byte identical `given:` text and semantically
+  identical assertions for each fixture; the order of `should_find` and
+  `should_not_find` entries does not matter.
 - `should_find`: required findings the report must include.
 - `should_not_find`: false positives the report must not include.
 - `must_not_contain`: repo-level terms that must not appear anywhere in the
