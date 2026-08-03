@@ -983,6 +983,103 @@ func TestBundledAuditExfilMetadata(t *testing.T) {
 	}
 }
 
+func TestBundledAuditAuthzMetadata(t *testing.T) {
+	dir := filepath.Join("..", "..", "skills", "audit-authz")
+	auditAuthz, err := ParseFile(filepath.Join(dir, "SKILL.md"))
+	if err != nil {
+		t.Fatalf("parse audit-authz: %v", err)
+	}
+	if auditAuthz.OutputKind != "findings" || auditAuthz.MaxTurns != 48 ||
+		auditAuthz.Model != "high" || auditAuthz.MinConfidence != "high" {
+		t.Errorf("audit-authz metadata = kind %q, turns %d, model %q, confidence %q",
+			auditAuthz.OutputKind, auditAuthz.MaxTurns, auditAuthz.Model, auditAuthz.MinConfidence)
+	}
+	if !strings.Contains(auditAuthz.Compatibility, "external network") ||
+		!strings.Contains(auditAuthz.Compatibility, "api_base is allowed") {
+		t.Errorf("audit-authz compatibility does not distinguish external network from api_base: %q",
+			auditAuthz.Compatibility)
+	}
+	if !strings.Contains(auditAuthz.Body, "external network access") ||
+		!strings.Contains(auditAuthz.Body, "api_base is allowed") {
+		t.Error("audit-authz body does not distinguish external network from api_base")
+	}
+	if !slices.Equal(auditAuthz.Paths, []string{"**"}) {
+		t.Errorf("audit-authz paths = %v, want [**]", auditAuthz.Paths)
+	}
+	wantIgnores := []string{
+		"**/node_modules/**",
+		"**/dist/**",
+		"**/generated/**",
+		"**/__generated__/**",
+		"**/*.min.js",
+		"**/*.min.css",
+	}
+	if !slices.Equal(auditAuthz.IgnorePaths, wantIgnores) {
+		t.Errorf("audit-authz ignore paths = %v, want %v", auditAuthz.IgnorePaths, wantIgnores)
+	}
+	for _, name := range []string{
+		"pnpm-lock.yaml",
+		"package-lock.json",
+		"yarn.lock",
+		"Cargo.lock",
+		"go.sum",
+		"Gemfile.lock",
+		"poetry.lock",
+		"composer.lock",
+		"Package.resolved",
+	} {
+		if !PathIncluded(name, auditAuthz.Paths, auditAuthz.IgnorePaths) {
+			t.Errorf("audit-authz path filters exclude lockfile %q", name)
+		}
+	}
+	for _, name := range []string{"node_modules/pkg/index.js", "dist/app.js", "app.min.js"} {
+		if PathIncluded(name, auditAuthz.Paths, auditAuthz.IgnorePaths) {
+			t.Errorf("audit-authz path filters include ignored path %q", name)
+		}
+	}
+	const wantTools = "Read,Write,Bash,Grep,Glob"
+	if auditAuthz.AllowedTools != wantTools {
+		t.Errorf("audit-authz allowed tools = %q, want %q", auditAuthz.AllowedTools, wantTools)
+	}
+	for _, name := range []string{
+		"python.md",
+		"node.md",
+		"ruby.md",
+		"java-jvm.md",
+		"go.md",
+		"php.md",
+		"graphql.md",
+		"jwt.md",
+	} {
+		data, err := os.ReadFile(filepath.Join(dir, "references", name))
+		if err != nil {
+			t.Errorf("read audit-authz reference %s: %v", name, err)
+			continue
+		}
+		if !strings.HasPrefix(string(data), "# ") {
+			t.Errorf("audit-authz reference %s has no heading", name)
+		}
+	}
+	requiredReferenceGuidance := map[string][]string{
+		"python.md":  {"Django 5.1", "opt out", "check_object_permissions", "get_queryset"},
+		"node.md":    {"registration order", "Server Actions", "APP_GUARD"},
+		"graphql.md": {"global IDs", "subscriptions", "runtime code", "each request"},
+		"jwt.md":     {"before 9.0.0", "before 2.4.0", "through 4.5.0", "4.5.1"},
+	}
+	for name, required := range requiredReferenceGuidance {
+		data, err := os.ReadFile(filepath.Join(dir, "references", name))
+		if err != nil {
+			t.Errorf("read audit-authz reference %s: %v", name, err)
+			continue
+		}
+		for _, text := range required {
+			if !strings.Contains(string(data), text) {
+				t.Errorf("audit-authz reference %s missing %q", name, text)
+			}
+		}
+	}
+}
+
 func TestParseFile_requiresWrongType(t *testing.T) {
 	dir := t.TempDir()
 	path := writeSkill(t, dir, "bad-req", `---
