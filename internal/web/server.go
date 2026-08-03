@@ -1279,21 +1279,6 @@ const (
 	// findings belong in the curated Findings bucket alongside the deep-dive
 	// audit rather than the Scanners tab full of cheap tool output (#458).
 	vulnScanSkillName = "vuln-scan"
-	// aliasedFindingsScanFilter is the same Findings-tab predicate as
-	// nonScannerScanFilter, written for the raw aggregate counts on the
-	// maintainers and orgs indexes. Those queries LEFT JOIN scans under the
-	// alias `s` and group findings, so they filter s.skill_name/s.kind directly
-	// rather than threading findings.scan_id through a subquery. A finding
-	// counts when its scan is one of the LLM audits (security-deep-dive,
-	// vuln-scan, advisory-deep-dive), a legacy/empty skill_name, or an operator
-	// import (kind=import); the three ?s bind deepDiveSkillName, vulnScanSkillName
-	// and advisoryDeepDiveSkillName in that order. The `s.skill_name IS NULL` arm
-	// doubles as the LEFT JOIN "this row has no findings" guard, so zero-count
-	// maintainers/orgs stay in the result with n=0. Keep it in lockstep with
-	// findingsBucketSkillSQL — a copy that lacked the kind='import' arm is exactly
-	// what kept imports out of these totals after they began showing in the
-	// Findings tab.
-	aliasedFindingsScanFilter = "(s.skill_name IN (?, ?, ?) OR s.skill_name = '' OR s.skill_name IS NULL OR s.kind = 'import')"
 	// threatModelSkillName is the skill whose report feeds the Threat Model
 	// tab when present; repos that predate it fall back to the boundaries
 	// section of the deep-dive report so older scans keep rendering.
@@ -1306,6 +1291,12 @@ const (
 // the skill names through db.SQLStringLiteral for defense-in-depth quote
 // escaping — a function call, which a Go const initializer cannot contain.
 var (
+	// aliasedFindingsScanFilter is the Findings-bucket predicate for aggregate
+	// queries that join scans as `s`. It uses escaped literals because the
+	// maintainer index also embeds it in a correlated ORDER BY subquery, where
+	// GORM cannot bind values. The `s.skill_name IS NULL` arm also keeps empty
+	// LEFT JOIN groups at zero. Keep this in lockstep with findingsBucketSkillSQL.
+	aliasedFindingsScanFilter = "(s.skill_name IN (" + db.SQLStringLiteral(deepDiveSkillName) + ", " + db.SQLStringLiteral(vulnScanSkillName) + ", " + db.SQLStringLiteral(advisoryDeepDiveSkillName) + ") OR s.skill_name = '' OR s.skill_name IS NULL OR s.kind = 'import')"
 	// findingsBucketSkillSQL is the single source of truth for which scans'
 	// findings populate the curated Findings bucket: the LLM audit skills
 	// (security-deep-dive, vuln-scan, advisory-deep-dive), legacy claude jobs
