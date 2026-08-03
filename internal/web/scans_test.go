@@ -355,40 +355,36 @@ func TestScansResumePaused(t *testing.T) {
 	}
 }
 
-func TestEnqueueResumeJob_usesFindingPriority(t *testing.T) {
-	s, done := newTestServer(t)
-	defer done()
-
+func TestEnqueueResumedScan_usesFindingPriority(t *testing.T) {
 	findingID := uint(1)
-	scans := []db.Scan{
-		{ID: 1, Kind: worker.JobSkill},
-		{ID: 2, Kind: worker.JobSkill, FindingID: &findingID},
+	tests := []struct {
+		name     string
+		scan     db.Scan
+		priority int
+	}{
+		{name: "repository scan", scan: db.Scan{ID: 1, Kind: worker.JobSkill}, priority: worker.PrioScan},
+		{name: "finding scan", scan: db.Scan{ID: 2, Kind: worker.JobSkill, FindingID: &findingID}, priority: worker.PrioFinding},
 	}
-	for _, scan := range scans {
-		if err := s.enqueueResumeJob(t.Context(), scan); err != nil {
-			t.Fatal(err)
-		}
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, done := newTestServer(t)
+			defer done()
 
-	sqldb, err := s.DB.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	rows, err := sqldb.Query("SELECT priority FROM goqite ORDER BY priority")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = rows.Close() }()
-	var priorities []int
-	for rows.Next() {
-		var priority int
-		if err := rows.Scan(&priority); err != nil {
-			t.Fatal(err)
-		}
-		priorities = append(priorities, priority)
-	}
-	if len(priorities) != 2 || priorities[0] != worker.PrioScan || priorities[1] != worker.PrioFinding {
-		t.Errorf("resume queue priorities = %v, want [%d %d]", priorities, worker.PrioScan, worker.PrioFinding)
+			if err := s.enqueueResumedScan(t.Context(), tt.scan); err != nil {
+				t.Fatal(err)
+			}
+			sqldb, err := s.DB.DB()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var priority int
+			if err := sqldb.QueryRow("SELECT priority FROM goqite").Scan(&priority); err != nil {
+				t.Fatal(err)
+			}
+			if priority != tt.priority {
+				t.Errorf("resume queue priority = %d, want %d", priority, tt.priority)
+			}
+		})
 	}
 }
 
@@ -415,8 +411,9 @@ func TestResumeScan_enqueueFailureLeavesScanPaused(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := s.resumeScan(ctx, &scan); !errors.Is(err, context.Canceled) {
-		t.Fatalf("resume error = %v, want context canceled", err)
+	resumeErr := s.resumeScan(ctx, &scan)
+	if !errors.Is(resumeErr, context.Canceled) {
+		t.Fatalf("resume error = %v, want context canceled", resumeErr)
 	}
 
 	var got db.Scan
@@ -427,15 +424,20 @@ func TestResumeScan_enqueueFailureLeavesScanPaused(t *testing.T) {
 		t.Errorf("status = %q priority = %d, want paused/%d",
 			got.Status, got.StatusPriority, db.StatusPriorityFor(db.ScanPaused))
 	}
-	if got.Error != scan.Error {
-		t.Errorf("error = %q, want %q", got.Error, scan.Error)
+	wantError := "resume failed: " + resumeErr.Error()
+	if got.Error != wantError {
+		t.Errorf("error = %q, want %q", got.Error, wantError)
 	}
 	if got.PausedUntil == nil || !got.PausedUntil.Equal(pausedUntil) {
 		t.Errorf("paused_until = %v, want %v", got.PausedUntil, pausedUntil)
 	}
+	if got.FinishedAt == nil {
+		t.Error("finished_at = nil, want rollback timestamp")
+	}
+	assertQueuedJobCount(t, s, 0)
 }
 
-func TestResumeScan_updateFailureLeavesPausedScanAndStaleJob(t *testing.T) {
+func TestResumeScan_updateFailureLeavesPausedScanWithoutJob(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
 
@@ -457,7 +459,9 @@ func TestResumeScan_updateFailureLeavesPausedScanAndStaleJob(t *testing.T) {
 	updateErr := errors.New("injected resume update failure")
 	const callback = "test:fail-single-resume-update"
 	if err := s.DB.Callback().Update().Before("gorm:update").Register(callback, func(tx *gorm.DB) {
-		_ = tx.AddError(updateErr)
+		if tx.Statement.Table == "scans" {
+			_ = tx.AddError(updateErr)
+		}
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -480,7 +484,11 @@ func TestResumeScan_updateFailureLeavesPausedScanAndStaleJob(t *testing.T) {
 	if got.Error != scan.Error {
 		t.Errorf("error = %q, want %q", got.Error, scan.Error)
 	}
+	assertQueuedJobCount(t, s, 0)
+}
 
+func assertQueuedJobCount(t *testing.T, s *Server, want int) {
+	t.Helper()
 	sqldb, err := s.DB.DB()
 	if err != nil {
 		t.Fatal(err)
@@ -489,11 +497,9 @@ func TestResumeScan_updateFailureLeavesPausedScanAndStaleJob(t *testing.T) {
 	if err := sqldb.QueryRow("SELECT COUNT(*) FROM goqite").Scan(&jobs); err != nil {
 		t.Fatal(err)
 	}
-	if jobs != 1 {
-		t.Errorf("queued jobs = %d, want one stale job", jobs)
+	if jobs != want {
+		t.Errorf("queued jobs = %d, want %d", jobs, want)
 	}
-	// TestWorker_skipsPausedScan covers the pickup side: the worker discards
-	// this job without running it because the scan never became queued.
 }
 
 func TestEnqueueResumedScan_restoresPausedUntilOnEnqueueFailure(t *testing.T) {
