@@ -487,6 +487,49 @@ func TestResumeScan_updateFailureLeavesPausedScanWithoutJob(t *testing.T) {
 	assertQueuedJobCount(t, s, 0)
 }
 
+func TestResumeScan_noLongerPausedDoesNotEnqueue(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://example.com/r", Name: "r"}
+	if err := s.DB.Create(&repo).Error; err != nil {
+		t.Fatal(err)
+	}
+	scan := db.Scan{
+		RepositoryID:   repo.ID,
+		Kind:           worker.JobSkill,
+		Status:         db.ScanPaused,
+		StatusPriority: db.StatusPriorityFor(db.ScanPaused),
+	}
+	if err := s.DB.Create(&scan).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	var loaded db.Scan
+	if err := s.DB.First(&loaded, scan.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.Model(&db.Scan{}).Where("id = ?", scan.ID).
+		Updates(scanStatusUpdates(db.ScanQueued, "", nil, nil)).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	wantErr := fmt.Sprintf("scan %d is no longer paused", scan.ID)
+	if err := s.resumeScan(t.Context(), &loaded); err == nil || err.Error() != wantErr {
+		t.Fatalf("resume error = %v, want %q", err, wantErr)
+	}
+
+	var got db.Scan
+	if err := s.DB.First(&got, scan.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != db.ScanQueued || got.StatusPriority != db.StatusPriorityFor(db.ScanQueued) {
+		t.Errorf("status = %q priority = %d, want queued/%d",
+			got.Status, got.StatusPriority, db.StatusPriorityFor(db.ScanQueued))
+	}
+	assertQueuedJobCount(t, s, 0)
+}
+
 func assertQueuedJobCount(t *testing.T, s *Server, want int) {
 	t.Helper()
 	sqldb, err := s.DB.DB()
