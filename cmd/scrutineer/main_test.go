@@ -364,6 +364,65 @@ func TestFlagsMerge_hardenedRuntimeOnlyConfigAlias(t *testing.T) {
 	}
 }
 
+func TestFlagsMerge_ecosystemsEnrichment(t *testing.T) {
+	// The flag defaults to true, so an omitted config key must leave it on and
+	// an explicit false must reach the flag.
+	omitted := &flags{ecosystemsEnrichment: true}
+	omitted.merge(&config.Config{})
+	if !omitted.ecosystemsEnrichment {
+		t.Error("omitted ecosystems_enrichment turned enrichment off")
+	}
+	off := &flags{ecosystemsEnrichment: true}
+	off.merge(&config.Config{EcosystemsEnrichment: new(false)})
+	if off.ecosystemsEnrichment {
+		t.Error("ecosystems_enrichment: false was ignored")
+	}
+	// An explicit command-line value wins over the config file.
+	cli := &flags{ecosystemsEnrichment: true, set: map[string]bool{"ecosystems-enrichment": true}}
+	cli.merge(&config.Config{EcosystemsEnrichment: new(false)})
+	if !cli.ecosystemsEnrichment {
+		t.Error("config overrode an explicit -ecosystems-enrichment flag")
+	}
+}
+
+func TestRegisterFlags_ecosystemsEnrichmentDefaultsOn(t *testing.T) {
+	f := &flags{}
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	registerFlags(fs, f)
+	if err := fs.Parse(nil); err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !f.ecosystemsEnrichment {
+		t.Error("enrichment is off by default, want on")
+	}
+	if err := fs.Parse([]string{"-ecosystems-enrichment=false"}); err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if f.ecosystemsEnrichment {
+		t.Error("-ecosystems-enrichment=false did not turn enrichment off")
+	}
+}
+
+// Go's flag package does not accept the space-separated form for a boolean:
+// it leaves the flag at its default and parks the operand in Args(). This is
+// the first flag here defaulting to true, so that silently reads as the
+// opposite of what was typed. parseFlags exits on a leftover argument; this
+// pins the signal it keys on.
+func TestRegisterFlags_booleanSpaceFormLeavesAStrayArgument(t *testing.T) {
+	f := &flags{}
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	registerFlags(fs, f)
+	if err := fs.Parse([]string{"-ecosystems-enrichment", "false"}); err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !f.ecosystemsEnrichment {
+		t.Fatal("the space form now applies; the guard in parseFlags is no longer needed")
+	}
+	if fs.NArg() != 1 || fs.Arg(0) != "false" {
+		t.Fatalf("leftover args = %v, want [false] so parseFlags can refuse it", fs.Args())
+	}
+}
+
 func TestBuildEgressAllow_defaultIncludesConfigAndAnthropicHost(t *testing.T) {
 	cfg := &config.Config{EgressAllow: []string{"artifactory.internal", "*.mycorp.net"}}
 	allow := buildEgressAllow(worker.ClaudeHarness{}.EgressHosts(), false, cfg, "https://proxy.corp.com/v1", quietLog())

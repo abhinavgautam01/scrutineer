@@ -150,6 +150,12 @@ type Server struct {
 	// mirroring resolvePURL and friends.
 	prefetchEcosystems func(repoID uint)
 
+	// ecosystemsEnrichment reports whether outbound ecosyste.ms lookups are
+	// allowed, so the handlers can say why an import refused. New defaults it
+	// on; DisableEcosystems is the only writer. Immutable once serving starts,
+	// unlike the settings-page defaults above, so it needs no lock.
+	ecosystemsEnrichment bool
+
 	// Runtime defaults a new scan inherits when the caller pins none.
 	// Both are seeded at startup from config/flags and mutable via the
 	// settings page, so a request can write while another reads. One
@@ -395,6 +401,7 @@ func New(gdb *gorm.DB, q *queue.Queue, log *slog.Logger, broker *Broker, w *work
 		resolveRemoteHead: defaultResolveRemoteHead,
 		syncUpstream:      w.SyncUpstream}
 	s.prefetchEcosystems = s.ecosystemsPrefetch
+	s.ecosystemsEnrichment = true
 	s.chatActive = map[uint]struct{}{}
 	s.chatSlots = make(chan struct{}, chatTurnSlots(q))
 	s.spawnTurn = func(convID uint, message string) { go s.runChatTurn(convID, message) }
@@ -408,6 +415,17 @@ func New(gdb *gorm.DB, q *queue.Queue, log *slog.Logger, broker *Broker, w *work
 		}
 	}
 	return s, nil
+}
+
+// DisableEcosystems turns off every outbound ecosyste.ms lookup this layer
+// makes. It neuters the two seams that reach the network as well as recording
+// the flag the handlers report on, so a future caller that reaches a seam
+// without repeating the handler-level check still cannot make a request the
+// operator opted out of.
+func (s *Server) DisableEcosystems() {
+	s.ecosystemsEnrichment = false
+	s.prefetchEcosystems = nil
+	s.resolvePURL = func(context.Context, string) string { return "" }
 }
 
 // ecosystemsPrefetch warms the ecosyste.ms cache for a freshly added repo in a
@@ -1261,13 +1279,29 @@ func (s *Server) depScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	repoURL := resolvePURLRepo(r.Context(), dep.PURL)
+	// Order matters: a dependency carrying no PURL was never resolvable, so it
+	// keeps the 422 it would have got either way rather than being blamed on
+	// the operator's setting.
+	if dep.PURL != "" && !s.ecosystemsEnrichment {
+		http.Error(w, "cannot resolve "+dep.Name+": "+ecosystemsDisabled, http.StatusServiceUnavailable)
+		return
+	}
+	repoURL := s.resolvePURL(r.Context(), dep.PURL)
 	if repoURL == "" {
 		http.Error(w, "could not resolve repository URL for "+dep.Name, http.StatusUnprocessableEntity)
 		return
 	}
 	s.addRepoAndScan(w, r, repoURL)
 }
+
+// ecosystemsDisabled is what the import paths report when the operator turned
+// ecosyste.ms enrichment off: the resolution is the only way to get from a
+// PURL to a clone URL, so the action cannot run rather than silently no-op.
+const ecosystemsDisabled = "packages.ecosyste.ms enrichment is disabled"
+
+// noPURLError is what an SBOM package with no Package URL records: nothing to
+// look up, whether or not enrichment is on.
+const noPURLError = "no purl"
 
 // resolvePURLRepo asks packages.ecosyste.ms for the repository_url behind a
 // PURL. Returns empty string if the lookup fails or no repo is recorded.

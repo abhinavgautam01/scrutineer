@@ -118,6 +118,7 @@ type flags struct {
 	recipientsFile        string
 	identityFile          string
 	autoRejectMissedCount int
+	ecosystemsEnrichment  bool
 	federationSalt        string
 	federationContact     string
 	skillLocal            skillDirs
@@ -141,6 +142,15 @@ func parseFlags() *flags {
 	f := &flags{}
 	registerFlags(flag.CommandLine, f)
 	flag.Parse()
+	// Subcommands are consumed by dispatch() before we get here, so anything
+	// left is a stray argument. Refusing it catches the space-separated form
+	// of a boolean flag, which the flag package silently drops: `-flag false`
+	// leaves the flag at its default and parks "false" here, and for a flag
+	// that defaults to true that reads as the exact opposite of what was typed.
+	if flag.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "unexpected argument %q (booleans take the -flag=false form)\n", flag.Arg(0))
+		os.Exit(2) //nolint:mnd // matches flag.ExitOnError's usage-error exit code
+	}
 
 	f.set = make(map[string]bool)
 	flag.Visit(func(fl *flag.Flag) { f.set[fl.Name] = true })
@@ -179,6 +189,7 @@ func registerFlags(fs *flag.FlagSet, f *flags) {
 	fs.StringVar(&f.recipientsFile, "recipients-file", "", "age recipients file (public keys) for encrypted export")
 	fs.StringVar(&f.identityFile, "identity-file", "", "age identity file or SSH private key for decrypting imports")
 	fs.IntVar(&f.autoRejectMissedCount, "auto-reject-missed-count", 0, "auto-reject findings after this many consecutive missed rescans (0 disables)")
+	fs.BoolVar(&f.ecosystemsEnrichment, "ecosystems-enrichment", true, "enrich repositories from ecosyste.ms (per-repository cache, warm on repo add, PURL-to-repository resolution); =false stops every lookup scrutineer's own process makes and leaves the dependents cache empty. Takes the -flag=false form")
 	// federation_salt has no flag on purpose: a secret in argv leaks via
 	// ps and shell history, so it is config-file only.
 	fs.StringVar(&f.federationContact, "federation-contact", "", "contact returned by the claim-check endpoint on a finding-hash match")
@@ -271,6 +282,9 @@ func (f *flags) merge(cfg *config.Config) {
 	}
 	if cfg.AutoRejectMissedCount > 0 && !f.set["auto-reject-missed-count"] {
 		f.autoRejectMissedCount = cfg.AutoRejectMissedCount
+	}
+	if cfg.EcosystemsEnrichment != nil && !f.set["ecosystems-enrichment"] {
+		f.ecosystemsEnrichment = *cfg.EcosystemsEnrichment
 	}
 	if cfg.FederationSalt != "" {
 		f.federationSalt = cfg.FederationSalt
@@ -543,9 +557,6 @@ func run(log *slog.Logger) error {
 			broker.Publish(web.Event{Name: name, Data: data, ScanID: scanID, RepoID: repoID})
 		},
 	}
-	w.RefreshEcosystemsCache = func(ctx context.Context, repoID uint) error {
-		return worker.RefreshEcosystems(ctx, gdb, repoID, true, log)
-	}
 	w.Register(q)
 
 	srv, err := web.New(gdb, q, log, broker, w)
@@ -554,6 +565,7 @@ func run(log *slog.Logger) error {
 	}
 	srv.SkillsRepoSHA = skillsRepoSHA
 	srv.Version = version
+	wireEcosystems(f.ecosystemsEnrichment, w, srv, gdb, log)
 	if h, err := worker.HarnessByName(f.backend); err == nil {
 		srv.Backend = worker.HarnessName(h)
 	}
@@ -606,6 +618,22 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	return nil
+}
+
+// wireEcosystems configures the worker's per-scan cache refresh and the
+// server's PURL/prefetch seams from a single enrichment setting. When off,
+// RefreshEcosystemsCache is left nil so a scan makes no ecosyste.ms call at
+// all rather than one that fails against a denied domain, and the server's
+// seams are neutered via DisableEcosystems. Called after both are constructed
+// but before q.Start, so nothing reads the field before it is set.
+func wireEcosystems(enabled bool, w *worker.Worker, srv *web.Server, gdb *gorm.DB, log *slog.Logger) {
+	if !enabled {
+		srv.DisableEcosystems()
+		return
+	}
+	w.RefreshEcosystemsCache = func(ctx context.Context, repoID uint) error {
+		return worker.RefreshEcosystems(ctx, gdb, repoID, true, log)
+	}
 }
 
 func retireRemovedSkills(log *slog.Logger, gdb *gorm.DB) {
@@ -968,6 +996,14 @@ func resolveEgressSidecar(rt worker.ContainerRuntime, f *flags, allow []string, 
 // starts from HardenedEgressAllow and ignores cfg.EgressAllow (the
 // operator must drop --hardened to widen). The model base URL host is
 // still auto-added in both modes since it routes the same model API.
+//
+// ecosystems_enrichment deliberately does NOT filter *.ecosyste.ms out of
+// this list. Dropping it would 403 the metadata, packages and advisories
+// skills, which triage runs unconditionally, and their parsers replace the
+// repository's whole row set: a blessed empty report would wipe the packages
+// and advisories already recorded. The setting stops the enrichment
+// scrutineer's own process performs; denying the domain to the runner is the
+// operator's network policy to write.
 func buildEgressAllow(harnessHosts []string, hardened bool, cfg *config.Config, modelBaseURL string, log *slog.Logger) []string {
 	allow := append([]string{}, harnessHosts...)
 	if hardened {
