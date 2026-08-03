@@ -526,20 +526,15 @@ func (s *Server) resumeScan(ctx context.Context, scan *db.Scan) error {
 	if optedOut {
 		return ErrRepoFederationOptOut
 	}
-	priority := worker.PrioScan
-	if scan.FindingID != nil {
-		priority = worker.PrioFinding
+	res := s.DB.Model(&db.Scan{}).Where("id = ? AND status = ?", scan.ID, db.ScanPaused).
+		Updates(scanStatusUpdates(db.ScanQueued, "", nil, nil))
+	if res.Error != nil {
+		return res.Error
 	}
-	if err := s.Queue.Enqueue(ctx, scan.Kind, scan.ID, priority); err != nil {
-		return err
+	if res.RowsAffected != 1 {
+		return fmt.Errorf("scan %d is no longer paused", scan.ID)
 	}
-	return s.DB.Model(&db.Scan{}).Where("id = ? AND status = ?", scan.ID, db.ScanPaused).Updates(map[string]any{
-		statusKey:         db.ScanQueued,
-		"status_priority": db.StatusPriorityFor(db.ScanQueued),
-		errorKey:          "",
-		"finished_at":     nil,
-		"paused_until":    nil,
-	}).Error
+	return s.enqueueResumedScan(ctx, *scan)
 }
 
 func retryFailedToast(retried, skipped, errored int) Flash {
