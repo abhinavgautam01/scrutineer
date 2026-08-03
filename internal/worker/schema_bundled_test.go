@@ -3,7 +3,6 @@ package worker
 import (
 	"encoding/json"
 	"os"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -15,7 +14,7 @@ func TestAuditFindingSchemasStayAligned(t *testing.T) {
 		"../../skills/audit-authz/schema.json",
 	}
 
-	var baseline map[string]any
+	var baseline string
 	for _, path := range paths {
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -26,12 +25,17 @@ func TestAuditFindingSchemasStayAligned(t *testing.T) {
 			t.Fatalf("decode %s: %v", path, err)
 		}
 		delete(schema, "title")
-		if baseline == nil {
-			baseline = schema
+		normalized, err := json.MarshalIndent(schema, "", "  ")
+		if err != nil {
+			t.Fatalf("normalize %s: %v", path, err)
+		}
+		if baseline == "" {
+			baseline = string(normalized)
 			continue
 		}
-		if !reflect.DeepEqual(schema, baseline) {
-			t.Errorf("%s differs from %s beyond title", path, paths[0])
+		if got := string(normalized); got != baseline {
+			t.Errorf("%s differs from %s beyond title\n%s:\n%s\n%s:\n%s",
+				path, paths[0], paths[0], baseline, path, got)
 		}
 	}
 }
