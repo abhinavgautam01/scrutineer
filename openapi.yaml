@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Scrutineer Skill API
-  version: 0.3.0
+  version: 0.4.0
   description: |
     A narrow HTTP surface that claude-code skills use while they run. The
     goal is enough to let a skill orchestrate other skills and read prior
@@ -24,6 +24,36 @@ security:
   - bearerAuth: []
 
 paths:
+  /openapi.yaml:
+    get:
+      summary: Fetch this OpenAPI document
+      description: |
+        Returns the embedded copy of `openapi.yaml`, so a skill or an external
+        tool can read the API surface from a running server without a checkout.
+
+        Two ways in. From localhost it is unauthenticated, because a caller
+        discovering the API has no running scan to take a bearer token from;
+        the host check is the boundary, as on the browser UI. A skill inside
+        the runner container cannot pass that check -- it reaches the server
+        through the egress proxy on the host endpoint `api_base` advertises,
+        which forwards the original `Host` -- so it authenticates with the
+        per-scan bearer token it already holds for the rest of this API.
+        See threatmodel.md.
+      operationId: getOpenAPISpec
+      security:
+        - {}
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The OpenAPI document
+          content:
+            application/yaml:
+              schema:
+                type: string
+        "401":
+          description: |
+            Request came from a non-local host without a bearer token
+            belonging to a currently running scan
   /claim-check:
     servers:
       - url: http://127.0.0.1:8080
