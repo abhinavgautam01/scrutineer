@@ -64,7 +64,7 @@ func LoadDirectoryExcept(gdb *gorm.DB, log *slog.Logger, root, source string, sk
 		if d.Name() != skillFile {
 			return nil
 		}
-		p, perr := ParseFile(path)
+		p, perr := parseFileWithin(path, abs)
 		if perr != nil {
 			return perr
 		}

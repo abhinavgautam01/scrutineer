@@ -410,6 +410,105 @@ body`)
 	}
 }
 
+func TestParseFile_bundlesLocalSchemaReferences(t *testing.T) {
+	dir := t.TempDir()
+	path := writeSkill(t, dir, "s", `---
+name: s
+description: d
+---
+body`)
+	sharedDir := filepath.Join(dir, "_shared")
+	if err := os.MkdirAll(sharedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sharedPath := filepath.Join(sharedDir, "shared.schema.json")
+	shared := `{
+  "type":"object",
+  "required":["value"],
+  "properties":{"value":{"$ref":"#/$defs/value"}},
+  "$defs":{"value":{"type":"string","minLength":1}}
+}`
+	if err := os.WriteFile(sharedPath, []byte(shared), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wrapper := `{"title":"test","$ref":"../_shared/shared.schema.json"}`
+	if err := os.WriteFile(filepath.Join(dir, "s", "schema.json"), []byte(wrapper), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	parsed, err := ParseFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(parsed.SchemaJSON, "../_shared") {
+		t.Errorf("bundled schema retained file reference:\n%s", parsed.SchemaJSON)
+	}
+	for _, want := range []string{`"$ref": "#/$defs/shared"`, `"$ref": "#/$defs/shared/$defs/value"`} {
+		if !strings.Contains(parsed.SchemaJSON, want) {
+			t.Errorf("bundled schema missing %s:\n%s", want, parsed.SchemaJSON)
+		}
+	}
+	firstHash := parsed.SourceHash
+
+	changed := strings.Replace(shared, `"minLength":1`, `"minLength":2`, 1)
+	if err := os.WriteFile(sharedPath, []byte(changed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	parsed, err = ParseFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.SourceHash == firstHash {
+		t.Fatal("source hash did not change after referenced schema edit")
+	}
+}
+
+func TestParseFile_rejectsSchemaReferenceOutsideCollection(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "collection")
+	path := writeSkill(t, dir, "s", `---
+name: s
+description: d
+---
+body`)
+	if err := os.WriteFile(filepath.Join(parent, "outside.json"), []byte(`{"type":"object"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "s", "schema.json"), []byte(`{"$ref":"../../outside.json"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseFile(path); err == nil || !strings.Contains(err.Error(), "escapes the skill collection") {
+		t.Fatalf("ParseFile error = %v, want collection containment error", err)
+	}
+}
+
+func TestParseFile_rejectsSchemaReferenceSymlinkOutsideCollection(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "collection")
+	path := writeSkill(t, dir, "s", `---
+name: s
+description: d
+---
+body`)
+	sharedDir := filepath.Join(dir, "_shared")
+	if err := os.MkdirAll(sharedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(parent, "outside.json")
+	if err := os.WriteFile(outside, []byte(`{"type":"object"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(sharedDir, "outside.json")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "s", "schema.json"), []byte(`{"$ref":"../_shared/outside.json"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseFile(path); err == nil || !strings.Contains(err.Error(), "escapes the skill collection") {
+		t.Fatalf("ParseFile error = %v, want symlink containment error", err)
+	}
+}
+
 func TestParseFile_missingFrontmatter(t *testing.T) {
 	dir := t.TempDir()
 	path := writeSkill(t, dir, "broken", "just a body, no frontmatter\n")

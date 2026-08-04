@@ -3,9 +3,38 @@ package worker
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"scrutineer/internal/skills"
 )
+
+const sharedAuditSchemaRef = "../_shared/audit-findings.schema.json"
+
+func TestAuditFindingSchemasReferenceSharedContract(t *testing.T) {
+	paths := []string{
+		"../../skills/audit-injection/schema.json",
+		"../../skills/audit-exfil/schema.json",
+		"../../skills/audit-authz/schema.json",
+	}
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		var wrapper map[string]any
+		if err := json.Unmarshal(raw, &wrapper); err != nil {
+			t.Fatalf("decode %s: %v", path, err)
+		}
+		if got := wrapper["$ref"]; got != sharedAuditSchemaRef {
+			t.Errorf("%s $ref = %v, want %q", path, got, sharedAuditSchemaRef)
+		}
+		if len(wrapper) != 3 {
+			t.Errorf("%s has %d top-level fields, want only $schema, title, and $ref", path, len(wrapper))
+		}
+	}
+}
 
 func TestAuditFindingSchemasStayAligned(t *testing.T) {
 	paths := []string{
@@ -16,12 +45,9 @@ func TestAuditFindingSchemasStayAligned(t *testing.T) {
 
 	var baseline string
 	for _, path := range paths {
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("read %s: %v", path, err)
-		}
+		raw := loadBundledSchema(t, path)
 		var schema map[string]any
-		if err := json.Unmarshal(raw, &schema); err != nil {
+		if err := json.Unmarshal([]byte(raw), &schema); err != nil {
 			t.Fatalf("decode %s: %v", path, err)
 		}
 		delete(schema, "title")
@@ -38,6 +64,15 @@ func TestAuditFindingSchemasStayAligned(t *testing.T) {
 				path, paths[0], paths[0], baseline, path, got)
 		}
 	}
+}
+
+func loadBundledSchema(t *testing.T, schemaPath string) string {
+	t.Helper()
+	parsed, err := skills.ParseFile(filepath.Join(filepath.Dir(schemaPath), "SKILL.md"))
+	if err != nil {
+		t.Fatalf("load schema for %s: %v", schemaPath, err)
+	}
+	return parsed.SchemaJSON
 }
 
 // TestBundledSchemas_compileAndAcceptSamples checks that the three schemas
@@ -291,11 +326,8 @@ func TestBundledSchemas_compileAndAcceptSamples(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		schema, err := os.ReadFile(tc.schema)
-		if err != nil {
-			t.Fatalf("read %s: %v", tc.schema, err)
-		}
-		if got := ValidateReportSchema(string(schema), tc.report); got != "" {
+		schema := loadBundledSchema(t, tc.schema)
+		if got := ValidateReportSchema(schema, tc.report); got != "" {
 			t.Errorf("%s rejected sample: %s\nreport: %s", tc.schema, got, tc.report)
 		}
 	}
@@ -507,11 +539,8 @@ func TestBundledSchemas_rejectBadShapes(t *testing.T) {
 			"/components/0/provenance"},
 	}
 	for _, tc := range cases {
-		schema, err := os.ReadFile(tc.schema)
-		if err != nil {
-			t.Fatalf("read %s: %v", tc.schema, err)
-		}
-		got := ValidateReportSchema(string(schema), tc.report)
+		schema := loadBundledSchema(t, tc.schema)
+		got := ValidateReportSchema(schema, tc.report)
 		if got == "" {
 			t.Errorf("%s accepted bad report %s", tc.schema, tc.report)
 			continue
