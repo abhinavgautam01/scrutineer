@@ -24,7 +24,7 @@
       <i data-lucide="send"></i> Submit to VINCE
     </button>
     {{end}}
-    <a href="/findings/{{$f.ID}}/report.md" class="btn-outline" download>
+    <a href="/findings/{{$f.ID}}/report.md" class="btn-outline" download="{{findingReportFilename $repo $f}}">
       <i data-lucide="download"></i> Export report
     </a>
     <a href="/findings/{{$f.ID}}/bundle.tar.gz" class="btn-outline"
