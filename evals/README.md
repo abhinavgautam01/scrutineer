@@ -1,14 +1,14 @@
 # Skill evals
 
-Fixture-driven skill evals live here. They are off by default in normal CI;
-run the harness explicitly with:
+Fixture-driven skill evals live here. CI runs the deterministic loader, schema,
+judge, staging, and experiment checks with:
 
 ```sh
 go test -tags evals ./internal/evals/...
 ```
 
-That command validates scenario loading and the deterministic judge. To run the
-actual model-backed skills against every fixture, opt in:
+The actual model-backed skills remain off by default. To run them against every
+fixture, opt in explicitly:
 
 ```sh
 SCRUTINEER_RUN_EVALS=1 SCRUTINEER_EVAL_MODEL=claude-sonnet-5 go test -tags evals ./internal/evals/... -run TestRunFixtures -v
