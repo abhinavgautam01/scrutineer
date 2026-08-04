@@ -97,6 +97,7 @@ func RunnerImageRevision(ctx context.Context, rt ContainerRuntime, image string)
 type RunnerToolVersions struct {
 	Zizmor  string
 	Semgrep string
+	Poutine string
 	Harness string
 }
 
@@ -109,6 +110,7 @@ type RunnerToolVersions struct {
 func queryToolsScript(harnessBin string) string {
 	return `echo "zizmor=$(zizmor --version 2>/dev/null)"; ` +
 		`echo "semgrep=$(semgrep --version 2>/dev/null)"; ` +
+		`echo "poutine=$(poutine version 2>/dev/null | head -n 1)"; ` +
 		`echo "harness=$(` + harnessBin + ` --version 2>/dev/null)"`
 }
 
@@ -158,6 +160,8 @@ func parseToolVersions(out string) RunnerToolVersions {
 			v.Zizmor = val
 		case "semgrep":
 			v.Semgrep = val
+		case "poutine":
+			v.Poutine = val
 		case "harness":
 			v.Harness = val
 		}

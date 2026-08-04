@@ -77,6 +77,21 @@
       "depNameTemplate": "zizmor",
       "datasourceTemplate": "crate",
       "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Update Poutine release assets and SHA-256 pins",
+      "managerFilePatterns": [
+        "/^Dockerfile$/",
+        "/^Dockerfile\\.runner$/"
+      ],
+      "matchStrings": [
+        "ARG POUTINE_(?:AMD64|ARM64)_LOCK=(?<currentValue>v\\d+\\.\\d+\\.\\d+)@sha256:(?<currentDigest>[a-f0-9]{64})"
+      ],
+      "packageNameTemplate": "boostsecurityio/poutine",
+      "depNameTemplate": "boostsecurityio/poutine",
+      "datasourceTemplate": "github-release-attachments",
+      "versioningTemplate": "semver-coerced"
     }
   ],
   "packageRules": [
@@ -128,6 +143,13 @@
       "description": "Keep all four Claude Code pins on one GitHub release; do not approve a partial group in the Dependency Dashboard",
       "matchPackageNames": ["anthropics/claude-code"],
       "groupName": "Claude Code",
+      "minimumGroupSize": 4,
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": "Keep all four Poutine release-asset pins synchronized",
+      "matchPackageNames": ["boostsecurityio/poutine"],
+      "groupName": "Poutine",
       "minimumGroupSize": 4,
       "minimumReleaseAge": "7 days"
     },

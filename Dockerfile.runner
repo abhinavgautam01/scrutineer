@@ -9,6 +9,8 @@
 # failed upstream.
 ARG CLAUDE_AMD64_LOCK=v2.1.220@sha256:e69e7f72d784c243bcc377a578ad9ff8e65ae14da672fbbf9f2ba7bf47eca7ec
 ARG CLAUDE_ARM64_LOCK=v2.1.220@sha256:a4f2e93621b1521731d1f132c83f8266384403ab29e14986d67e3b4a805bf454
+ARG POUTINE_AMD64_LOCK=v1.1.6@sha256:abde716599a65608b023a69ed9316e5f083a7bca48612151c2720835883757ea
+ARG POUTINE_ARM64_LOCK=v1.1.6@sha256:460c90300c6329106b551c150682d12e457365f6436a6cbbd08fe79eb9a98131
 ARG CODEX_VERSION=0.142.5
 ARG OPENCODE_VERSION=1.17.12
 ARG SEMGREP_VERSION=1.167.0
@@ -36,6 +38,8 @@ RUN CGO_ENABLED=0 go build -o /out/scrutineer ./cmd/scrutineer
 FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd
 ARG CLAUDE_AMD64_LOCK
 ARG CLAUDE_ARM64_LOCK
+ARG POUTINE_AMD64_LOCK
+ARG POUTINE_ARM64_LOCK
 ARG CODEX_VERSION
 ARG OPENCODE_VERSION
 ARG SEMGREP_VERSION
@@ -81,6 +85,24 @@ RUN set -eux; \
       "https://github.com/anthropics/claude-code/releases/download/${tag}/claude-linux-${arch}.tar.gz"; \
     echo "${sha}  /tmp/claude.tgz" | sha256sum -c -; \
     tar -xzf /tmp/claude.tgz -C /usr/local/bin claude && rm /tmp/claude.tgz
+
+# Poutine build-pipeline scanner. The release archive contains one binary;
+# keep the architecture-specific checksum beside the tag at the top of the
+# file so Renovate updates them as one lock.
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) arch=x86_64; lock="${POUTINE_AMD64_LOCK}" ;; \
+      arm64) arch=arm64;  lock="${POUTINE_ARM64_LOCK}" ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    tag="${lock%@*}"; \
+    sha="${lock#*@sha256:}"; \
+    curl -fsSL -o /tmp/poutine.tgz \
+      "https://github.com/boostsecurityio/poutine/releases/download/${tag}/poutine_Linux_${arch}.tar.gz"; \
+    echo "${sha}  /tmp/poutine.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/poutine.tgz -C /usr/local/bin poutine; \
+    rm /tmp/poutine.tgz; \
+    poutine version
 
 # OpenAI codex CLI (-backend codex). The musl tarball contains a single
 # static binary named codex-${triple}; install it as /usr/local/bin/codex.

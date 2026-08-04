@@ -4790,7 +4790,7 @@ func TestSettingsShow_rendersAboutAndScannerFindings(t *testing.T) {
 		t.Fatalf("status %d: %s", w.Code, w.Body)
 	}
 	body := w.Body.String()
-	for _, want := range []string{"Scanner findings", "About", "Scrutineer version", "Backend (claude)", "Semgrep", "Zizmor", "Container runtime"} {
+	for _, want := range []string{"Scanner findings", "About", "Scrutineer version", "Backend (claude)", "Semgrep", "Zizmor", "Poutine", "Container runtime"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("settings page missing %q", want)
 		}

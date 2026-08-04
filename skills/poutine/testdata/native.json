@@ -1,0 +1,68 @@
+{
+  "findings": [
+    {
+      "rule_id": "unverified_script_exec",
+      "purl": "pkg:github/owner/project",
+      "meta": {
+        "path": ".github/workflows/release.yml",
+        "line": 27,
+        "job": "release",
+        "step": "3",
+        "details": "A downloaded script is executed without verification.",
+        "lotp_tool": "curl",
+        "lotp_targets": ["https://downloads.example.test/install.sh"]
+      }
+    },
+    {
+      "rule_id": "injection",
+      "purl": "pkg:github/owner/project",
+      "meta": {
+        "path": ".github/workflows/pr.yml",
+        "line": 15,
+        "job": "test",
+        "step": "1",
+        "details": "A pull request title reaches a shell step.",
+        "event_triggers": ["pull_request_target"],
+        "injection_sources": ["github.event.pull_request.title"],
+        "referenced_secrets": ["DEPLOY_TOKEN"]
+      }
+    },
+    {
+      "rule_id": "untrusted_checkout_exec",
+      "purl": "pkg:github/owner/project",
+      "meta": {
+        "path": "../outside.yml",
+        "line": 8,
+        "details": "Untrusted code is checked out and executed.",
+        "lotp_action": "actions/checkout"
+      }
+    }
+  ],
+  "rules": {
+    "injection": {
+      "id": "injection",
+      "title": "Code injection in a workflow step",
+      "description": "Untrusted expression data is evaluated by a shell.",
+      "level": "warning",
+      "refs": [
+        "https://github.com/boostsecurityio/poutine/blob/main/docs/content/results/injection.md",
+        "file:///not-exported"
+      ]
+    },
+    "untrusted_checkout_exec": {
+      "id": "untrusted_checkout_exec",
+      "title": "Untrusted checkout is executed",
+      "description": "A privileged workflow executes code from an untrusted checkout.",
+      "level": "error",
+      "refs": []
+    },
+    "unverified_script_exec": {
+      "id": "unverified_script_exec",
+      "title": "Unverified script execution",
+      "description": "A remotely downloaded script is executed without integrity verification.",
+      "level": "note",
+      "refs": ["https://github.com/boostsecurityio/poutine"]
+    }
+  },
+  "packages": []
+}

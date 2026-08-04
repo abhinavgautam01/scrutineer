@@ -29,6 +29,7 @@ These live in `skills/` and are embedded in the Scrutineer executable. At startu
 | `semgrep` | Runs semgrep with the `p/security-audit` and `p/secrets` rulesets and maps hits into the findings shape. |
 | `vuln-scan` | High-recall model-backed static source-code candidate scan adapted from Anthropic's defending-code reference harness. |
 | `zizmor` | Audits GitHub Actions workflows and maps hits into the findings shape. |
+| `poutine` | Audits CI and build pipelines with Poutine and maps native JSON output into the findings shape. Opt-in; it is not part of triage. |
 | `ingest` | Normalizes an externally-produced security report in an arbitrary format into findings. Runs when `/v1/import` cannot recognise the payload; the raw report is staged at `import/report`. |
 | `recon` | Maps the repository's distinct externally reachable input-processing subsystems into focus areas that threat-model carries into later deep-dive audits. |
 | `threat-model` | Derives the project's security contract from source and docs: components, entry-point trust table, claimed and disclaimed properties, and disposition labels. Loaded by `security-deep-dive` so it does not re-derive boundaries per run. |

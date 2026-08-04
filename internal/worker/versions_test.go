@@ -11,6 +11,7 @@ import (
 func TestParseToolVersions(t *testing.T) {
 	out := "zizmor=zizmor 1.26.1\n" +
 		"semgrep=1.167.0\n" +
+		"poutine=Poutine version 1.1.6\n" +
 		"harness=2.1.123 (Claude Code)\n"
 	got := parseToolVersions(out)
 	if got.Zizmor != "1.26.1" {
@@ -18,6 +19,9 @@ func TestParseToolVersions(t *testing.T) {
 	}
 	if got.Semgrep != "1.167.0" {
 		t.Errorf("Semgrep = %q, want 1.167.0", got.Semgrep)
+	}
+	if got.Poutine != "1.1.6" {
+		t.Errorf("Poutine = %q, want 1.1.6", got.Poutine)
 	}
 	if got.Harness != "2.1.123" {
 		t.Errorf("Harness = %q, want 2.1.123", got.Harness)
@@ -38,7 +42,7 @@ func TestQueryToolsScript_usesHarnessBinary(t *testing.T) {
 
 func TestParseToolVersions_missingTools(t *testing.T) {
 	// A tool that is absent prints an empty value after the "=".
-	got := parseToolVersions("zizmor=\nsemgrep=\nharness=\n")
+	got := parseToolVersions("zizmor=\nsemgrep=\npoutine=\nharness=\n")
 	if got != (RunnerToolVersions{}) {
 		t.Errorf("expected zero value for empty versions, got %+v", got)
 	}
@@ -85,7 +89,7 @@ func TestQueryRunnerToolVersions_AppleSkipsMissingImage(t *testing.T) {
 func TestQueryRunnerToolVersions_AppleRunsLocalImageWithoutPullNever(t *testing.T) {
 	logPath := fakeContainer(t)
 	got := QueryRunnerToolVersions(context.Background(), ContainerRuntime{Bin: "apple"}, "present:latest", "claude")
-	if got.Zizmor != "1.2.3" || got.Semgrep != "4.5.6" || got.Harness != "7.8.9" {
+	if got.Zizmor != "1.2.3" || got.Semgrep != "4.5.6" || got.Poutine != "1.1.6" || got.Harness != "7.8.9" {
 		t.Fatalf("QueryRunnerToolVersions(local image) = %+v", got)
 	}
 	log := readFakeContainerLog(t, logPath)
@@ -115,6 +119,7 @@ fi
 if [ "$1" = "run" ]; then
   echo "zizmor=zizmor 1.2.3"
   echo "semgrep=4.5.6"
+  echo "poutine=Poutine version 1.1.6"
   echo "harness=some-cli 7.8.9 (build abc)"
   exit 0
 fi
