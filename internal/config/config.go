@@ -31,6 +31,10 @@ type Config struct {
 	Models       []Model  `yaml:"models"`
 	Skills       []string `yaml:"skills"`
 	SkillsRepo   string   `yaml:"skills_repo"`
+	// SkillsRepoToken authenticates an HTTPS skills repository without putting
+	// the credential in the repository URL or Git's command-line arguments.
+	// It is config-file-only because a CLI flag would expose it through argv.
+	SkillsRepoToken string `yaml:"skills_repo_token"`
 	// Backend selects the agent CLI the container runner execs:
 	// "claude" (default), "codex", or "opencode". Empty leaves the
 	// built-in default (claude). Non-claude backends require the

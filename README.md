@@ -334,7 +334,7 @@ The `docker build` commands shown for the runner image and profiles can be run a
 | `-data` | `./data` | Data directory for the database and workspaces |
 | `-effort` | `high` | Claude effort level (claude backend only) |
 | `-skills` | - | Additional local directory to load SKILL.md files from; same-named skills override the bundled copies (repeatable) |
-| `-skills-repo` | - | `owner/repo[@ref]` or git HTTPS URL `https://host/path[@ref]` to clone skills from on startup; `@ref` pins a branch, tag or commit and the resolved SHA is recorded on every scan |
+| `-skills-repo` | - | `owner/repo[@ref]` or credential-free git HTTPS URL `https://host/path[@ref]` to clone skills from on startup; `@ref` pins a branch, tag or commit and the resolved SHA is recorded on every scan; private repositories use config-file-only `skills_repo_token` |
 | `-backend` | `claude` | Agent CLI the container runner execs: `claude`, `codex`, or `opencode`. Non-claude backends require the containerised runner |
 | `--runtime` | `docker` | Container runtime: `docker`, `podman` (rootless podman supported), or `apple` (Apple, experimental) |
 | `--selinux` | `auto` | Bind-mount SELinux relabeling: `auto` (relabel when SELinux is detected), `on`, or `off` |
@@ -354,7 +354,7 @@ The `docker build` commands shown for the runner image and profiles can be run a
 
 Every flag above can be set in a YAML config file instead, loaded from `./scrutineer.yaml` by default (override with `-config path/to/file`; command-line flags always take precedence). See [scrutineer.sample.yaml](scrutineer.sample.yaml) for the full shape.
 
-`scrutineer.yaml` may contain long-lived credentials such as the VINCE API key and federation salt. Keep it out of source control and backups, and set owner-only permissions with `chmod 600 scrutineer.yaml`.
+`scrutineer.yaml` may contain long-lived credentials such as `skills_repo_token`, the VINCE API key and federation salt. Keep it out of source control and backups, and set owner-only permissions with `chmod 600 scrutineer.yaml`. A private `skills_repo` must use a credential-free HTTPS URL; Scrutineer passes `skills_repo_token` to Git through `GIT_ASKPASS`, and intentionally provides no token command-line flag.
 
 The config file can also replace the model pick list and pin the fallback default model used by the high tier:
 

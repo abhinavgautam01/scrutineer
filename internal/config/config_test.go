@@ -132,6 +132,17 @@ vince:
 	}
 }
 
+func TestLoad_skillsRepoToken(t *testing.T) {
+	path := write(t, "skills_repo_token: private-skills-token\n")
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SkillsRepoToken != "private-skills-token" {
+		t.Errorf("skills_repo_token = %q", c.SkillsRepoToken)
+	}
+}
+
 func TestLoad_noContainerAlias(t *testing.T) {
 	// no_docker is the retained pre-rename alias; Load folds it into NoContainer.
 	aliasOnly, err := Load(write(t, "no_docker: true\n"))
