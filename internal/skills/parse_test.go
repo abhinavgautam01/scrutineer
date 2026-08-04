@@ -714,6 +714,40 @@ body`)
 	}
 }
 
+func TestLoadDirectory_skipsUnderscoreDirectories(t *testing.T) {
+	gdb, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	writeSkill(t, root, "regular", `---
+name: regular
+description: Loaded skill.
+---
+body`)
+	writeSkill(t, root, "_shared", `---
+name: shared-helper
+description: Schema helper that must not become a skill.
+---
+body`)
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	n, err := LoadDirectory(gdb, log, root, "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("loaded skills = %d, want 1", n)
+	}
+	var names []string
+	if err := gdb.Model(&db.Skill{}).Pluck("name", &names).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(names, []string{"regular"}) {
+		t.Fatalf("loaded skill names = %v, want [regular]", names)
+	}
+}
+
 func TestParseFile_namedoesntmatch(t *testing.T) {
 	dir := t.TempDir()
 	path := writeSkill(t, dir, "dirname", `---

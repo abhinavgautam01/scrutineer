@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -73,7 +74,7 @@ func bundleLocalSchemaRefs(schemaPath, boundary, schemaJSON string) (string, err
 }
 
 func decodeSchemaObject(raw []byte) (map[string]any, bool, error) {
-	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	var schema any
 	if err := decoder.Decode(&schema); err != nil {

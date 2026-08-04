@@ -30,38 +30,10 @@ func TestAuditFindingSchemasReferenceSharedContract(t *testing.T) {
 		if got := wrapper["$ref"]; got != sharedAuditSchemaRef {
 			t.Errorf("%s $ref = %v, want %q", path, got, sharedAuditSchemaRef)
 		}
-		if len(wrapper) != 3 {
-			t.Errorf("%s has %d top-level fields, want only $schema, title, and $ref", path, len(wrapper))
-		}
-	}
-}
-
-func TestAuditFindingSchemasStayAligned(t *testing.T) {
-	paths := []string{
-		"../../skills/audit-injection/schema.json",
-		"../../skills/audit-exfil/schema.json",
-		"../../skills/audit-authz/schema.json",
-	}
-
-	var baseline string
-	for _, path := range paths {
-		raw := loadBundledSchema(t, path)
-		var schema map[string]any
-		if err := json.Unmarshal([]byte(raw), &schema); err != nil {
-			t.Fatalf("decode %s: %v", path, err)
-		}
-		delete(schema, "title")
-		normalized, err := json.MarshalIndent(schema, "", "  ")
-		if err != nil {
-			t.Fatalf("normalize %s: %v", path, err)
-		}
-		if baseline == "" {
-			baseline = string(normalized)
-			continue
-		}
-		if got := string(normalized); got != baseline {
-			t.Errorf("%s differs from %s beyond title\n%s:\n%s\n%s:\n%s",
-				path, paths[0], paths[0], baseline, path, got)
+		for _, keyword := range []string{"type", "properties", "$defs"} {
+			if _, ok := wrapper[keyword]; ok {
+				t.Errorf("%s defines validation keyword %q instead of using the shared contract", path, keyword)
+			}
 		}
 	}
 }

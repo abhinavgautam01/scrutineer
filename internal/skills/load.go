@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"path/filepath"
+	"strings"
 
 	"gorm.io/gorm"
 
@@ -110,6 +111,9 @@ func splitSep(p string) []string {
 }
 
 func shouldSkipDir(name string) bool {
+	if strings.HasPrefix(name, "_") {
+		return true
+	}
 	switch name {
 	case ".git", "node_modules", ".venv", "__pycache__", "vendor":
 		return true
