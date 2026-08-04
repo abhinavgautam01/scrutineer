@@ -1,7 +1,8 @@
 # Skill evals
 
 Fixture-driven skill evals live here. CI runs the deterministic loader, schema,
-judge, staging, and experiment checks with:
+judge, staging, and experiment checks under the race detector. Run the same
+deterministic checks locally with:
 
 ```sh
 go test -tags evals ./internal/evals/...
