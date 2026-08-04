@@ -205,11 +205,8 @@ func TestParseFindingsOutput_auditSchemasReferencesIngest(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.skillName, func(t *testing.T) {
-			schema, err := os.ReadFile(filepath.Join("../../skills", tc.skillName, "schema.json"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := ValidateReportSchema(string(schema), tc.report); got != "" {
+			schema := loadBundledSchema(t, filepath.Join("../../skills", tc.skillName, "schema.json"))
+			if got := ValidateReportSchema(schema, tc.report); got != "" {
 				t.Fatalf("schema rejected parser fixture: %s", got)
 			}
 
