@@ -382,10 +382,10 @@
         {{if $g.PriorityDependents}}
         <table class="w-full text-sm">
           <thead class="text-xs text-muted-foreground">
-            <tr><th class="text-left py-2">Dependent</th><th class="text-left">Status</th><th class="text-left">Reach</th><th class="text-left">Notes</th></tr>
+            <tr><th class="text-left py-2">Dependent</th><th class="text-left">Exposure</th><th class="text-left">Reach</th><th class="text-left">Evidence</th><th class="text-left">Campaign</th></tr>
           </thead>
           <tbody>
-            {{range $g.PriorityDependents}}
+            {{range $g.PriorityDependents}}{{$row := .}}
             <tr class="border-t align-top">
               <td class="py-2">
                 {{if .RepositoryURL}}<a class="hover:underline" href="{{.RepositoryURL}}" rel="noopener" target="_blank"><code>{{.Name}}</code></a>{{else}}<code>{{.Name}}</code>{{end}}
@@ -394,6 +394,21 @@
               <td>{{.Status}}</td>
               <td>{{bignum .DependentRepos}} repos</td>
               <td class="text-xs text-muted-foreground">{{if .Rationale}}{{.Rationale}}{{else}}-{{end}}</td>
+              <td class="py-2 min-w-64">
+                <form method="post" action="/findings/{{$f.ID}}/dependents/{{.DependentID}}/campaign" class="grid gap-2">
+                  <select class="input text-xs" name="status" aria-label="Campaign status for {{.Name}}">
+                    <option value=""{{if not .CampaignStatus}} selected{{end}}>not started</option>
+                    {{range $g.CampaignStatuses}}
+                    <option value="{{.}}"{{if eq . $row.CampaignStatus}} selected{{end}}>{{.}}</option>
+                    {{end}}
+                  </select>
+                  <input class="input text-xs" name="note" value="{{.CampaignNote}}" placeholder="Campaign note">
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="text-xs text-muted-foreground">{{if .CampaignUpdatedAt}}Updated {{.CampaignUpdatedAt.Format "2006-01-02"}}{{end}}</span>
+                    <button type="submit" class="btn-sm">Save</button>
+                  </div>
+                </form>
+              </td>
             </tr>
             {{end}}
           </tbody>
