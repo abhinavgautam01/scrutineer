@@ -1213,6 +1213,81 @@ func TestBundledAuditAuthzMetadata(t *testing.T) {
 	}
 }
 
+func TestBundledAuditPIIMetadata(t *testing.T) {
+	dir := filepath.Join("..", "..", "skills", "audit-pii")
+	auditPII, err := ParseFile(filepath.Join(dir, "SKILL.md"))
+	if err != nil {
+		t.Fatalf("parse audit-pii: %v", err)
+	}
+	if auditPII.OutputKind != "findings" || auditPII.MaxTurns != 48 ||
+		auditPII.Model != "high" || auditPII.MinConfidence != "high" {
+		t.Errorf("audit-pii metadata = kind %q, turns %d, model %q, confidence %q",
+			auditPII.OutputKind, auditPII.MaxTurns, auditPII.Model, auditPII.MinConfidence)
+	}
+	if !strings.Contains(auditPII.Compatibility, "external network") ||
+		!strings.Contains(auditPII.Compatibility, "api_base is allowed") {
+		t.Errorf("audit-pii compatibility does not distinguish external network from api_base: %q",
+			auditPII.Compatibility)
+	}
+	if !strings.Contains(auditPII.Body, "external network access") ||
+		!strings.Contains(auditPII.Body, "api_base is allowed") {
+		t.Error("audit-pii body does not distinguish external network from api_base")
+	}
+	if !slices.Equal(auditPII.Paths, []string{"**"}) {
+		t.Errorf("audit-pii paths = %v, want [**]", auditPII.Paths)
+	}
+	wantIgnores := []string{
+		"**/node_modules/**",
+		"**/dist/**",
+		"**/generated/**",
+		"**/__generated__/**",
+		"**/*.min.js",
+		"**/*.min.css",
+	}
+	if !slices.Equal(auditPII.IgnorePaths, wantIgnores) {
+		t.Errorf("audit-pii ignore paths = %v, want %v", auditPII.IgnorePaths, wantIgnores)
+	}
+	for _, name := range []string{
+		"tests/customer.json",
+		"fixtures/account.yaml",
+		"snapshots/profile.snap",
+		"docs/example.md",
+		"config/telemetry.toml",
+	} {
+		if !PathIncluded(name, auditPII.Paths, auditPII.IgnorePaths) {
+			t.Errorf("audit-pii path filters exclude review target %q", name)
+		}
+	}
+	for _, name := range []string{"node_modules/pkg/index.js", "dist/app.js", "generated/client.go", "app.min.js"} {
+		if PathIncluded(name, auditPII.Paths, auditPII.IgnorePaths) {
+			t.Errorf("audit-pii path filters include ignored path %q", name)
+		}
+	}
+	const wantTools = "Read,Write,Bash,Grep,Glob"
+	if auditPII.AllowedTools != wantTools {
+		t.Errorf("audit-pii allowed tools = %q, want %q", auditPII.AllowedTools, wantTools)
+	}
+	for _, text := range []string{
+		"example.com",
+		"192.0.2.0/24",
+		"public package maintainers",
+		"Standalone credentials",
+		"Do not repeat a full personal",
+	} {
+		if !strings.Contains(auditPII.Body, text) {
+			t.Errorf("audit-pii guidance missing %q", text)
+		}
+	}
+
+	triage, err := ParseFile(filepath.Join("..", "..", "skills", "triage", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("parse triage: %v", err)
+	}
+	if strings.Contains(triage.Body, "audit-pii") {
+		t.Error("audit-pii must remain opt-in and absent from the default triage scan set")
+	}
+}
+
 func TestParseFile_requiresWrongType(t *testing.T) {
 	dir := t.TempDir()
 	path := writeSkill(t, dir, "bad-req", `---
