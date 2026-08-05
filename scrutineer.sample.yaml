@@ -61,6 +61,10 @@
 # on every scan so two runs a week apart can be told apart.
 # skills_repo: https://github.com/alpha-omega-security/scrutineer-skills
 # skills_repo: alpha-omega-security/scrutineer-skills@v0.3.1
+# For a private repository, keep credentials out of skills_repo and set the
+# token here. This key is config-file-only so the token never enters argv.
+# Keep this file owner-readable only (`chmod 600 scrutineer.yaml`).
+# skills_repo_token: replace-with-a-repository-read-token
 
 # Container runtime: docker (default), podman, or Apple's container runtime
 # (`apple`, experimental). Rootless podman is detected automatically and

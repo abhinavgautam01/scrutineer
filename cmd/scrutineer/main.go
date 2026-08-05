@@ -105,6 +105,7 @@ type flags struct {
 	runnerImage           string
 	profilesDir           string
 	skillsRepo            string
+	skillsRepoToken       string
 	concurrency           int
 	cloneMode             string
 	scanTimeout           time.Duration
@@ -264,7 +265,7 @@ func registerFlags(fs *flag.FlagSet, f *flags) {
 // list and theme into the web package; runtime defaults (model, effort)
 // are stored on flags here and applied to the Server after construction.
 //
-//nolint:gocognit,gocyclo // flat: one guarded assignment per config key
+//nolint:gocognit,gocyclo,maintidx // flat: one guarded assignment per config key
 func (f *flags) merge(cfg *config.Config) {
 	if cfg.Addr != "" && !f.set["addr"] {
 		f.addr = cfg.Addr
@@ -306,6 +307,10 @@ func (f *flags) merge(cfg *config.Config) {
 	}
 	if cfg.SkillsRepo != "" && !f.set["skills-repo"] {
 		f.skillsRepo = cfg.SkillsRepo
+	}
+	// Config-only: a command-line token would be visible in process listings.
+	if cfg.SkillsRepoToken != "" {
+		f.skillsRepoToken = cfg.SkillsRepoToken
 	}
 	if len(cfg.Skills) > 0 && !f.set["skills"] {
 		f.skillLocal = append(f.skillLocal, cfg.Skills...)
@@ -587,7 +592,7 @@ func run(log *slog.Logger) error {
 
 	skills.ModelValidator = web.ValidModelPreference
 	skills.ProfileValidator = worker.IsNamedProfile
-	skillsRepoSHA, err := loadSkills(log, gdb, f.dataDir, f.skillLocal, f.skillsRepo, f.fullClone())
+	skillsRepoSHA, err := loadSkills(log, gdb, f.dataDir, f.skillLocal, f.skillsRepo, f.skillsRepoToken, f.fullClone())
 	if err != nil {
 		return err
 	}
@@ -747,7 +752,7 @@ func checkRunnerImage(srv *web.Server, runner worker.SkillRunner, log *slog.Logg
 // version on every restart. Returns the resolved commit SHA of the remote repo
 // (empty when no repo is set) so the caller can stamp it on each Scan for
 // reproducibility.
-func loadSkills(log *slog.Logger, gdb *gorm.DB, dataDir string, dirs skillDirs, repoSpec string, fullClone bool) (string, error) {
+func loadSkills(log *slog.Logger, gdb *gorm.DB, dataDir string, dirs skillDirs, repoSpec, repoToken string, fullClone bool) (string, error) {
 	bundleDir, bundleHash, err := bundledassets.Materialize(bundledskills.FS, dataDir, "bundled-skills")
 	if err != nil {
 		return "", fmt.Errorf("materialize bundled skills: %w", err)
@@ -769,12 +774,14 @@ func loadSkills(log *slog.Logger, gdb *gorm.DB, dataDir string, dirs skillDirs, 
 	if repoSpec != "" {
 		url, ref, err := skills.ParseRepoSpec(repoSpec)
 		if err != nil {
-			return "", fmt.Errorf("parse skills_repo %q: %w", repoSpec, err)
+			// repoSpec may come from an older credential-bearing configuration.
+			// The parser explains the validation failure without echoing the URL.
+			return "", fmt.Errorf("parse skills_repo: %w", err)
 		}
 		dst := filepath.Join(dataDir, "skills-cache", hashPath(repoSpec))
 		ctx, cancel := context.WithTimeout(context.Background(), skillsCloneTimeout)
 		defer cancel()
-		sha, err = skills.CloneOrPull(ctx, url, ref, dst, fullClone)
+		sha, err = skills.CloneOrPull(ctx, url, ref, dst, fullClone, repoToken)
 		if err != nil {
 			return "", fmt.Errorf("clone skills repo: %w", err)
 		}

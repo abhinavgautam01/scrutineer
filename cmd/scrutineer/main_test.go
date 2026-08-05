@@ -25,21 +25,22 @@ import (
 
 func fullConfig() *config.Config {
 	return &config.Config{
-		Addr:         "0.0.0.0:9090",
-		Data:         "/var/lib/scrutineer",
-		Effort:       "medium",
-		Backend:      "codex",
-		NoContainer:  new(true),
-		Hardened:     new(true),
-		RunnerImage:  "custom:v1",
-		SkillsRepo:   "https://example.com/skills.git",
-		Skills:       []string{"/etc/skills"},
-		Concurrency:  8,
-		Clone:        "full",
-		ScanTimeout:  "30m",
-		MaxTurns:     200,
-		ModelBaseURL: "https://proxy.corp.com/v1",
-		ForkOrg:      "fork-central",
+		Addr:            "0.0.0.0:9090",
+		Data:            "/var/lib/scrutineer",
+		Effort:          "medium",
+		Backend:         "codex",
+		NoContainer:     new(true),
+		Hardened:        new(true),
+		RunnerImage:     "custom:v1",
+		SkillsRepo:      "https://example.com/skills.git",
+		SkillsRepoToken: "private-skills-token",
+		Skills:          []string{"/etc/skills"},
+		Concurrency:     8,
+		Clone:           "full",
+		ScanTimeout:     "30m",
+		MaxTurns:        200,
+		ModelBaseURL:    "https://proxy.corp.com/v1",
+		ForkOrg:         "fork-central",
 
 		FederationSalt:    "s3cret",
 		FederationContact: "security@corp.com",
@@ -73,6 +74,9 @@ func TestFlagsMerge_configFillsUnset(t *testing.T) {
 	}
 	if len(f.skillLocal) != 1 || f.skillLocal[0] != "/etc/skills" {
 		t.Errorf("skillLocal = %v", f.skillLocal)
+	}
+	if f.skillsRepoToken != cfg.SkillsRepoToken {
+		t.Errorf("skillsRepoToken was not loaded from config")
 	}
 	if f.scanTimeout != 30*time.Minute {
 		t.Errorf("scanTimeout = %v", f.scanTimeout)
@@ -825,7 +829,7 @@ func TestLoadSkillsLoadsBundledSkillsWithoutLocalDirectory(t *testing.T) {
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	sha, err := loadSkills(log, gdb, dataDir, nil, "", false)
+	sha, err := loadSkills(log, gdb, dataDir, nil, "", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -848,6 +852,25 @@ func TestLoadSkillsLoadsBundledSkillsWithoutLocalDirectory(t *testing.T) {
 	}
 }
 
+func TestLoadSkillsRejectsRepoUserinfoWithoutEcho(t *testing.T) {
+	dataDir := t.TempDir()
+	gdb, err := db.Open(filepath.Join(dataDir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	const secret = "private-skills-token"
+
+	_, err = loadSkills(log, gdb, dataDir, nil,
+		"https://user:"+secret+"@github.com/org/skills", "", false)
+	if err == nil {
+		t.Fatal("expected URL userinfo to be rejected")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("loadSkills error leaked repository credential: %v", err)
+	}
+}
+
 func TestLoadSkillsLocalDirectoryOverridesBundledSkill(t *testing.T) {
 	dataDir := t.TempDir()
 	localRoot := filepath.Join(t.TempDir(), "skills")
@@ -865,7 +888,7 @@ func TestLoadSkillsLocalDirectoryOverridesBundledSkill(t *testing.T) {
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	if _, err := loadSkills(log, gdb, dataDir, skillDirs{localRoot}, "", false); err != nil {
+	if _, err := loadSkills(log, gdb, dataDir, skillDirs{localRoot}, "", "", false); err != nil {
 		t.Fatal(err)
 	}
 	var metadata db.Skill
@@ -883,7 +906,7 @@ func TestLoadSkillsLocalDirectoryOverridesBundledSkill(t *testing.T) {
 		t.Fatalf("metadata body = %q, want local override", metadata.Body)
 	}
 	version := metadata.Version
-	if _, err := loadSkills(log, gdb, dataDir, skillDirs{localRoot}, "", false); err != nil {
+	if _, err := loadSkills(log, gdb, dataDir, skillDirs{localRoot}, "", "", false); err != nil {
 		t.Fatal(err)
 	}
 	if err := gdb.Where("name = ?", "metadata").First(&metadata).Error; err != nil {
