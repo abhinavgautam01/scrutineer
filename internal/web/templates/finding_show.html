@@ -368,7 +368,7 @@
         <div class="rounded-md border border-border p-2">
           <svg viewBox="0 0 600 120" class="w-full h-32 text-primary" role="img" aria-labelledby="dependent-count-title dependent-count-desc">
             <title id="dependent-count-title">Dependent repository count history</title>
-            <desc id="dependent-count-desc">{{.SampleSize}} observations from {{.FirstAt.Format "2006-01-02"}} to {{.LatestAt.Format "2006-01-02"}}; latest count {{.Latest}}, change {{.Change}}.</desc>
+            <desc id="dependent-count-desc">{{.SampleSize}} {{if eq .SampleSize 1}}observation{{else}}observations{{end}} from {{.FirstAt.Format "2006-01-02"}} to {{.LatestAt.Format "2006-01-02"}}; latest count {{.Latest}}{{if gt .SampleSize 1}}, change {{.Change}}{{end}}.</desc>
             <line x1="12" y1="108" x2="588" y2="108" class="stroke-border" vector-effect="non-scaling-stroke"></line>
             <line x1="12" y1="12" x2="588" y2="12" class="stroke-border" vector-effect="non-scaling-stroke"></line>
             {{range .Segments}}

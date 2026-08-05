@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -20,9 +21,22 @@ import (
 )
 
 type fakeEcosystemsFetcher struct {
-	payloads map[string][]byte
-	errs     map[string]error
-	hits     map[string]int
+	payloads  map[string][]byte
+	errs      map[string]error
+	hits      map[string]int
+	completed map[string]time.Time
+}
+
+type gatedPackagesFetcher struct {
+	*fakeEcosystemsFetcher
+	ready   chan<- struct{}
+	release <-chan struct{}
+}
+
+func (f *gatedPackagesFetcher) fetchPackages(context.Context, string) ([]byte, error) {
+	f.ready <- struct{}{}
+	<-f.release
+	return f.fetch("packages")
 }
 
 func newFakeEcosystemsFetcher() *fakeEcosystemsFetcher {
@@ -35,8 +49,9 @@ func newFakeEcosystemsFetcher() *fakeEcosystemsFetcher {
 			"issues":     []byte(`{"issues":[{"login":"bob"}]}`),
 			"dependents": mustDependentsPayloadForTest(),
 		},
-		errs: map[string]error{},
-		hits: map[string]int{},
+		errs:      map[string]error{},
+		hits:      map[string]int{},
+		completed: map[string]time.Time{},
 	}
 }
 
@@ -66,6 +81,7 @@ func (f *fakeEcosystemsFetcher) fetchDependents(context.Context, string) ([]byte
 
 func (f *fakeEcosystemsFetcher) fetch(key string) ([]byte, error) {
 	f.hits[key]++
+	defer func() { f.completed[key] = time.Now() }()
 	if err := f.errs[key]; err != nil {
 		return nil, err
 	}
@@ -140,6 +156,8 @@ func TestRefreshEcosystems_populatesAllSources(t *testing.T) {
 		}
 		if c.at == nil {
 			t.Errorf("%s fetched_at is nil, want set", c.name)
+		} else if c.at.Before(fetcher.completed[c.name]) {
+			t.Errorf("%s fetched_at = %v, before fetch completed at %v", c.name, c.at, fetcher.completed[c.name])
 		}
 		if fetcher.hits[c.name] != 1 {
 			t.Errorf("%s fetches = %d, want 1", c.name, fetcher.hits[c.name])
@@ -203,6 +221,47 @@ func TestRefreshEcosystems_recordsCountsOnlyWhenPackagesAreRefetched(t *testing.
 	}
 	if fetcher.hits["packages"] != 2 {
 		t.Errorf("package fetches after stale refresh = %d, want 2", fetcher.hits["packages"])
+	}
+}
+
+func TestRefreshEcosystems_concurrentPackagesRefreshRecordsOneSnapshot(t *testing.T) {
+	gdb, err := db.Open(filepath.Join(t.TempDir(), "ecosystems.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := db.Repository{URL: "https://github.com/acme/widget", Name: "widget"}
+	if err := gdb.Create(&repo).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	ready := make(chan struct{}, 2)
+	release := make(chan struct{})
+	errs := make(chan error, 2)
+	for range 2 {
+		fetcher := &gatedPackagesFetcher{
+			fakeEcosystemsFetcher: newFakeEcosystemsFetcher(),
+			ready:                 ready,
+			release:               release,
+		}
+		go func() {
+			errs <- refreshEcosystems(context.Background(), gdb, repo.ID, true, slog.Default(), fetcher)
+		}()
+	}
+	<-ready
+	<-ready
+	close(release)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent refresh: %v", err)
+		}
+	}
+
+	var snapshots []db.DependentCountSnapshot
+	if err := gdb.Where("repository_id = ?", repo.ID).Find(&snapshots).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 1 || snapshots[0].DependentRepos != 34 {
+		t.Fatalf("concurrent snapshots = %+v, want one snapshot with count 34", snapshots)
 	}
 }
 

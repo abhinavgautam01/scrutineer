@@ -206,6 +206,34 @@ func TestFindingShowMigrationGuideRendersAlternativesAndDependents(t *testing.T)
 	if strings.Contains(guide, "fixed-consumer") {
 		t.Fatalf("fixed dependent should not be prioritized in migration guide:\n%s", guide)
 	}
+
+	assertSingleObservationTrend(t, s, repo.ID, finding.ID)
+}
+
+func assertSingleObservationTrend(t *testing.T, s *Server, repoID, findingID uint) {
+	t.Helper()
+	if err := s.DB.Where("repository_id = ?", repoID).Delete(&db.DependentCountSnapshot{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.Create(&db.DependentCountSnapshot{
+		RepositoryID:   repoID,
+		DependentRepos: 900,
+		ObservedAt:     time.Date(2026, time.April, 1, 0, 0, 0, 0, time.UTC),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq(http.MethodGet, fmt.Sprintf("/findings/%d", findingID)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("single-observation status %d: %s", w.Code, w.Body)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "1 observation from 2026-04-01 to 2026-04-01; latest count 900.") {
+		t.Fatalf("single-observation description is missing:\n%s", body)
+	}
+	if strings.Contains(body, "Change:") || strings.Contains(body, "latest count 900, change") {
+		t.Fatalf("single-observation trend announces a meaningless change:\n%s", body)
+	}
 }
 
 func TestLoadDependentCountTrendKeepsLatestObservationsInChronologicalOrder(t *testing.T) {

@@ -190,7 +190,8 @@ func refreshEcosystems(ctx context.Context, gdb *gorm.DB, repoID uint, staleOnly
 			log.Warn("ecosystems fetch failed", "repo", repoID, "source", src.key, "err", err)
 			continue
 		}
-		if err := cacheEcosystemsSource(gdb, repoID, src, body, now); err != nil {
+		fetchedAt := time.Now()
+		if err := cacheEcosystemsSource(gdb, repoID, src, body, fetchedAt, ecosystemsFetchedAt(repo, src.key)); err != nil {
 			log.Warn("ecosystems cache write failed", "repo", repoID, "source", src.key, "err", err)
 			continue
 		}
@@ -203,15 +204,30 @@ func refreshEcosystems(ctx context.Context, gdb *gorm.DB, repoID uint, staleOnly
 	return nil
 }
 
-func cacheEcosystemsSource(gdb *gorm.DB, repoID uint, src ecosystemsSource, body []byte, observedAt time.Time) error {
-	writeCache := func(tx *gorm.DB) error {
-		return tx.Model(&db.Repository{}).Where("id = ?", repoID).Updates(map[string]any{
+func cacheEcosystemsSource(
+	gdb *gorm.DB,
+	repoID uint,
+	src ecosystemsSource,
+	body []byte,
+	observedAt time.Time,
+	expectedFetchedAt *time.Time,
+) error {
+	writeCache := func(tx *gorm.DB) (bool, error) {
+		query := tx.Model(&db.Repository{}).Where("id = ?", repoID)
+		if expectedFetchedAt == nil {
+			query = query.Where(src.fetchedCol + " IS NULL")
+		} else {
+			query = query.Where(src.fetchedCol+" = ?", *expectedFetchedAt)
+		}
+		result := query.Updates(map[string]any{
 			src.dataColumn: string(body),
 			src.fetchedCol: observedAt,
-		}).Error
+		})
+		return result.RowsAffected > 0, result.Error
 	}
 	if src.key != "packages" {
-		return writeCache(gdb)
+		_, err := writeCache(gdb)
+		return err
 	}
 
 	dependentRepos, err := maxPackageDependentRepos(body)
@@ -219,8 +235,12 @@ func cacheEcosystemsSource(gdb *gorm.DB, repoID uint, src ecosystemsSource, body
 		return err
 	}
 	return gdb.Transaction(func(tx *gorm.DB) error {
-		if err := writeCache(tx); err != nil {
+		updated, err := writeCache(tx)
+		if err != nil {
 			return err
+		}
+		if !updated {
+			return nil
 		}
 		return tx.Create(&db.DependentCountSnapshot{
 			RepositoryID:   repoID,
