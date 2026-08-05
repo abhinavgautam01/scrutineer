@@ -1213,6 +1213,130 @@ func TestBundledAuditAuthzMetadata(t *testing.T) {
 	}
 }
 
+func TestBundledAuditPIIMetadata(t *testing.T) {
+	dir := filepath.Join("..", "..", "skills", "audit-pii")
+	auditPII, err := ParseFile(filepath.Join(dir, "SKILL.md"))
+	if err != nil {
+		t.Fatalf("parse audit-pii: %v", err)
+	}
+	if auditPII.OutputKind != "findings" || auditPII.MaxTurns != 48 ||
+		auditPII.Model != "high" || auditPII.MinConfidence != "high" {
+		t.Errorf("audit-pii metadata = kind %q, turns %d, model %q, confidence %q",
+			auditPII.OutputKind, auditPII.MaxTurns, auditPII.Model, auditPII.MinConfidence)
+	}
+	if !strings.Contains(auditPII.Compatibility, "Reads bundled reference notes in ./references") ||
+		!strings.Contains(auditPII.Compatibility, "external network") ||
+		!strings.Contains(auditPII.Compatibility, "api_base is allowed") {
+		t.Errorf("audit-pii compatibility missing references or network boundary: %q",
+			auditPII.Compatibility)
+	}
+	if !strings.Contains(auditPII.Body, "./references/") ||
+		!strings.Contains(auditPII.Body, "external network access") ||
+		!strings.Contains(auditPII.Body, "api_base is allowed") {
+		t.Error("audit-pii body missing references or network boundary")
+	}
+	if !slices.Equal(auditPII.Paths, []string{"**"}) {
+		t.Errorf("audit-pii paths = %v, want [**]", auditPII.Paths)
+	}
+	wantIgnores := []string{
+		"**/node_modules/**",
+		"**/dist/**",
+		"**/generated/**",
+		"**/__generated__/**",
+		"**/*.min.js",
+		"**/*.min.css",
+	}
+	if !slices.Equal(auditPII.IgnorePaths, wantIgnores) {
+		t.Errorf("audit-pii ignore paths = %v, want %v", auditPII.IgnorePaths, wantIgnores)
+	}
+	for _, name := range []string{
+		"tests/customer.json",
+		"fixtures/account.yaml",
+		"snapshots/profile.snap",
+		"docs/example.md",
+		"config/telemetry.toml",
+	} {
+		if !PathIncluded(name, auditPII.Paths, auditPII.IgnorePaths) {
+			t.Errorf("audit-pii path filters exclude review target %q", name)
+		}
+	}
+	for _, name := range []string{"node_modules/pkg/index.js", "dist/app.js", "generated/client.go", "app.min.js"} {
+		if PathIncluded(name, auditPII.Paths, auditPII.IgnorePaths) {
+			t.Errorf("audit-pii path filters include ignored path %q", name)
+		}
+	}
+	const wantTools = "Read,Write,Bash,Grep,Glob"
+	if auditPII.AllowedTools != wantTools {
+		t.Errorf("audit-pii allowed tools = %q, want %q", auditPII.AllowedTools, wantTools)
+	}
+	assertAuditPIIReferences(t, dir)
+	for _, text := range []string{
+		"example.com",
+		".test",
+		".example",
+		".localhost",
+		"192.0.2.0/24",
+		"public package maintainers",
+		"Standalone credentials",
+		"Do not repeat a full personal",
+	} {
+		if !strings.Contains(auditPII.Body, text) {
+			t.Errorf("audit-pii guidance missing %q", text)
+		}
+	}
+
+	triage, err := ParseFile(filepath.Join("..", "..", "skills", "triage", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("parse triage: %v", err)
+	}
+	if strings.Contains(triage.Body, "audit-pii") {
+		t.Error("audit-pii must remain opt-in and absent from the default triage scan set")
+	}
+}
+
+func assertAuditPIIReferences(t *testing.T, dir string) {
+	t.Helper()
+	for _, name := range []string{
+		"python.md",
+		"node.md",
+		"ruby.md",
+		"java-jvm.md",
+		"go.md",
+		"php.md",
+		"observability.md",
+	} {
+		data, err := os.ReadFile(filepath.Join(dir, "references", name))
+		if err != nil {
+			t.Errorf("read audit-pii reference %s: %v", name, err)
+			continue
+		}
+		if !strings.HasPrefix(string(data), "# ") {
+			t.Errorf("audit-pii reference %s has no heading", name)
+		}
+	}
+	requiredReferenceGuidance := map[string][]string{
+		"python.md":        {"DEFAULT_EXCEPTION_REPORTER_FILTER", "ModelSerializer", "Marshmallow"},
+		"node.md":          {"Pino", "Winston", "sendDefaultPii"},
+		"ruby.md":          {"filter_parameters", "ActiveModel::Serializer", "before_send"},
+		"java-jvm.md":      {"MDC", "Jackson", "SentryOptions"},
+		"go.md":            {"log/slog", "zap", "OpenTelemetry"},
+		"php.md":           {"Monolog", "NormalizerInterface", "before_send"},
+		"observability.md": {"send_default_pii", "before_send", "url.full"},
+	}
+	for name, required := range requiredReferenceGuidance {
+		data, err := os.ReadFile(filepath.Join(dir, "references", name))
+		if err != nil {
+			t.Errorf("read audit-pii reference %s: %v", name, err)
+			continue
+		}
+		for _, text := range required {
+			if !strings.Contains(string(data), text) {
+				t.Errorf("audit-pii reference %s missing %q", name, text)
+			}
+		}
+	}
+}
+
 func TestParseFile_requiresWrongType(t *testing.T) {
 	dir := t.TempDir()
 	path := writeSkill(t, dir, "bad-req", `---

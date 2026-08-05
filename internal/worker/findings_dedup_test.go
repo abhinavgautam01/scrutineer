@@ -201,6 +201,26 @@ func TestParseFindingsOutput_auditSchemasReferencesIngest(t *testing.T) {
 			}]}`,
 			wantTags: "advisory,audit-authz",
 		},
+		{
+			skillName: "audit-pii",
+			report: `{"findings":[{
+				"id":"F001",
+				"title":"Customer email is written to an analytics event",
+				"severity":"Medium",
+				"confidence":"high",
+				"cwe":"CWE-359",
+				"location":"internal/analytics/signup.go:64",
+				"reachability":"reachable",
+				"quality_tier":"high",
+				"trace":"The signup handler passes the account email to the analytics properties map without redaction.",
+				"boundary":"A user email leaves the application database and is retained by the third-party analytics provider.",
+				"validation":"Static review confirmed this is a runtime account value, not an example literal, and found no hashing or analytics allowlist.",
+				"discovered_via":"source",
+				"rating":"Medium because every signup discloses a personal identifier to a durable third-party sink.",
+				"references":[{"url":"https://example.com/advisory","summary":"Related advisory","tags":"advisory,audit-pii"}]
+			}]}`,
+			wantTags: "advisory,audit-pii",
+		},
 	}
 
 	for _, tc := range cases {

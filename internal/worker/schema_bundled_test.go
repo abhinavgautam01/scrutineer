@@ -17,6 +17,7 @@ func TestAuditFindingSchemasReferenceSharedContract(t *testing.T) {
 		"../../skills/audit-injection/schema.json",
 		"../../skills/audit-exfil/schema.json",
 		"../../skills/audit-authz/schema.json",
+		"../../skills/audit-pii/schema.json",
 	}
 	for _, path := range paths {
 		raw, err := os.ReadFile(path)
@@ -47,11 +48,10 @@ func loadBundledSchema(t *testing.T, schemaPath string) string {
 	return parsed.SchemaJSON
 }
 
-// TestBundledSchemas_compileAndAcceptSamples checks that the three schemas
-// added for #182 compile and accept a representative report. repo-overview
-// and sbom samples are external-tool output so the schemas are intentionally
-// loose; the point is catching a typo in the schema, not proving CycloneDX
-// conformance.
+// TestBundledSchemas_compileAndAcceptSamples checks that bundled schemas
+// compile and accept representative reports. Some samples are external-tool
+// output, so the point is catching schema mistakes rather than proving each
+// upstream format's conformance.
 func TestBundledSchemas_compileAndAcceptSamples(t *testing.T) {
 	cases := []struct {
 		schema string
@@ -230,6 +230,23 @@ func TestBundledSchemas_compileAndAcceptSamples(t *testing.T) {
 		},
 		{
 			"../../skills/audit-authz/schema.json",
+			`{"findings":[]}`,
+		},
+		{
+			"../../skills/audit-pii/schema.json",
+			`{"findings":[{"id":"F001","title":"Customer email is written to an analytics event",
+			  "severity":"Medium","confidence":"high","cwe":"CWE-359","location":"internal/analytics/signup.go:64",
+			  "reachability":"reachable","quality_tier":"high",
+			  "trace":"The signup handler passes the account email to the analytics properties map without redaction.",
+			  "boundary":"A user email leaves the application database and is retained by the third-party analytics provider.",
+			  "validation":"Static review confirmed this is a runtime account value, not an example literal, and found no hashing or analytics allowlist.",
+			  "discovered_via":"source",
+			  "rating":"Medium because every signup discloses a personal identifier to a durable third-party sink.",
+			  "references":[{"url":"https://cwe.mitre.org/data/definitions/359.html",
+			    "summary":"CWE-359","tags":"privacy,pii"}]}]}`,
+		},
+		{
+			"../../skills/audit-pii/schema.json",
 			`{"findings":[]}`,
 		},
 		{
@@ -455,6 +472,18 @@ func TestBundledSchemas_rejectBadShapes(t *testing.T) {
 			  "reachability":"reachable","quality_tier":"high","trace":"x","boundary":"x",
 			  "validation":"x","discovered_via":"source","rating":"x"}]}`,
 			"/findings/0/location"},
+		{"../../skills/audit-pii/schema.json",
+			`{"findings":[{"id":"F001","title":"Low-quality PII resemblance","severity":"Medium",
+			  "confidence":"high","cwe":"CWE-359","location":"fixtures/profile.json:12",
+			  "reachability":"reachable","quality_tier":"low","trace":"x","boundary":"x",
+			  "validation":"x","discovered_via":"source","rating":"x"}]}`,
+			"/findings/0/quality_tier"},
+		{"../../skills/audit-pii/schema.json",
+			`{"findings":[{"id":"F001","title":"Non-reachable PII candidate","severity":"Medium",
+			  "confidence":"high","cwe":"CWE-359","location":"fixtures/profile.json:12",
+			  "reachability":"unclear","quality_tier":"high","trace":"x","boundary":"x",
+			  "validation":"x","discovered_via":"source","rating":"x"}]}`,
+			"/findings/0/reachability"},
 		{"../../skills/variants/schema.json",
 			`{"findings":[{"id":"F1","title":"Variant of finding #42: weak confidence","severity":"High",
 			  "confidence":"maybe","cwe":"CWE-22","location":"pkg/archive/legacy.go:88",
