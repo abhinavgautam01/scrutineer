@@ -1224,14 +1224,16 @@ func TestBundledAuditPIIMetadata(t *testing.T) {
 		t.Errorf("audit-pii metadata = kind %q, turns %d, model %q, confidence %q",
 			auditPII.OutputKind, auditPII.MaxTurns, auditPII.Model, auditPII.MinConfidence)
 	}
-	if !strings.Contains(auditPII.Compatibility, "external network") ||
+	if !strings.Contains(auditPII.Compatibility, "Reads bundled reference notes in ./references") ||
+		!strings.Contains(auditPII.Compatibility, "external network") ||
 		!strings.Contains(auditPII.Compatibility, "api_base is allowed") {
-		t.Errorf("audit-pii compatibility does not distinguish external network from api_base: %q",
+		t.Errorf("audit-pii compatibility missing references or network boundary: %q",
 			auditPII.Compatibility)
 	}
-	if !strings.Contains(auditPII.Body, "external network access") ||
+	if !strings.Contains(auditPII.Body, "./references/") ||
+		!strings.Contains(auditPII.Body, "external network access") ||
 		!strings.Contains(auditPII.Body, "api_base is allowed") {
-		t.Error("audit-pii body does not distinguish external network from api_base")
+		t.Error("audit-pii body missing references or network boundary")
 	}
 	if !slices.Equal(auditPII.Paths, []string{"**"}) {
 		t.Errorf("audit-pii paths = %v, want [**]", auditPII.Paths)
@@ -1267,8 +1269,12 @@ func TestBundledAuditPIIMetadata(t *testing.T) {
 	if auditPII.AllowedTools != wantTools {
 		t.Errorf("audit-pii allowed tools = %q, want %q", auditPII.AllowedTools, wantTools)
 	}
+	assertAuditPIIReferences(t, dir)
 	for _, text := range []string{
 		"example.com",
+		".test",
+		".example",
+		".localhost",
 		"192.0.2.0/24",
 		"public package maintainers",
 		"Standalone credentials",
@@ -1285,6 +1291,49 @@ func TestBundledAuditPIIMetadata(t *testing.T) {
 	}
 	if strings.Contains(triage.Body, "audit-pii") {
 		t.Error("audit-pii must remain opt-in and absent from the default triage scan set")
+	}
+}
+
+func assertAuditPIIReferences(t *testing.T, dir string) {
+	t.Helper()
+	for _, name := range []string{
+		"python.md",
+		"node.md",
+		"ruby.md",
+		"java-jvm.md",
+		"go.md",
+		"php.md",
+		"observability.md",
+	} {
+		data, err := os.ReadFile(filepath.Join(dir, "references", name))
+		if err != nil {
+			t.Errorf("read audit-pii reference %s: %v", name, err)
+			continue
+		}
+		if !strings.HasPrefix(string(data), "# ") {
+			t.Errorf("audit-pii reference %s has no heading", name)
+		}
+	}
+	requiredReferenceGuidance := map[string][]string{
+		"python.md":        {"DEFAULT_EXCEPTION_REPORTER_FILTER", "ModelSerializer", "Marshmallow"},
+		"node.md":          {"Pino", "Winston", "sendDefaultPii"},
+		"ruby.md":          {"filter_parameters", "ActiveModel::Serializer", "before_send"},
+		"java-jvm.md":      {"MDC", "Jackson", "SentryOptions"},
+		"go.md":            {"log/slog", "zap", "OpenTelemetry"},
+		"php.md":           {"Monolog", "NormalizerInterface", "before_send"},
+		"observability.md": {"send_default_pii", "before_send", "url.full"},
+	}
+	for name, required := range requiredReferenceGuidance {
+		data, err := os.ReadFile(filepath.Join(dir, "references", name))
+		if err != nil {
+			t.Errorf("read audit-pii reference %s: %v", name, err)
+			continue
+		}
+		for _, text := range required {
+			if !strings.Contains(string(data), text) {
+				t.Errorf("audit-pii reference %s missing %q", name, text)
+			}
+		}
 	}
 }
 
