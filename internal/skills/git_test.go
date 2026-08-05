@@ -232,8 +232,9 @@ func TestCloneOrPull_tokenUsesAskPassWithoutArgvLeak(t *testing.T) {
 		},
 	}
 
+	dst := filepath.Join(t.TempDir(), "skills-cache", "checkout")
 	_, err := cloneOrPullWithRetry(context.Background(), retry,
-		"https://skills.test/org/private-skills", "", t.TempDir(), false, token)
+		"https://skills.test/org/private-skills", "", dst, false, token)
 	if err == nil {
 		t.Fatal("expected the inspecting runner to stop the clone")
 	}
@@ -248,6 +249,9 @@ func TestCloneOrPull_tokenUsesAskPassWithoutArgvLeak(t *testing.T) {
 	}
 	if askpassOut != token {
 		t.Errorf("askpass output = %q, want configured token", askpassOut)
+	}
+	if filepath.Dir(askpassPath) != filepath.Dir(dst) {
+		t.Errorf("askpass directory = %q, want skills cache %q", filepath.Dir(askpassPath), filepath.Dir(dst))
 	}
 	if strings.Contains(script, token) {
 		t.Fatal("temporary askpass script contains the token")
@@ -268,7 +272,7 @@ func TestWithSkillsRepoToken_excludesLocalGitCommands(t *testing.T) {
 			gotEnv = append([]string{}, env...)
 			return "", nil
 		},
-	}, token)
+	}, token, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

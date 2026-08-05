@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -35,7 +36,7 @@ func CloneOrPull(ctx context.Context, url, ref, dst string, fullClone bool, toke
 }
 
 func cloneOrPullWithRetry(ctx context.Context, retry clone.Retry, url, ref, dst string, fullClone bool, token string) (string, error) {
-	retry, cleanup, err := withSkillsRepoToken(retry, token)
+	retry, cleanup, err := withSkillsRepoToken(retry, token, filepath.Dir(dst))
 	if err != nil {
 		return "", err
 	}
@@ -58,7 +59,7 @@ func cloneOrPullWithRetry(ctx context.Context, retry clone.Retry, url, ref, dst 
 // withSkillsRepoToken supplies private-repository credentials through
 // GIT_ASKPASS. The temporary executable contains only an environment-variable
 // lookup; the token itself stays out of both the script and Git's argv.
-func withSkillsRepoToken(retry clone.Retry, token string) (clone.Retry, func(), error) {
+func withSkillsRepoToken(retry clone.Retry, token, askpassDir string) (clone.Retry, func(), error) {
 	if token == "" {
 		return retry, func() {}, nil
 	}
@@ -66,7 +67,12 @@ func withSkillsRepoToken(retry clone.Retry, token string) (clone.Retry, func(), 
 		return retry, func() {}, fmt.Errorf("skills repo token must be a single line")
 	}
 
-	f, err := os.CreateTemp("", "scrutineer-skills-askpass-*")
+	// Keep the executable beside the skills cache because a system TMPDIR may
+	// be mounted noexec. The script contains no credential and is removed below.
+	if err := os.MkdirAll(askpassDir, askpassPerm); err != nil {
+		return retry, func() {}, fmt.Errorf("create skills repo cache directory: %w", err)
+	}
+	f, err := os.CreateTemp(askpassDir, ".scrutineer-skills-askpass-*")
 	if err != nil {
 		return retry, func() {}, fmt.Errorf("create skills repo askpass: %w", err)
 	}
@@ -92,8 +98,8 @@ func withSkillsRepoToken(retry clone.Retry, token string) (clone.Retry, func(), 
 		baseRun = clone.Run
 	}
 	retry.Run = func(ctx context.Context, dir string, env []string, args ...string) (string, error) {
-		// clone marks only remote-touching commands with this environment.
-		// Keep the credential away from local inspection/reset commands.
+		// git-pkgs/clone's remoteEnv() adds GIT_TERMINAL_PROMPT=0 only to
+		// remote-touching commands; keep credentials off local inspection/reset.
 		if !slices.Contains(env, "GIT_TERMINAL_PROMPT=0") {
 			return baseRun(ctx, dir, env, args...)
 		}

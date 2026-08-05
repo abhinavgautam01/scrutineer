@@ -265,7 +265,7 @@ func registerFlags(fs *flag.FlagSet, f *flags) {
 // list and theme into the web package; runtime defaults (model, effort)
 // are stored on flags here and applied to the Server after construction.
 //
-//nolint:gocognit,gocyclo // flat: one guarded assignment per config key
+//nolint:gocognit,gocyclo,maintidx // flat: one guarded assignment per config key
 func (f *flags) merge(cfg *config.Config) {
 	if cfg.Addr != "" && !f.set["addr"] {
 		f.addr = cfg.Addr
@@ -305,7 +305,16 @@ func (f *flags) merge(cfg *config.Config) {
 	if cfg.ProfilesDir != nil && !f.set["profiles-dir"] {
 		f.profilesDir = *cfg.ProfilesDir
 	}
-	f.mergeSkillsConfig(cfg)
+	if cfg.SkillsRepo != "" && !f.set["skills-repo"] {
+		f.skillsRepo = cfg.SkillsRepo
+	}
+	// Config-only: a command-line token would be visible in process listings.
+	if cfg.SkillsRepoToken != "" {
+		f.skillsRepoToken = cfg.SkillsRepoToken
+	}
+	if len(cfg.Skills) > 0 && !f.set["skills"] {
+		f.skillLocal = append(f.skillLocal, cfg.Skills...)
+	}
 	if cfg.Concurrency > 0 && !f.set["concurrency"] {
 		f.concurrency = cfg.Concurrency
 	}
@@ -378,19 +387,6 @@ func (f *flags) merge(cfg *config.Config) {
 	}
 	if cfg.Theme != "" {
 		web.SetTheme(cfg.Theme)
-	}
-}
-
-func (f *flags) mergeSkillsConfig(cfg *config.Config) {
-	if cfg.SkillsRepo != "" && !f.set["skills-repo"] {
-		f.skillsRepo = cfg.SkillsRepo
-	}
-	// Config-only: a command-line token would be visible in process listings.
-	if cfg.SkillsRepoToken != "" {
-		f.skillsRepoToken = cfg.SkillsRepoToken
-	}
-	if len(cfg.Skills) > 0 && !f.set["skills"] {
-		f.skillLocal = append(f.skillLocal, cfg.Skills...)
 	}
 }
 
