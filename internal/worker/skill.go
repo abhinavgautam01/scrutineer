@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"gorm.io/gorm"
 
@@ -56,8 +57,13 @@ type skillContextScrutineer struct {
 	// Empty means the repository's default branch.
 	ScanRef string `json:"scan_ref,omitempty"`
 	// ScanSubPath scopes code analysis to a sub-folder of ./src (monorepo
-	// support). Empty means the repo root. Skills that walk files honour
-	// this; skills that query external APIs ignore it.
+	// support). Empty means the repo root. Finding-producing / code-analysis
+	// skills honour it, scoping their reads and reported locations to the
+	// sub-folder. Repo-wide projection skills — those whose parser writes
+	// repository-level rows (see worker.repoWideProjectionKinds) — ignore it and
+	// always describe the whole repository; scoping one would overwrite or wipe
+	// repo-level data from a single sub-package's view (that is why repo-overview
+	// runs brief against ./src, not ./src/<subpath>).
 	ScanSubPath string `json:"scan_subpath,omitempty"`
 	// ScanGroup identifies the parallel batch this scan belongs to. An audit
 	// skill passes it to /repositories/{id}/findings?scan_group=... to read
@@ -178,6 +184,16 @@ func (w *Worker) doSkill(ctx context.Context, scan *db.Scan, emit func(Event)) (
 		scan.Commit = cacheCommit
 		w.clearCloneError(scan)
 	}
+	// Hard scope: prune the workspace down to the sub-package so the agent, its
+	// build, and its findings can't reach into sibling packages. Kept out of
+	// PrepareSrc so it applies to both a real clone and a local-dir copy, and so
+	// the automatic soft fallback below can re-widen by re-staging the tree.
+	hardScope := w.scanScopeHard(scan, skill.OutputKind)
+	if hardScope {
+		if err := pruneToSubPath(filepath.Join(workRoot, "src"), scan.SubPath); err != nil {
+			return "", fmt.Errorf("hard-scope sub_path: %w", err)
+		}
+	}
 	if err := w.prepareDiffRescan(ctx, scan, workRoot, emit); err != nil {
 		return "", err
 	}
@@ -221,7 +237,7 @@ func (w *Worker) doSkill(ctx context.Context, scan *db.Scan, emit func(Event)) (
 		RequiresProfile: skill.RequiresProfile,
 	}
 	w.applyResume(scan, &sj, emit)
-	res, err := w.Runner.RunSkill(ctx, sj, emit)
+	res, err := w.runSkillWithFallback(ctx, scan, &skill, sj, workRoot, hardScope, emit)
 	w.applySkillResult(scan, res)
 	if err != nil {
 		if _, ok := errors.AsType[*MaxTurnsReachedError](err); ok && res.Report != "" {
@@ -240,6 +256,50 @@ func (w *Worker) doSkill(ctx context.Context, scan *db.Scan, emit func(Event)) (
 		w.auditSkillRefusals(ctx, &skill, scan, sj, emit)
 	}
 	return report, nil
+}
+
+// runSkillWithFallback runs the skill once and, when a hard-scoped sub-package
+// could not resolve its dependencies in isolation — it needs a sibling package
+// that is unpublished or version-skewed — re-stages the whole repository (soft)
+// and runs it again. Only a dependency-resolution signature triggers the retry;
+// an ordinary build or analysis failure is left to stand as a real result. That
+// failure usually surfaces in the agent's streamed narration during the run
+// rather than in the final report.json (which stays valid findings), so the
+// first run watches the emit stream for it as well as the returned report/error.
+func (w *Worker) runSkillWithFallback(ctx context.Context, scan *db.Scan, skill *db.Skill, sj SkillJob, workRoot string, hardScope bool, emit func(Event)) (SkillResult, error) {
+	// Set-once flag; the check stops after the first hit. Guarded because the
+	// runner may emit from more than one goroutine (e.g. the egress sidecar
+	// drain).
+	var depResolveFail atomic.Bool
+	capture := func(e Event) {
+		if e.Text != "" && !depResolveFail.Load() && isDependencyResolutionFailure(e.Text) {
+			depResolveFail.Store(true)
+		}
+		emit(e)
+	}
+	res, err := w.Runner.RunSkill(ctx, sj, capture)
+	if !hardScope || scan.ScopeMode == "soft" || !dependencyResolutionFailed(depResolveFail.Load(), res, err) {
+		return res, err
+	}
+	emit(Event{Kind: KindText, Text: "hard-scope dependency resolution failed; widening to the whole repository (soft) and retrying"})
+	w.DB.Model(scan).Update("scope_mode", "soft")
+	scan.ScopeMode = "soft"
+	if wErr := w.reStageWholeTree(ctx, scan, skill, workRoot, emit); wErr != nil {
+		w.Log.Warn("re-stage whole tree for soft fallback", "scan", scan.ID, "err", wErr)
+		return res, err
+	}
+	return w.Runner.RunSkill(ctx, sj, emit)
+}
+
+// dependencyResolutionFailed reports whether a run failed specifically because
+// its dependencies could not be resolved — detected from the streamed narration
+// (streamed), the final report, or the returned error. It is the one condition
+// the automatic whole-repository retry is meant to rescue.
+func dependencyResolutionFailed(streamed bool, res SkillResult, err error) bool {
+	if streamed || isDependencyResolutionFailure(res.Report) {
+		return true
+	}
+	return err != nil && isDependencyResolutionFailure(err.Error())
 }
 
 // applySkillResult writes back the fields RunSkill reports about the run
@@ -849,6 +909,14 @@ func (w *Worker) parseMaintainersOutput(scan *db.Scan, report string, emit func(
 			Evidence string `json:"evidence"`
 		} `json:"maintainers"`
 		DisclosureChannel string `json:"disclosure_channel"`
+		// Subprojects optionally carries a per-sub-package disclosure channel
+		// for a monorepo, so a report against one gem in rails/rails routes to
+		// that gem's maintainers rather than the repo-wide channel. Additive:
+		// a report that omits it keeps the pre-monorepo repo-only behaviour.
+		Subprojects []struct {
+			Path              string `json:"path"`
+			DisclosureChannel string `json:"disclosure_channel"`
+		} `json:"subprojects"`
 	}
 	if err := json.Unmarshal([]byte(report), &result); err != nil {
 		return fmt.Errorf("parse maintainers report: %w", err)
@@ -857,9 +925,34 @@ func (w *Worker) parseMaintainersOutput(scan *db.Scan, report string, emit func(
 	if err := w.DB.First(&repo, scan.RepositoryID).Error; err != nil {
 		return err
 	}
-	if strings.TrimSpace(result.DisclosureChannel) != "" {
+	// A sub-path-scoped run describes one sub-package, so it must never rewrite
+	// repository-wide state: the top-level disclosure channel or the whole
+	// maintainer association set. Today the skill reads repo-root files and
+	// reports the whole repository even when scoped, so this changes nothing —
+	// the guard is what keeps that safe if the skill is ever made sub-path-aware
+	// (the scan_subpath contract at skillContextScrutineer.ScanSubPath invites
+	// it), when a fragmentary report would otherwise clobber every sibling's
+	// attribution through the wholesale Association.Replace below. A scoped run
+	// still records its own sub-package's disclosure channel — that is the point
+	// of running it.
+	repoWide := scan.SubPath == ""
+	if repoWide && strings.TrimSpace(result.DisclosureChannel) != "" {
 		if err := db.SetDisclosureChannel(w.DB, repo.ID, result.DisclosureChannel); err != nil {
 			return fmt.Errorf("update disclosure channel: %w", err)
+		}
+	}
+	if w.MonorepoAttribution {
+		for _, sp := range result.Subprojects {
+			path := strings.Trim(sp.Path, "/ \t\n")
+			ch := strings.TrimSpace(sp.DisclosureChannel)
+			if path == "" || ch == "" {
+				continue
+			}
+			// Best-effort: only touches an existing subproject row, and only
+			// the reconcile/skill-owned channel field.
+			w.DB.Model(&db.Subproject{}).
+				Where("repository_id = ? AND path = ?", scan.RepositoryID, path).
+				Update("disclosure_channel", ch)
 		}
 	}
 	var linked []db.Maintainer
@@ -887,7 +980,7 @@ func (w *Worker) parseMaintainersOutput(scan *db.Scan, report string, emit func(
 		w.DB.Save(&m)
 		linked = append(linked, m)
 	}
-	if len(linked) > 0 {
+	if repoWide && len(linked) > 0 {
 		_ = w.DB.Model(&repo).Association("Maintainers").Replace(linked)
 	}
 	emit(Event{Kind: KindText, Text: fmt.Sprintf("identified %d maintainer(s)", len(result.Maintainers))})

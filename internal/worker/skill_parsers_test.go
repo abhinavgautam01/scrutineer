@@ -54,6 +54,90 @@ func TestParseSubprojectsOutput(t *testing.T) {
 	}
 }
 
+func TestParseSubprojectsOutput_stableIDsAcrossReruns(t *testing.T) {
+	report := `{"subprojects":[
+		{"path":"a","name":"a","kind":"go-module"},
+		{"path":"b","name":"b","kind":"npm-package"}
+	]}`
+	repo, gdb := runSkillWithReport(t, "subprojects", report)
+
+	var a db.Subproject
+	gdb.Where("repository_id = ? AND path = ?", repo.ID, "a").First(&a)
+	if a.ID == 0 {
+		t.Fatal("subproject a not created")
+	}
+	// A disclosure channel written by the attribution reconcile must survive a
+	// subprojects re-run (the parser owns name/kind/description, not this).
+	gdb.Model(&a).Update("disclosure_channel", "security@a.example")
+
+	// Re-run: keep a (renamed), drop b, add c.
+	scan := db.Scan{RepositoryID: repo.ID}
+	gdb.Create(&scan)
+	w := &Worker{DB: gdb, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	rerun := `{"subprojects":[
+		{"path":"a","name":"a-renamed","kind":"go-module"},
+		{"path":"c","name":"c","kind":"rust-crate"}
+	]}`
+	if err := w.parseSubprojectsOutput(&scan, rerun, func(Event) {}); err != nil {
+		t.Fatal(err)
+	}
+
+	var a2 db.Subproject
+	gdb.Where("repository_id = ? AND path = ?", repo.ID, "a").First(&a2)
+	if a2.ID != a.ID {
+		t.Errorf("subproject a id churned across re-run: was %d, now %d (breaks Package/Advisory.SubprojectID refs)", a.ID, a2.ID)
+	}
+	if a2.Name != "a-renamed" {
+		t.Errorf("subproject a name not updated on re-run: %q", a2.Name)
+	}
+	if a2.DisclosureChannel != "security@a.example" {
+		t.Errorf("disclosure channel clobbered on re-run: %q", a2.DisclosureChannel)
+	}
+	var b db.Subproject
+	if err := gdb.Where("repository_id = ? AND path = ?", repo.ID, "b").First(&b).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Errorf("subproject b should be pruned, got %+v (err %v)", b, err)
+	}
+	var count int64
+	gdb.Model(&db.Subproject{}).Where("repository_id = ?", repo.ID).Count(&count)
+	if count != 2 {
+		t.Errorf("subproject count = %d, want 2 (a,c)", count)
+	}
+}
+
+func TestParseSubprojectsOutput_scopedRunDoesNotPrune(t *testing.T) {
+	// Seed the full set from a whole-repository run.
+	report := `{"subprojects":[
+		{"path":"activesupport","name":"activesupport"},
+		{"path":"actionpack","name":"actionpack"}
+	]}`
+	repo, gdb := runSkillWithReport(t, "subprojects", report)
+
+	// A sub-path-scoped run only saw its own folder, so it reports just
+	// activesupport. It must upsert what it saw without pruning actionpack —
+	// the backstop that keeps a mis-scoped run from wiping the repo's table.
+	scan := db.Scan{RepositoryID: repo.ID, SubPath: "activesupport"}
+	gdb.Create(&scan)
+	w := &Worker{DB: gdb, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if err := w.parseSubprojectsOutput(&scan, `{"subprojects":[{"path":"activesupport","name":"activesupport-scoped"}]}`, func(Event) {}); err != nil {
+		t.Fatal(err)
+	}
+
+	var count int64
+	gdb.Model(&db.Subproject{}).Where("repository_id = ?", repo.ID).Count(&count)
+	if count != 2 {
+		t.Errorf("subproject count = %d, want 2 (a scoped run must not prune siblings)", count)
+	}
+	var ap db.Subproject
+	if err := gdb.Where("repository_id = ? AND path = ?", repo.ID, "actionpack").First(&ap).Error; err != nil {
+		t.Errorf("actionpack pruned by a scoped run: %v", err)
+	}
+	var as db.Subproject
+	gdb.Where("repository_id = ? AND path = ?", repo.ID, "activesupport").First(&as)
+	if as.Name != "activesupport-scoped" {
+		t.Errorf("activesupport not upserted by scoped run: name = %q", as.Name)
+	}
+}
+
 func TestParseSubprojectsOutput_invalidJSON(t *testing.T) {
 	gdb, err := db.Open(filepath.Join(t.TempDir(), "p.db"))
 	if err != nil {
@@ -464,6 +548,94 @@ func TestParseAdvisoryAudit_rejectsDuplicateAdvisoryBeforeWriting(t *testing.T) 
 	gdb.Model(&db.Finding{}).Count(&findings)
 	if audits != 0 || findings != 0 {
 		t.Errorf("rows written despite rejected report: audits=%d findings=%d", audits, findings)
+	}
+}
+
+func TestParseMaintainers_perSubprojectDisclosureChannel(t *testing.T) {
+	gdb, err := db.Open(filepath.Join(t.TempDir(), "m.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := db.Repository{URL: "https://github.com/rails/rails", Name: "rails"}
+	gdb.Create(&repo)
+	sub := db.Subproject{RepositoryID: repo.ID, Path: "activesupport", Name: "activesupport"}
+	gdb.Create(&sub)
+	scan := db.Scan{RepositoryID: repo.ID}
+	gdb.Create(&scan)
+
+	// Attribution on: the per-subproject channel lands on the subproject, the
+	// repo-wide channel on the repo.
+	w := &Worker{DB: gdb, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), MonorepoAttribution: true}
+	report := `{"maintainers":[],"disclosure_channel":"repo@example.org","subprojects":[{"path":"activesupport","disclosure_channel":"as@example.org"}]}`
+	if err := w.parseMaintainersOutput(&scan, report, func(Event) {}); err != nil {
+		t.Fatal(err)
+	}
+	var got db.Subproject
+	gdb.First(&got, sub.ID)
+	if got.DisclosureChannel != "as@example.org" {
+		t.Errorf("subproject channel = %q, want as@example.org", got.DisclosureChannel)
+	}
+	var r db.Repository
+	gdb.First(&r, repo.ID)
+	if r.DisclosureChannel != "repo@example.org" {
+		t.Errorf("repo channel = %q, want repo@example.org", r.DisclosureChannel)
+	}
+
+	// Attribution off: the subproject block is ignored.
+	gdb.Model(&db.Subproject{}).Where("id = ?", sub.ID).Update("disclosure_channel", "")
+	w2 := &Worker{DB: gdb, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), MonorepoAttribution: false}
+	report2 := `{"maintainers":[],"subprojects":[{"path":"activesupport","disclosure_channel":"as2@example.org"}]}`
+	if err := w2.parseMaintainersOutput(&scan, report2, func(Event) {}); err != nil {
+		t.Fatal(err)
+	}
+	gdb.First(&got, sub.ID)
+	if got.DisclosureChannel != "" {
+		t.Errorf("attribution off must not write subproject channel, got %q", got.DisclosureChannel)
+	}
+}
+
+func TestParseMaintainers_scopedRunLeavesRepoWideAlone(t *testing.T) {
+	gdb, err := db.Open(filepath.Join(t.TempDir(), "m.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := db.Repository{URL: "https://github.com/rails/rails", Name: "rails"}
+	gdb.Create(&repo)
+	sub := db.Subproject{RepositoryID: repo.ID, Path: "activesupport", Name: "activesupport"}
+	gdb.Create(&sub)
+	w := &Worker{DB: gdb, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), MonorepoAttribution: true}
+
+	// Seed repo-wide state from a normal repo-root run: two maintainers and a
+	// repository disclosure channel.
+	root := db.Scan{RepositoryID: repo.ID}
+	gdb.Create(&root)
+	seed := `{"maintainers":[{"login":"alice","role":"lead","status":"active"},{"login":"bob","role":"dev","status":"active"}],"disclosure_channel":"repo@example.org"}`
+	if err := w.parseMaintainersOutput(&root, seed, func(Event) {}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A sub-path-scoped run reports a fragment (only alice) and a different
+	// top-level channel. It must not clobber the repo-wide maintainer list or
+	// channel, but must still record the sub-package's own channel.
+	scoped := db.Scan{RepositoryID: repo.ID, SubPath: "activesupport"}
+	gdb.Create(&scoped)
+	report := `{"maintainers":[{"login":"alice","role":"lead","status":"active"}],"disclosure_channel":"WRONG@example.org","subprojects":[{"path":"activesupport","disclosure_channel":"as@example.org"}]}`
+	if err := w.parseMaintainersOutput(&scoped, report, func(Event) {}); err != nil {
+		t.Fatal(err)
+	}
+
+	var r db.Repository
+	gdb.First(&r, repo.ID)
+	if r.DisclosureChannel != "repo@example.org" {
+		t.Errorf("scoped run clobbered repo channel: %q, want repo@example.org", r.DisclosureChannel)
+	}
+	if n := gdb.Model(&repo).Association("Maintainers").Count(); n != 2 {
+		t.Errorf("scoped run changed repo maintainer set: %d associations, want 2 (alice,bob)", n)
+	}
+	var gotSub db.Subproject
+	gdb.First(&gotSub, sub.ID)
+	if gotSub.DisclosureChannel != "as@example.org" {
+		t.Errorf("scoped run should still record the sub-package channel: %q", gotSub.DisclosureChannel)
 	}
 }
 

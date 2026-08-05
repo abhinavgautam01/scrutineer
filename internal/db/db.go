@@ -249,10 +249,23 @@ type Scan struct {
 
 	// SubPath scopes the scan's code analysis to a sub-folder within the
 	// clone (e.g. airflow-core inside apache/airflow). Empty means the
-	// repo root. Skills that walk files honour this through
-	// scrutineer.scan_subpath in context.json; skills that consult
-	// external APIs (packages/advisories/dependents) ignore it.
+	// repo root. Finding-producing / code-analysis skills honour this through
+	// scrutineer.scan_subpath in context.json; repo-wide projection skills
+	// (those whose output populates repository-level rows, e.g.
+	// packages/advisories/dependencies/maintainers/repo-overview) ignore it and
+	// always describe the whole repository.
 	SubPath string `gorm:"index"`
+
+	// ScopeMode overrides the instance-default subproject staging mode for
+	// this scan: "hard" stages only SubPath's sub-folder into the workspace
+	// (so the agent, build, and findings are confined to the sub-package),
+	// "soft" stages the whole clone with SubPath as an advisory focus hint.
+	// Empty inherits the configured default (config.SubprojectScope).
+	// Persisted so a retry reproduces the mode even if the instance default
+	// changed, and rewritten to "soft" by the automatic whole-tree fallback
+	// when a hard-scoped scan's isolated dependency resolution fails. Ignored
+	// when SubPath is empty (a root scan is neither hard nor soft).
+	ScopeMode string `gorm:"index"`
 
 	// ScanGroup ties together a cohort of deep-dive scans launched as one
 	// parallel batch (Scan-all-subprojects, or a single New-scan run), so an
@@ -371,6 +384,14 @@ type Package struct {
 	ID           uint `gorm:"primarykey"`
 	RepositoryID uint `gorm:"index;not null"`
 	Repository   Repository
+
+	// SubprojectID links this published package to the monorepo sub-package
+	// it is built from, matched by manifest name during the attribution
+	// reconcile. Nil means repo-level: a single-package repo, a package that
+	// matched no subproject, or monorepo attribution disabled. Recomputed on
+	// each packages/subprojects run, so it never needs to survive a wholesale
+	// row replace.
+	SubprojectID *uint `gorm:"index"`
 
 	Name                 string
 	Ecosystem            string `gorm:"index"`
@@ -513,6 +534,12 @@ func ClosedFindingLifecycleSQLValues() string {
 type Advisory struct {
 	ID           uint `gorm:"primarykey"`
 	RepositoryID uint `gorm:"index;not null"`
+
+	// SubprojectID links this advisory to the monorepo sub-package it affects,
+	// matched during the attribution reconcile from the advisory's affected
+	// package names. Nil means repo-level (unmatched, single-package repo, or
+	// attribution disabled). Recomputed on each advisories/subprojects run.
+	SubprojectID *uint `gorm:"index"`
 
 	UUID           string
 	URL            string
@@ -1330,6 +1357,19 @@ func Open(dsn string) (*gorm.DB, error) {
 		return nil, fmt.Errorf("automigrate: %w", err)
 	}
 	gdb.Exec(`CREATE INDEX IF NOT EXISTS idx_scans_priority_id ON scans (status_priority, id DESC)`)
+	// Subproject identity is (repository_id, path): the upsert in
+	// parseSubprojectsOutput keys on it so ids stay stable across skill
+	// re-runs (Package/Advisory.SubprojectID reference them). Collapse any
+	// duplicate rows left by the pre-upsert wholesale-replace path — keeping
+	// the lowest id — before adding the unique index so its creation can't
+	// fail on historic data. Gated on the index's absence so this is a true
+	// one-shot migration: once the index exists there can be no duplicates,
+	// and re-running the full-table dedup scan on every boot would be wasted
+	// work.
+	if !gdb.Migrator().HasIndex(&Subproject{}, "idx_subprojects_repo_path") {
+		gdb.Exec(`DELETE FROM subprojects WHERE id NOT IN (SELECT MIN(id) FROM subprojects GROUP BY repository_id, path)`)
+		gdb.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_subprojects_repo_path ON subprojects (repository_id, path)`)
+	}
 	return gdb, nil
 }
 
@@ -1471,8 +1511,58 @@ type Subproject struct {
 	Kind        string `gorm:"index"`
 	Description string `gorm:"type:text"`
 
+	// DisclosureChannel is the preferred vector for reporting a vulnerability
+	// in this specific sub-package — an email, GHSA URL, registry owner
+	// handle, or SECURITY.md URL. Written by the attribution reconcile /
+	// maintainers skill from this sub-package's registry ownership; the
+	// disclose flow prefers it over Repository.DisclosureChannel for a
+	// finding scoped to this subproject. Empty falls back to the repo channel.
+	DisclosureChannel string
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+// EnsureSubproject records a monorepo sub-package an operator submitted
+// directly (repo#sub/dir) so it is a first-class entity immediately, without
+// waiting for the subprojects skill to discover it. Keyed on
+// (repository_id, path): an existing row — e.g. one the skill already
+// enriched — is left untouched; a new row is seeded with a Name derived from
+// the last path segment. Path is trimmed; an empty path is a no-op. The
+// caller is expected to have already validated the path (worker.CleanSubPath).
+func EnsureSubproject(gdb *gorm.DB, repoID uint, subPath string) error {
+	subPath = strings.Trim(subPath, "/ \t\n")
+	if subPath == "" {
+		return nil
+	}
+	name := subPath
+	if i := strings.LastIndex(subPath, "/"); i >= 0 && i+1 < len(subPath) {
+		name = subPath[i+1:]
+	}
+	sub := Subproject{RepositoryID: repoID, Path: subPath}
+	return gdb.Where(Subproject{RepositoryID: repoID, Path: subPath}).
+		Attrs(Subproject{Name: name}).
+		FirstOrCreate(&sub).Error
+}
+
+// EffectiveDisclosureChannel returns the disclosure channel to use for a
+// finding: the finding's sub-package channel when the finding is scoped to a
+// Subproject that has one set, otherwise the repository channel. A monorepo can
+// thus route each sub-package's reports to its own maintainers, while a
+// single-package repo (no sub-path, or no per-subproject channel) behaves
+// exactly as before. Empty when neither is set.
+func EffectiveDisclosureChannel(gdb *gorm.DB, repoID uint, subPath string) string {
+	if subPath != "" {
+		var sub Subproject
+		if err := gdb.Where("repository_id = ? AND path = ?", repoID, subPath).First(&sub).Error; err == nil && sub.DisclosureChannel != "" {
+			return sub.DisclosureChannel
+		}
+	}
+	var repo Repository
+	if err := gdb.Select("disclosure_channel").First(&repo, repoID).Error; err != nil {
+		return ""
+	}
+	return repo.DisclosureChannel
 }
 
 func BackfillStatusPriority(gdb *gorm.DB) {

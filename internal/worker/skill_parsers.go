@@ -166,6 +166,7 @@ func (w *Worker) parsePackagesOutput(scan *db.Scan, report string, emit func(Eve
 		return err
 	}
 	emit(Event{Kind: KindText, Text: fmt.Sprintf("saved %d package(s)", len(rows))})
+	w.reconcileSubprojectLinksIfEnabled(scan.RepositoryID)
 	return nil
 }
 
@@ -225,6 +226,7 @@ func (w *Worker) parseAdvisoriesOutput(scan *db.Scan, report string, emit func(E
 		return err
 	}
 	emit(Event{Kind: KindText, Text: fmt.Sprintf("saved %d advisor(ies)", len(rows))})
+	w.reconcileSubprojectLinksIfEnabled(scan.RepositoryID)
 	return nil
 }
 
@@ -338,7 +340,15 @@ func (w *Worker) parseDependenciesOutput(scan *db.Scan, report string, emit func
 		})
 	}
 	// Replace the prior row set atomically so a failed insert can't leave
-	// the repository with zero dependencies.
+	// the repository with zero dependencies. This delete-and-replace assumes a
+	// whole-repository view: Dependency rows are repo-level (no SubprojectID), so
+	// a sub-path-scoped run that saw only one sub-package's manifests would wipe
+	// every sibling's rows. That view holds today because scanScopeHard keeps
+	// this skill whole-tree (repoWideProjectionKinds) and the git-pkgs script
+	// enumerates all of ./src rather than honouring scan_subpath. If this skill
+	// is ever made sub-path-aware, it must gain a per-subproject partition (or a
+	// scoped-run guard like parseMaintainersOutput's) before it can run scoped —
+	// otherwise a scoped run silently deletes the rest of the repo's dependencies.
 	if err := w.DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("repository_id = ?", scan.RepositoryID).Delete(&db.Dependency{}).Error; err != nil {
 			return fmt.Errorf("delete old dependencies: %w", err)
@@ -560,15 +570,52 @@ func (w *Worker) parseSubprojectsOutput(scan *db.Scan, report string, emit func(
 			Description:  sp.Description,
 		})
 	}
-	// Replace the prior row set atomically so a failed insert can't leave
-	// the repository with zero subprojects.
+	// Upsert keyed on (repository_id, path) so a surviving subproject keeps
+	// its id across re-runs — Package/Advisory.SubprojectID reference it, and
+	// a re-pointed link is cheaper to keep than to rebuild. Rows for paths the
+	// skill no longer reports are pruned; a later attribution reconcile moves
+	// any package/advisory that pointed at a pruned row back to repo-level.
+	// The whole set is rewritten in one transaction so a mid-way failure can't
+	// leave a half-updated projection.
 	if err := w.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("repository_id = ?", scan.RepositoryID).Delete(&db.Subproject{}).Error; err != nil {
-			return fmt.Errorf("delete old subprojects: %w", err)
+		keep := make([]string, 0, len(rows))
+		for i := range rows {
+			row := rows[i]
+			keep = append(keep, row.Path)
+			var existing db.Subproject
+			err := tx.Where("repository_id = ? AND path = ?", row.RepositoryID, row.Path).First(&existing).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				if err := tx.Create(&row).Error; err != nil {
+					return fmt.Errorf("create subproject: %w", err)
+				}
+				continue
+			}
+			if err != nil {
+				return fmt.Errorf("load subproject: %w", err)
+			}
+			// Update the skill-owned fields only; leave DisclosureChannel,
+			// which the attribution reconcile / maintainers skill owns.
+			existing.Name = row.Name
+			existing.Kind = row.Kind
+			existing.Description = row.Description
+			if err := tx.Save(&existing).Error; err != nil {
+				return fmt.Errorf("update subproject: %w", err)
+			}
 		}
-		if len(rows) > 0 {
-			if err := tx.CreateInBatches(&rows, insertBatchSize).Error; err != nil {
-				return fmt.Errorf("save subprojects: %w", err)
+		// Only a whole-repository run may prune. A sub-path-scoped run saw at
+		// most a fragment of the tree (a slipped hard scope, or a soft run the
+		// agent nonetheless narrowed), so its enumeration is not authoritative
+		// for the repo; pruning against it would delete every sibling's row.
+		// scanScopeHard already keeps subprojects whole-tree, so a scoped run
+		// reaching here means it was mis-scoped some other way — this backstop
+		// turns that into a harmless upsert-only pass instead of a table wipe.
+		if scan.SubPath == "" {
+			prune := tx.Where("repository_id = ?", scan.RepositoryID)
+			if len(keep) > 0 {
+				prune = prune.Where("path NOT IN ?", keep)
+			}
+			if err := prune.Delete(&db.Subproject{}).Error; err != nil {
+				return fmt.Errorf("prune subprojects: %w", err)
 			}
 		}
 		return nil
@@ -576,6 +623,7 @@ func (w *Worker) parseSubprojectsOutput(scan *db.Scan, report string, emit func(
 		return err
 	}
 	emit(Event{Kind: KindText, Text: fmt.Sprintf("saved %d subproject(s)", len(rows))})
+	w.reconcileSubprojectLinksIfEnabled(scan.RepositoryID)
 	return nil
 }
 
