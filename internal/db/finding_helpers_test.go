@@ -70,6 +70,100 @@ func TestSeverityAtLeast(t *testing.T) {
 	}
 }
 
+func TestValidDependentCampaignStatus(t *testing.T) {
+	for _, status := range append([]DependentCampaignStatus{""}, DependentCampaignStatuses...) {
+		if !ValidDependentCampaignStatus(status) {
+			t.Errorf("status %q should be valid", status)
+		}
+	}
+	if ValidDependentCampaignStatus("contacted") {
+		t.Error("unknown campaign status should be invalid")
+	}
+}
+
+func TestSetFindingDependentCampaign(t *testing.T) {
+	gdb := newTestDB(t)
+	finding := seedFinding(t, gdb)
+	dependent := Dependent{RepositoryID: finding.RepositoryID, Name: "consumer", PURL: "pkg:npm/consumer"}
+	if err := gdb.Create(&dependent).Error; err != nil {
+		t.Fatal(err)
+	}
+	exposureAt := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	row := FindingDependent{
+		FindingID:   finding.ID,
+		DependentID: dependent.ID,
+		Status:      ExposureKnownAffected,
+		Rationale:   "reachable",
+		UpdatedAt:   exposureAt,
+	}
+	if err := gdb.Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := SetFindingDependentCampaign(gdb, finding.ID, dependent.ID, CampaignNotified, "  opened issue #42  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CampaignStatus != CampaignNotified || got.CampaignNote != "opened issue #42" || got.CampaignUpdatedAt == nil {
+		t.Fatalf("campaign row = %+v", got)
+	}
+	firstCampaignUpdate := *got.CampaignUpdatedAt
+
+	var stored FindingDependent
+	if err := gdb.First(&stored, row.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !stored.UpdatedAt.Equal(exposureAt) {
+		t.Errorf("exposure UpdatedAt = %v, want %v", stored.UpdatedAt, exposureAt)
+	}
+
+	got, err = SetFindingDependentCampaign(gdb, finding.ID, dependent.ID, CampaignNotified, "opened issue #42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CampaignUpdatedAt == nil || !got.CampaignUpdatedAt.Equal(firstCampaignUpdate) {
+		t.Errorf("no-op changed CampaignUpdatedAt: got %v, want %v", got.CampaignUpdatedAt, firstCampaignUpdate)
+	}
+
+	if err := UpsertFindingDependent(gdb, FindingDependent{
+		FindingID:   finding.ID,
+		DependentID: dependent.ID,
+		Status:      ExposureFixed,
+		Rationale:   "fixed upstream",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gdb.First(&stored, row.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.CampaignStatus != CampaignNotified || stored.CampaignNote != "opened issue #42" {
+		t.Errorf("exposure upsert changed campaign fields: %+v", stored)
+	}
+
+	got, err = SetFindingDependentCampaign(gdb, finding.ID, dependent.ID, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CampaignStatus != "" || got.CampaignNote != "" || got.CampaignUpdatedAt != nil {
+		t.Errorf("cleared campaign row = %+v", got)
+	}
+}
+
+func TestSetFindingDependentCampaignRejectsInvalidInput(t *testing.T) {
+	gdb := newTestDB(t)
+	finding := seedFinding(t, gdb)
+
+	if _, err := SetFindingDependentCampaign(gdb, finding.ID, 99, "email-sent", ""); err == nil {
+		t.Fatal("expected invalid campaign status error")
+	}
+	if _, err := SetFindingDependentCampaign(gdb, finding.ID, 99, "", "note without status"); err == nil {
+		t.Fatal("expected note without status error")
+	}
+	if _, err := SetFindingDependentCampaign(gdb, finding.ID, 99, CampaignNotified, ""); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("missing pair error = %v, want record not found", err)
+	}
+}
+
 func TestWriteFindingField_logsHistory(t *testing.T) {
 	gdb := newTestDB(t)
 	f := seedFinding(t, gdb)

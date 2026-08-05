@@ -1009,6 +1009,35 @@ const (
 	ExposureFixed              = "fixed"
 )
 
+// DependentCampaignStatus is the operator-managed outreach state for one
+// finding/dependent pair. It is deliberately separate from exposure status:
+// whether a consumer is affected and whether it has answered a migration
+// campaign are independent facts.
+type DependentCampaignStatus string
+
+const (
+	CampaignNotified DependentCampaignStatus = "notified"
+	CampaignAcked    DependentCampaignStatus = "acked"
+	CampaignMigrated DependentCampaignStatus = "migrated"
+	CampaignDeclined DependentCampaignStatus = "declined"
+	CampaignSilent   DependentCampaignStatus = "silent"
+)
+
+// DependentCampaignStatuses lists campaign states in workflow order.
+var DependentCampaignStatuses = []DependentCampaignStatus{
+	CampaignNotified, CampaignAcked, CampaignMigrated, CampaignDeclined, CampaignSilent,
+}
+
+// ValidDependentCampaignStatus reports whether status is a campaign state
+// the database accepts. Empty clears campaign tracking for the pair.
+func ValidDependentCampaignStatus(status DependentCampaignStatus) bool {
+	switch status {
+	case "", CampaignNotified, CampaignAcked, CampaignMigrated, CampaignDeclined, CampaignSilent:
+		return true
+	}
+	return false
+}
+
 // CSAF 2.0 VEX flag labels. Only valid when Status is known_not_affected.
 const (
 	JustifComponentNotPresent        = "component_not_present"
@@ -1062,6 +1091,10 @@ type FindingDependent struct {
 
 	ScanID     *uint
 	ScanCommit string
+
+	CampaignStatus    DependentCampaignStatus `gorm:"index"`
+	CampaignNote      string                  `gorm:"type:text"`
+	CampaignUpdatedAt *time.Time
 
 	CreatedAt time.Time
 	UpdatedAt time.Time

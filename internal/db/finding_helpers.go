@@ -117,6 +117,60 @@ func EnsureFindingDependent(gdb *gorm.DB, row FindingDependent) error {
 	}).Create(&row).Error
 }
 
+// SetFindingDependentCampaign records the analyst-managed migration outreach
+// state for one finding/dependent pair. UpdateColumns intentionally leaves the
+// row's UpdatedAt untouched: that timestamp describes the exposure verdict,
+// while CampaignUpdatedAt tracks this independent workflow.
+func SetFindingDependentCampaign(
+	gdb *gorm.DB,
+	findingID, dependentID uint,
+	status DependentCampaignStatus,
+	note string,
+) (FindingDependent, error) {
+	note = strings.TrimSpace(note)
+	if !ValidDependentCampaignStatus(status) {
+		return FindingDependent{}, fmt.Errorf("invalid dependent campaign status %q", status)
+	}
+	if status == "" && note != "" {
+		return FindingDependent{}, errors.New("dependent campaign status is required when a note is set")
+	}
+
+	var row FindingDependent
+	err := gdb.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("finding_id = ? AND dependent_id = ?", findingID, dependentID).
+			First(&row).Error; err != nil {
+			return err
+		}
+		if row.CampaignStatus == status && row.CampaignNote == note {
+			return nil
+		}
+
+		updates := map[string]any{
+			"campaign_status": status,
+			"campaign_note":   note,
+		}
+		if status == "" {
+			updates["campaign_updated_at"] = nil
+			row.CampaignUpdatedAt = nil
+		} else {
+			now := time.Now().UTC()
+			updates["campaign_updated_at"] = now
+			row.CampaignUpdatedAt = &now
+		}
+		if err := tx.Model(&FindingDependent{}).Where("id = ?", row.ID).
+			UpdateColumns(updates).Error; err != nil {
+			return err
+		}
+		row.CampaignStatus = status
+		row.CampaignNote = note
+		return nil
+	})
+	if err != nil {
+		return FindingDependent{}, err
+	}
+	return row, nil
+}
+
 // WriteFindingTimeField is the time.Time twin of WriteFindingField for
 // timestamp columns the analyst (or a skill) can set. The closed set
 // of writable timestamp columns lives in findingTimeFieldAccessor, so

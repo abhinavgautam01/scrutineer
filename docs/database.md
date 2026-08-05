@@ -77,8 +77,8 @@ change history for findings. `payload` is JSON stored portably as text.
 ## package_alternatives
 
 Operator-curated migration targets for repositories classified as abandoned or
-zombie. Later #12 migration-guide and campaign tracking work can join on this
-table instead of reparsing notes or reports.
+zombie. The finding migration guide and dependent campaign tracking join on
+this table instead of reparsing notes or reports.
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -419,6 +419,9 @@ One row per (finding, dependent) pair the `exposure` skill has audited. Status m
 | rationale | text | One-paragraph explanation written by the skill, rendered in the finding page's per-dependent table. |
 | scan_id | integer FK | Exposure scan that wrote this row. |
 | scan_commit | text | HEAD of the dependent's clone when the verdict was made; lets the operator tell whether a later rescan would still apply. |
+| campaign_status | text | Operator-managed migration outreach state: `notified`, `acked`, `migrated`, `declined`, or `silent`. Empty means outreach has not started. |
+| campaign_note | text | Operator note about the downstream migration conversation or outcome. |
+| campaign_updated_at | datetime | When campaign status or note last changed. Null until outreach is recorded. |
 | created_at | datetime | |
 | updated_at | datetime | |
 
