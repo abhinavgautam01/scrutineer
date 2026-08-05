@@ -190,10 +190,7 @@ func refreshEcosystems(ctx context.Context, gdb *gorm.DB, repoID uint, staleOnly
 			log.Warn("ecosystems fetch failed", "repo", repoID, "source", src.key, "err", err)
 			continue
 		}
-		if err := gdb.Model(&db.Repository{}).Where("id = ?", repoID).Updates(map[string]any{
-			src.dataColumn: string(body),
-			src.fetchedCol: now,
-		}).Error; err != nil {
+		if err := cacheEcosystemsSource(gdb, repoID, src, body, now); err != nil {
 			log.Warn("ecosystems cache write failed", "repo", repoID, "source", src.key, "err", err)
 			continue
 		}
@@ -204,6 +201,50 @@ func refreshEcosystems(ctx context.Context, gdb *gorm.DB, repoID uint, staleOnly
 		}
 	}
 	return nil
+}
+
+func cacheEcosystemsSource(gdb *gorm.DB, repoID uint, src ecosystemsSource, body []byte, observedAt time.Time) error {
+	writeCache := func(tx *gorm.DB) error {
+		return tx.Model(&db.Repository{}).Where("id = ?", repoID).Updates(map[string]any{
+			src.dataColumn: string(body),
+			src.fetchedCol: observedAt,
+		}).Error
+	}
+	if src.key != "packages" {
+		return writeCache(gdb)
+	}
+
+	dependentRepos, err := maxPackageDependentRepos(body)
+	if err != nil {
+		return err
+	}
+	return gdb.Transaction(func(tx *gorm.DB) error {
+		if err := writeCache(tx); err != nil {
+			return err
+		}
+		return tx.Create(&db.DependentCountSnapshot{
+			RepositoryID:   repoID,
+			DependentRepos: dependentRepos,
+			ObservedAt:     observedAt,
+		}).Error
+	})
+}
+
+func maxPackageDependentRepos(body []byte) (int, error) {
+	var packages []struct {
+		DependentRepos int `json:"dependent_repos_count"`
+	}
+	if err := json.Unmarshal(body, &packages); err != nil {
+		return 0, fmt.Errorf("parse packages dependent counts: %w", err)
+	}
+	maxCount := 0
+	for _, pkg := range packages {
+		if pkg.DependentRepos < 0 {
+			return 0, fmt.Errorf("parse packages dependent counts: negative dependent_repos_count %d", pkg.DependentRepos)
+		}
+		maxCount = max(maxCount, pkg.DependentRepos)
+	}
+	return maxCount, nil
 }
 
 // unreachable reports whether err means the host could not be reached at all:

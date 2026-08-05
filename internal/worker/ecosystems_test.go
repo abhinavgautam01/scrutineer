@@ -29,7 +29,7 @@ func newFakeEcosystemsFetcher() *fakeEcosystemsFetcher {
 	return &fakeEcosystemsFetcher{
 		payloads: map[string][]byte{
 			"repo":       []byte(`{"full_name":"acme/widget","stars":10}`),
-			"packages":   []byte(`[{"name":"widget","ecosystem":"npm"},{"name":"acme","ecosystem":"npm"}]`),
+			"packages":   []byte(`[{"name":"widget","ecosystem":"npm","dependent_repos_count":12},{"name":"acme","ecosystem":"npm","dependent_repos_count":34}]`),
 			"advisories": []byte(`[{"id":"GHSA-1"},{"id":"GHSA-2"}]`),
 			"commits":    []byte(`{"commits":[{"login":"alice"}]}`),
 			"issues":     []byte(`{"issues":[{"login":"bob"}]}`),
@@ -150,6 +150,87 @@ func TestRefreshEcosystems_populatesAllSources(t *testing.T) {
 	gdb.Where("repository_id = ?", repo.ID).Order("name").Find(&rows)
 	if len(rows) != 3 {
 		t.Fatalf("dependent rows = %+v, want 3", rows)
+	}
+	var snapshots []db.DependentCountSnapshot
+	gdb.Where("repository_id = ?", repo.ID).Find(&snapshots)
+	if len(snapshots) != 1 || snapshots[0].DependentRepos != 34 {
+		t.Fatalf("dependent count snapshots = %+v, want one snapshot with count 34", snapshots)
+	}
+	if got.EcosystemsPackagesFetchedAt == nil || !snapshots[0].ObservedAt.Equal(*got.EcosystemsPackagesFetchedAt) {
+		t.Errorf("snapshot observed_at = %v, packages fetched_at = %v", snapshots[0].ObservedAt, got.EcosystemsPackagesFetchedAt)
+	}
+}
+
+func TestRefreshEcosystems_recordsCountsOnlyWhenPackagesAreRefetched(t *testing.T) {
+	fetcher := newFakeEcosystemsFetcher()
+	gdb := openEcosystemsTestDB(t)
+	repo := db.Repository{URL: "https://github.com/acme/widget", Name: "widget"}
+	if err := gdb.Create(&repo).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := refreshEcosystems(context.Background(), gdb, repo.ID, false, slog.Default(), fetcher); err != nil {
+		t.Fatalf("initial refresh: %v", err)
+	}
+	if err := refreshEcosystems(context.Background(), gdb, repo.ID, true, slog.Default(), fetcher); err != nil {
+		t.Fatalf("fresh-cache pass: %v", err)
+	}
+	var snapshots []db.DependentCountSnapshot
+	if err := gdb.Where("repository_id = ?", repo.ID).Order("observed_at").Find(&snapshots).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 1 {
+		t.Fatalf("snapshots after fresh-cache pass = %+v, want one", snapshots)
+	}
+	if fetcher.hits["packages"] != 1 {
+		t.Fatalf("package fetches after fresh-cache pass = %d, want 1", fetcher.hits["packages"])
+	}
+
+	stale := time.Now().Add(-ttlPackages - time.Hour)
+	if err := gdb.Model(&db.Repository{}).Where("id = ?", repo.ID).
+		Update("ecosystems_packages_fetched_at", stale).Error; err != nil {
+		t.Fatal(err)
+	}
+	fetcher.payloads["packages"] = []byte(`[{"name":"widget","dependent_repos_count":55},{"name":"acme","dependent_repos_count":21}]`)
+	if err := refreshEcosystems(context.Background(), gdb, repo.ID, true, slog.Default(), fetcher); err != nil {
+		t.Fatalf("stale-cache pass: %v", err)
+	}
+	if err := gdb.Where("repository_id = ?", repo.ID).Order("observed_at").Find(&snapshots).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 2 || snapshots[0].DependentRepos != 34 || snapshots[1].DependentRepos != 55 {
+		t.Fatalf("snapshots after stale refresh = %+v, want counts [34 55]", snapshots)
+	}
+	if fetcher.hits["packages"] != 2 {
+		t.Errorf("package fetches after stale refresh = %d, want 2", fetcher.hits["packages"])
+	}
+}
+
+func TestRefreshEcosystems_doesNotCacheMalformedPackageCounts(t *testing.T) {
+	fetcher := newFakeEcosystemsFetcher()
+	fetcher.payloads["packages"] = []byte(`{"not":"an array"}`)
+	gdb := openEcosystemsTestDB(t)
+	repo := db.Repository{URL: "https://github.com/acme/widget", Name: "widget"}
+	if err := gdb.Create(&repo).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := refreshEcosystems(context.Background(), gdb, repo.ID, false, slog.Default(), fetcher); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	var got db.Repository
+	if err := gdb.First(&got, repo.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.EcosystemsPackagesData != "" || got.EcosystemsPackagesFetchedAt != nil {
+		t.Errorf("malformed packages payload was cached: data=%q fetched_at=%v", got.EcosystemsPackagesData, got.EcosystemsPackagesFetchedAt)
+	}
+	var count int64
+	if err := gdb.Model(&db.DependentCountSnapshot{}).Where("repository_id = ?", repo.ID).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Errorf("malformed packages payload recorded %d snapshots, want 0", count)
 	}
 }
 

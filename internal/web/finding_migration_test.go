@@ -52,6 +52,15 @@ func TestFindingShowMigrationGuideRendersAlternativesAndDependents(t *testing.T)
 	if err := s.DB.Create(&pkg).Error; err != nil {
 		t.Fatal(err)
 	}
+	for i, count := range []int{800, 1000, 1200} {
+		if err := s.DB.Create(&db.DependentCountSnapshot{
+			RepositoryID:   repo.ID,
+			DependentRepos: count,
+			ObservedAt:     time.Date(2026, time.January+time.Month(i), 1, 0, 0, 0, 0, time.UTC),
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
 	alt := db.PackageAlternative{
 		RepositoryID: repo.ID,
 		PURL:         "pkg:npm/zombie-next",
@@ -165,6 +174,11 @@ func TestFindingShowMigrationGuideRendersAlternativesAndDependents(t *testing.T)
 		"pkg:npm/zombie",
 		"pkg:npm/zombie-next",
 		"Maintained successor",
+		"Dependent reach over time",
+		"3 observations from 2026-01-01 to 2026-03-01",
+		"Latest: 1200 repos",
+		"Change: +400",
+		"Peak 1200",
 		"consumer reaches the vulnerable parser",
 		"issue opened with consumer",
 		`value="notified" selected`,
@@ -191,6 +205,48 @@ func TestFindingShowMigrationGuideRendersAlternativesAndDependents(t *testing.T)
 	}
 	if strings.Contains(guide, "fixed-consumer") {
 		t.Fatalf("fixed dependent should not be prioritized in migration guide:\n%s", guide)
+	}
+}
+
+func TestLoadDependentCountTrendKeepsLatestObservationsInChronologicalOrder(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://github.com/example/history", Name: "history"}
+	if err := s.DB.Create(&repo).Error; err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
+	for i := range dependentCountHistoryLimit + 2 {
+		if err := s.DB.Create(&db.DependentCountSnapshot{
+			RepositoryID:   repo.ID,
+			DependentRepos: i,
+			ObservedAt:     start.AddDate(0, i, 0),
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	trend, err := loadDependentCountTrend(s.DB, repo.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trend == nil {
+		t.Fatal("trend is nil")
+	}
+	if trend.SampleSize != dependentCountHistoryLimit {
+		t.Fatalf("sample size = %d, want %d", trend.SampleSize, dependentCountHistoryLimit)
+	}
+	if trend.Points[0].DependentRepos != 2 || trend.Latest != dependentCountHistoryLimit+1 {
+		t.Fatalf("trend endpoints = first %d latest %d, want 2 and %d", trend.Points[0].DependentRepos, trend.Latest, dependentCountHistoryLimit+1)
+	}
+	if len(trend.Segments) != dependentCountHistoryLimit-1 {
+		t.Errorf("segments = %d, want %d", len(trend.Segments), dependentCountHistoryLimit-1)
+	}
+	for i := 1; i < len(trend.Points); i++ {
+		if trend.Points[i].X <= trend.Points[i-1].X {
+			t.Fatalf("point %d x=%d does not follow point %d x=%d", i, trend.Points[i].X, i-1, trend.Points[i-1].X)
+		}
 	}
 }
 
