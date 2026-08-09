@@ -309,7 +309,7 @@ Append-only grading records produced by finding-scoped `verify` scans. The compl
 | finding_id | integer FK | References `findings.id`; cascade delete. Unique with `scan_id`. |
 | scan_id | integer | The verify scan that produced this record. Unique with `finding_id`. |
 | status | text | `confirmed`, `fixed`, `inconclusive`, `deferred`, or `not_attempted`. |
-| score | real, nullable | Fraction of the five rubric criteria that passed, from `0.0` to `1.0`. Null only for legacy pre-rubric verify reports. |
+| score | real, nullable | Fraction of the five rubric criteria that passed, from `0.0` to `1.0`. Null for legacy pre-rubric reports and reports that remain internally inconsistent after repair. |
 | report | text | Complete structured JSON report, including three attempts and per-criterion method, evidence, counterevidence, proof gap, and confidence. |
 | created_at | datetime | |
 

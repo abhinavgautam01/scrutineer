@@ -102,7 +102,7 @@
     <dt class="text-muted-foreground">Verification</dt>
     <dd>
       <a href="/scans/{{.ScanID}}" class="hover:underline">{{.Status}}</a>
-      {{if .HasScore}}<span class="badge-outline ml-1">{{.ScoreLabel}}</span>{{end}}
+      <span class="badge-outline ml-1">{{.ScoreLabel}}</span>
     </dd>
   </div>
   {{end}}
@@ -673,7 +673,7 @@ git commit -m "fix: {{$f.Title}}"</pre>
         <div class="flex items-center gap-2 text-sm mb-3">
           <a href="/scans/{{.ScanID}}" class="font-medium hover:underline">scan #{{.ScanID}}</a>
           <span class="badge-outline">{{.Status}}</span>
-          {{if .HasScore}}<span class="badge-outline">{{.ScoreLabel}}</span>{{end}}
+          <span class="badge-outline">{{.ScoreLabel}}</span>
           <span class="text-xs text-muted-foreground">{{.CreatedAt.Format "2006-01-02 15:04"}}</span>
         </div>
         {{if .HasRubric}}

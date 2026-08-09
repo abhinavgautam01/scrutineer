@@ -21,7 +21,10 @@ import (
 
 const insertBatchSize = 50
 
-const findingDedupSkill = "finding-dedup"
+const (
+	findingDedupSkill = "finding-dedup"
+	verifySkillName   = "verify"
+)
 
 type verifyOutput struct {
 	Status    string `json:"status"`
@@ -886,7 +889,7 @@ func (w *Worker) parseVerifyOutput(scan *db.Scan, report string, emit func(Event
 	if scan.FindingID == nil {
 		return fmt.Errorf("verify scan has no finding_id")
 	}
-	result, rubric, score, err := decodeVerifyOutput(report)
+	result, rubric, score, gradingError, err := decodeVerifyOutput(report)
 	if err != nil {
 		return err
 	}
@@ -894,11 +897,11 @@ func (w *Worker) parseVerifyOutput(scan *db.Scan, report string, emit func(Event
 	if err := w.DB.First(&f, *scan.FindingID).Error; err != nil {
 		return fmt.Errorf("load finding %d: %w", *scan.FindingID, err)
 	}
-	nextStatus, err := verifyNextStatus(f, scan, result)
+	nextStatus, err := verifyNextStatus(f, scan, result, gradingError)
 	if err != nil {
 		return err
 	}
-	note := verifyNote(result, rubric, score)
+	note := verifyNote(result, rubric, score, gradingError)
 	if err := w.recordVerifyOutput(scan, f, result.Status, report, note, score, nextStatus); err != nil {
 		return err
 	}
@@ -907,23 +910,29 @@ func (w *Worker) parseVerifyOutput(scan *db.Scan, report string, emit func(Event
 	return nil
 }
 
-func decodeVerifyOutput(report string) (verifyOutput, *verification.Report, *float64, error) {
+func decodeVerifyOutput(report string) (verifyOutput, *verification.Report, *float64, string, error) {
 	var result verifyOutput
 	if err := json.Unmarshal([]byte(report), &result); err != nil {
-		return verifyOutput{}, nil, nil, fmt.Errorf("parse verify report: %w", err)
+		return verifyOutput{}, nil, nil, "", fmt.Errorf("parse verify report: %w", err)
 	}
 	rubric, err := verification.Parse(report)
 	if errors.Is(err, verification.ErrMissingRubric) {
-		return result, nil, nil, nil
+		return result, nil, nil, "", nil
 	}
 	if err != nil {
-		return verifyOutput{}, nil, nil, fmt.Errorf("validate verify rubric: %w", err)
+		return result, nil, nil, err.Error(), nil
 	}
 	score := rubric.Score()
-	return result, &rubric, &score, nil
+	return result, &rubric, &score, "", nil
 }
 
-func verifyNextStatus(f db.Finding, scan *db.Scan, result verifyOutput) (db.FindingLifecycle, error) {
+func verifyNextStatus(f db.Finding, scan *db.Scan, result verifyOutput, gradingError string) (db.FindingLifecycle, error) {
+	if !verifyStatusValid(result.Status) {
+		return "", fmt.Errorf("verify status %q is not one of confirmed|fixed|inconclusive|deferred|not_attempted", result.Status)
+	}
+	if gradingError != "" {
+		return "", nil
+	}
 	switch result.Status {
 	case "confirmed":
 		if f.Status == db.FindingNew {
@@ -940,15 +949,25 @@ func verifyNextStatus(f db.Finding, scan *db.Scan, result verifyOutput) (db.Find
 		if result.Preflight.Classification == "" || strings.TrimSpace(result.Preflight.Justification) == "" {
 			return "", fmt.Errorf("verify status \"deferred\" requires preflight.classification and preflight.justification")
 		}
-	default:
-		return "", fmt.Errorf("verify status %q is not one of confirmed|fixed|inconclusive|deferred|not_attempted", result.Status)
 	}
 	return "", nil
 }
 
-func verifyNote(result verifyOutput, rubric *verification.Report, score *float64) string {
+func verifyStatusValid(status string) bool {
+	switch status {
+	case "confirmed", "fixed", "inconclusive", "deferred", "not_attempted":
+		return true
+	default:
+		return false
+	}
+}
+
+func verifyNote(result verifyOutput, rubric *verification.Report, score *float64, gradingError string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "verify: %s\n", result.Status)
+	if gradingError != "" {
+		fmt.Fprintf(&b, "grading: ungraded\nrubric validation: %s\n", gradingError)
+	}
 	if rubric != nil && score != nil {
 		fmt.Fprintf(&b, "score: %.2f\n", *score)
 		for _, named := range rubric.Criteria.List() {

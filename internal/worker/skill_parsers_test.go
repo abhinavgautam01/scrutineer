@@ -856,6 +856,30 @@ func TestParseVerify_isIdempotentPerScan(t *testing.T) {
 	}
 }
 
+func TestParseVerify_invalidRubricIsStoredUngraded(t *testing.T) {
+	report := strings.Replace(confirmedVerificationReport(t), `"number":2`, `"number":1`, 1)
+	f, gdb := runSkillWithFinding(t, "verify", report, db.FindingNew)
+	if f.Status != db.FindingNew {
+		t.Fatalf("status = %s, want new: an ungraded report must not change lifecycle", f.Status)
+	}
+	var row db.FindingVerification
+	if err := gdb.Where("finding_id = ?", f.ID).First(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if row.Status != "confirmed" || row.Score != nil || row.Report != report {
+		t.Fatalf("ungraded verification = %+v", row)
+	}
+	notes := findingNotes(gdb, f.ID)
+	if len(notes) != 1 {
+		t.Fatalf("verify notes = %d, want 1", len(notes))
+	}
+	for _, want := range []string{"grading: ungraded", "not unique", "3/3 attempts reached parser.go:42"} {
+		if !strings.Contains(notes[0].Body, want) {
+			t.Errorf("ungraded note missing %q: %s", want, notes[0].Body)
+		}
+	}
+}
+
 func TestParseVerify_legacyReportGetsUnscoredRecord(t *testing.T) {
 	f, gdb := runSkillWithFinding(t, "verify", `{"status":"inconclusive","notes":"old queued scan"}`, db.FindingNew)
 	var row db.FindingVerification

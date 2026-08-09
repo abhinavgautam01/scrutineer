@@ -1616,7 +1616,7 @@ components:
         id:         { type: integer, format: int64 }
         scan_id:    { type: integer, format: int64 }
         status:     { type: string, enum: [confirmed, fixed, inconclusive, deferred, not_attempted] }
-        score:      { type: number, format: double, minimum: 0, maximum: 1, nullable: true, description: "Fraction of the five fixed verification criteria that passed. Null for legacy pre-rubric reports." }
+        score:      { type: number, format: double, minimum: 0, maximum: 1, nullable: true, description: "Fraction of the five fixed verification criteria that passed. Null for legacy reports and reports that remain internally inconsistent after repair." }
         report:     { $ref: '#/components/schemas/VerificationReport' }
         created_at: { type: string, format: date-time }
 

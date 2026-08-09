@@ -120,4 +120,4 @@ Write `./report.json` matching `./schema.json`. Example:
 }
 ```
 
-Scrutineer computes the score from passed criteria; do not emit a score. It stores the complete report as an append-only verification record keyed to this finding and scan, while preserving the existing lifecycle behavior: `confirmed` moves `new` to `enriched`, `fixed` on the default branch moves the finding to `fixed`, and all other statuses leave it unchanged.
+Scrutineer computes the score from passed criteria; do not emit a score. It stores the complete report as an append-only verification record keyed to this finding and scan, while preserving the existing lifecycle behavior: `confirmed` moves `new` to `enriched`, `fixed` on the default branch moves the finding to `fixed`, and all other statuses leave it unchanged. If the report remains internally inconsistent after Scrutineer's repair attempt, the evidence is retained as `ungraded` with no score and cannot change the finding lifecycle.

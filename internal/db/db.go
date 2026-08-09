@@ -1161,7 +1161,8 @@ type FindingReview struct {
 // FindingVerification is one immutable grading record produced by a
 // finding-scoped verify scan. Report preserves the complete structured rubric;
 // Status and Score are promoted for cheap display and filtering. Score is nil
-// for reports produced by the legacy, pre-rubric verify skill.
+// for legacy reports and rubric reports that remain internally inconsistent
+// after the repair attempt.
 type FindingVerification struct {
 	ID        uint   `gorm:"primarykey"`
 	FindingID uint   `gorm:"index;not null;uniqueIndex:idx_finding_verification_scan,priority:1"`

@@ -16,7 +16,6 @@ const verificationPercentScale = 100
 type findingVerificationView struct {
 	db.FindingVerification
 	ScoreLabel string
-	HasScore   bool
 	HasRubric  bool
 	Criteria   []verification.NamedCriterion
 	Attempts   []verification.Attempt
@@ -29,9 +28,8 @@ func loadFindingVerificationViews(gdb *gorm.DB, findingID uint) ([]findingVerifi
 	}
 	views := make([]findingVerificationView, 0, len(rows))
 	for _, row := range rows {
-		view := findingVerificationView{FindingVerification: row}
+		view := findingVerificationView{FindingVerification: row, ScoreLabel: "ungraded"}
 		if row.Score != nil {
-			view.HasScore = true
 			view.ScoreLabel = fmt.Sprintf("%.0f%%", *row.Score*verificationPercentScale)
 		}
 		report, err := verification.Parse(row.Report)
