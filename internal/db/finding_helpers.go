@@ -485,6 +485,20 @@ func AddFindingNote(gdb *gorm.DB, findingID uint, body, by string) (*FindingNote
 	return n, nil
 }
 
+// LatestFindingVerification returns the newest append-only verification row.
+// A missing row is normal for findings that have not reached verification.
+func LatestFindingVerification(gdb *gorm.DB, findingID uint) (*FindingVerification, error) {
+	var row FindingVerification
+	result := gdb.Where("finding_id = ?", findingID).Order("id desc").Limit(1).Find(&row)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, nil
+	}
+	return &row, nil
+}
+
 // AddFindingCommunication records one external interaction.
 func AddFindingCommunication(gdb *gorm.DB, findingID uint, channel, direction, actor, body, offeredHelp string, at time.Time) (*FindingCommunication, error) {
 	if at.IsZero() {

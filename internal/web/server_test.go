@@ -1494,6 +1494,37 @@ func TestFindingShow_rendersMissedCount(t *testing.T) {
 	}
 }
 
+func TestFindingShow_rendersLatestVerificationScore(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://example.com/r", Name: "r"}
+	s.DB.Create(&repo)
+	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: "security-deep-dive"}
+	s.DB.Create(&scan)
+	finding := db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "graded", Severity: "High", Status: db.FindingEnriched}
+	s.DB.Create(&finding)
+	verifyScan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: verifySkillName, FindingID: new(finding.ID)}
+	s.DB.Create(&verifyScan)
+	score := 1.0
+	s.DB.Create(&db.FindingVerification{
+		FindingID: finding.ID, ScanID: verifyScan.ID, Status: "confirmed", Score: &score,
+		Report: `{"status":"confirmed","attempts":[{"number":1,"outcome":"reproduced","evidence":"same panic","failure_class":"panic","crash_site":"parser.go:42"},{"number":2,"outcome":"reproduced","evidence":"same panic","failure_class":"panic","crash_site":"parser.go:42"},{"number":3,"outcome":"reproduced","evidence":"same panic","failure_class":"panic","crash_site":"parser.go:42"}],"criteria":{"poc_well_formed":{"verdict":"pass","method":"run","evidence":"parsed","counterevidence":"","proof_gap":"","confidence":"high"},"reproduces_three_of_three":{"verdict":"pass","method":"run three times","evidence":"3/3","counterevidence":"","proof_gap":"","confidence":"high"},"claimed_failure_class":{"verdict":"pass","method":"trace","evidence":"panic","counterevidence":"","proof_gap":"","confidence":"high"},"public_interface_to_first_party_sink":{"verdict":"pass","method":"stack","evidence":"public API to parser.go","counterevidence":"","proof_gap":"","confidence":"high"},"deterministic":{"verdict":"pass","method":"compare","evidence":"same site","counterevidence":"","proof_gap":"","confidence":"high"}}}`,
+	})
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", fmt.Sprintf("/findings/%d", finding.ID)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, want := range []string{"Verification history", "confirmed", "100%", "PoC well formed", "#1", "same panic", fmt.Sprintf("scan #%d", verifyScan.ID)} {
+		if !strings.Contains(body, want) {
+			t.Errorf("finding page missing %q", want)
+		}
+	}
+}
+
 func TestFindingShow_disablesVerifyActionWhenVerifyInFlight(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()

@@ -400,6 +400,12 @@ func TestAPIFindingReadsAndFilters(t *testing.T) {
 	if fid == nil {
 		t.Fatalf("severity=High response did not include F1: %+v", findings)
 	}
+	findingID := uint(fid.(float64))
+	score := 0.8
+	s.DB.Create(&db.FindingVerification{
+		FindingID: findingID, ScanID: scan.ID, Status: "inconclusive", Score: &score,
+		Report: `{"status":"inconclusive","notes":"flaky"}`,
+	})
 	r := httptest.NewRequest("GET", "/api/findings/"+toString(fid), nil)
 	r.Host = testHost
 	r.Header.Set("Authorization", "Bearer "+scan.APIToken)
@@ -423,6 +429,10 @@ func TestAPIFindingReadsAndFilters(t *testing.T) {
 	}
 	if detail["sub_path"] != "services/api" {
 		t.Errorf("finding detail missing sub_path: %+v", detail)
+	}
+	verification, ok := detail["verification"].(map[string]any)
+	if !ok || verification["status"] != "inconclusive" || verification["score"] != 0.8 {
+		t.Errorf("finding detail missing latest verification: %+v", detail["verification"])
 	}
 }
 

@@ -2,13 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "verify report",
   "type": "object",
-  "required": ["status"],
+  "required": ["status", "attempts", "criteria"],
   "additionalProperties": false,
   "properties": {
     "status": {
       "type": "string",
-      "enum": ["confirmed", "fixed", "inconclusive", "deferred"],
-      "description": "confirmed = the finding still reproduces. fixed = the original reproduction no longer triggers (upstream fix applied between original scan and this run). inconclusive = could not run the reproduction; explain why in notes. deferred = the reproduction was not run because preflight classified it EXTERNAL-REACH; a human must run it in an environment with a callback listener."
+      "enum": ["confirmed", "fixed", "inconclusive", "deferred", "not_attempted"]
     },
     "preflight": {
       "type": "object",
@@ -16,33 +15,167 @@
       "properties": {
         "classification": {
           "type": "string",
-          "enum": ["local-safe", "external-reach"],
-          "description": "local-safe = trigger uses only stdin/file input or connects only to loopback / a server the reproduction itself starts on loopback, and writes only under the workspace or OS temp. external-reach = resolves or connects to any other host, reads a credential file or credential env var, or writes outside the workspace and temp."
+          "enum": ["local-safe", "external-reach"]
         },
         "justification": {
           "type": "string",
-          "description": "The exact lines from the reproduction that decided the classification, quoted verbatim."
+          "minLength": 1
         }
       },
       "required": ["classification", "justification"]
     },
+    "attempts": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": { "$ref": "#/$defs/attempt" }
+    },
+    "criteria": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "poc_well_formed",
+        "reproduces_three_of_three",
+        "claimed_failure_class",
+        "public_interface_to_first_party_sink",
+        "deterministic"
+      ],
+      "properties": {
+        "poc_well_formed": { "$ref": "#/$defs/criterion" },
+        "reproduces_three_of_three": { "$ref": "#/$defs/criterion" },
+        "claimed_failure_class": { "$ref": "#/$defs/criterion" },
+        "public_interface_to_first_party_sink": { "$ref": "#/$defs/criterion" },
+        "deterministic": { "$ref": "#/$defs/criterion" }
+      }
+    },
     "reproducer": {
       "type": "string",
-      "description": "The exact reproduction you ran, verbatim: the full script, command line, or input you executed against ./src — not a description of it. This is what makes the evidence interpretable; without it the output below is meaningless. Include the language/runner so the analyst can re-run it (e.g. the .rb/.py file contents, or the shell commands)."
+      "description": "The exact reproduction run against ./src: script, commands, and crafted input, verbatim."
     },
     "evidence": {
       "type": "string",
-      "description": "The output produced by running the reproducer above: stdout, stderr, exit code, failing assertion, diff of behaviour. Paste the relevant excerpts, not a summary."
+      "description": "Relevant stdout, stderr, exit codes, traces, and observed behavior across the attempts."
     },
     "notes": {
-      "type": "string",
-      "description": "Short prose explaining what changed since the original scan, or why the reproduction was inconclusive or deferred. When status is inconclusive because a runtime is missing, prefix with 'env-blocked:' so the operator knows to fix the container profile rather than re-read the finding."
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["number", "outcome", "evidence", "failure_class", "crash_site"],
+      "properties": {
+        "number": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "outcome": {
+          "type": "string",
+          "enum": ["reproduced", "not_reproduced", "not_attempted"]
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Attempt-specific output, or the concrete reason this attempt could not start."
+        },
+        "failure_class": {
+          "type": "string",
+          "description": "Observed failure class; empty when no target failure occurred."
+        },
+        "crash_site": {
+          "type": "string",
+          "description": "First-party crash/sink site; empty when it could not be established."
+        }
+      }
+    },
+    "criterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "method", "evidence", "counterevidence", "proof_gap", "confidence"],
+      "properties": {
+        "verdict": {
+          "type": "string",
+          "enum": ["pass", "fail", "not_attempted"]
+        },
+        "method": { "type": "string", "minLength": 1 },
+        "evidence": { "type": "string", "minLength": 1 },
+        "counterevidence": { "type": "string" },
+        "proof_gap": { "type": "string" },
+        "confidence": {
+          "type": "string",
+          "enum": ["high", "medium", "low"]
+        }
+      }
+    },
+    "notAttemptedCriteria": {
+      "type": "object",
+      "properties": {
+        "poc_well_formed": { "properties": { "verdict": { "const": "not_attempted" } } },
+        "reproduces_three_of_three": { "properties": { "verdict": { "const": "not_attempted" } } },
+        "claimed_failure_class": { "properties": { "verdict": { "const": "not_attempted" } } },
+        "public_interface_to_first_party_sink": { "properties": { "verdict": { "const": "not_attempted" } } },
+        "deterministic": { "properties": { "verdict": { "const": "not_attempted" } } }
+      }
     }
   },
   "allOf": [
     {
-      "if": { "properties": { "status": { "const": "deferred" } } },
-      "then": { "required": ["preflight"] }
+      "if": { "properties": { "status": { "const": "deferred" } }, "required": ["status"] },
+      "then": {
+        "required": ["preflight"],
+        "properties": {
+          "preflight": {
+            "properties": { "classification": { "const": "external-reach" } }
+          },
+          "attempts": {
+            "items": { "properties": { "outcome": { "const": "not_attempted" } } }
+          },
+          "criteria": { "$ref": "#/$defs/notAttemptedCriteria" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "not_attempted" } }, "required": ["status"] },
+      "then": {
+        "properties": {
+          "attempts": {
+            "items": { "properties": { "outcome": { "const": "not_attempted" } } }
+          },
+          "criteria": { "$ref": "#/$defs/notAttemptedCriteria" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "confirmed" } }, "required": ["status"] },
+      "then": {
+        "properties": {
+          "attempts": {
+            "items": { "properties": { "outcome": { "const": "reproduced" } } }
+          },
+          "criteria": {
+            "properties": {
+              "poc_well_formed": { "properties": { "verdict": { "const": "pass" } } },
+              "reproduces_three_of_three": { "properties": { "verdict": { "const": "pass" } } },
+              "claimed_failure_class": { "properties": { "verdict": { "const": "pass" } } },
+              "public_interface_to_first_party_sink": { "properties": { "verdict": { "const": "pass" } } },
+              "deterministic": { "properties": { "verdict": { "const": "pass" } } }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "fixed" } }, "required": ["status"] },
+      "then": {
+        "properties": {
+          "attempts": {
+            "items": { "properties": { "outcome": { "const": "not_reproduced" } } }
+          },
+          "criteria": {
+            "properties": {
+              "reproduces_three_of_three": { "properties": { "verdict": { "const": "fail" } } }
+            }
+          }
+        }
+      }
     }
   ]
 }

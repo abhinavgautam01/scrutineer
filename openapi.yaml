@@ -1604,6 +1604,35 @@ components:
             disclosure_draft: { type: string }
             suggested_recipients: { type: string, description: "File-level owners for the finding's location, from CODEOWNERS or recent non-bot committers." }
             sub_path:         { type: string, description: "Monorepo sub-folder the producing scan was scoped to. The finding's location is relative to it; empty means the repo root." }
+            verification:
+              allOf:
+                - $ref: '#/components/schemas/FindingVerification'
+              nullable: true
+
+    FindingVerification:
+      type: object
+      required: [id, scan_id, status, report, created_at]
+      properties:
+        id:         { type: integer, format: int64 }
+        scan_id:    { type: integer, format: int64 }
+        status:     { type: string, enum: [confirmed, fixed, inconclusive, deferred, not_attempted] }
+        score:      { type: number, format: double, minimum: 0, maximum: 1, nullable: true, description: "Fraction of the five fixed verification criteria that passed. Null for legacy pre-rubric reports." }
+        report:     { $ref: '#/components/schemas/VerificationReport' }
+        created_at: { type: string, format: date-time }
+
+    VerificationReport:
+      type: object
+      description: "Immutable verify output containing three attempt records and the five fixed grading criteria. See skills/verify/schema.json for the complete contract."
+      required: [status]
+      additionalProperties: true
+      properties:
+        status: { type: string, enum: [confirmed, fixed, inconclusive, deferred, not_attempted] }
+        attempts:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items: { type: object, additionalProperties: true }
+        criteria: { type: object, additionalProperties: true }
 
     FindingExport:
       description: |
