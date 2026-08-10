@@ -2,7 +2,6 @@ package web
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"gorm.io/gorm"
@@ -29,16 +28,14 @@ func loadFindingVerificationViews(gdb *gorm.DB, findingID uint) ([]findingVerifi
 	views := make([]findingVerificationView, 0, len(rows))
 	for _, row := range rows {
 		view := findingVerificationView{FindingVerification: row, ScoreLabel: "ungraded"}
-		if row.Score != nil {
-			view.ScoreLabel = fmt.Sprintf("%.0f%%", *row.Score*verificationPercentScale)
-		}
 		report, err := verification.Parse(row.Report)
 		if err == nil {
 			view.HasRubric = true
 			view.Criteria = report.Criteria.List()
 			view.Attempts = report.Attempts
-		} else if !errors.Is(err, verification.ErrMissingRubric) {
-			return nil, fmt.Errorf("parse verification %d: %w", row.ID, err)
+			if row.Score != nil {
+				view.ScoreLabel = fmt.Sprintf("%.0f%%", *row.Score*verificationPercentScale)
+			}
 		}
 		views = append(views, view)
 	}

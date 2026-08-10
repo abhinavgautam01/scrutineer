@@ -37,7 +37,7 @@ Before execution, inspect every command, script, and input named by `validation`
 - `local-safe`: uses stdin or file input, or connects only to loopback, a Unix socket, or a server the reproduction starts on loopback; writes only below the workspace or OS temp.
 - `external-reach`: resolves or connects to any other host; reads credential files or credential environment variables; or writes outside the workspace and OS temp.
 
-Record the classification and exact deciding lines in `preflight`. For `external-reach`, do not execute the PoC. Emit `status: deferred`, three `not_attempted` attempts, and five `not_attempted` criteria. The evidence must name the prohibited operation; do not score an egress-policy block as a failed reproduction.
+Record the classification and quote the exact lines from the reproduction that decided it in `preflight.justification`. For `external-reach`, do not execute the PoC. Emit `status: deferred`, three `not_attempted` attempts, and five `not_attempted` criteria. The evidence must name the prohibited operation; do not score an egress-policy block as a failed reproduction.
 
 ## Establish the entry point and sink
 

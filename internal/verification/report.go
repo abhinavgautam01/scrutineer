@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 )
 
 const (
@@ -86,89 +85,18 @@ func Parse(raw string) (Report, error) {
 	return report, nil
 }
 
-// Validate enforces the cross-field invariants JSON Schema cannot express,
-// such as unique attempt numbers and a confirmed verdict requiring 3/3 runs.
+// Validate enforces attempt-number uniqueness, which JSON Schema cannot
+// express. Structural and status-consistency rules live in schema.json.
 func (r Report) Validate() error {
-	if !validStatus(r.Status) {
-		return fmt.Errorf("status %q is not valid", r.Status)
-	}
 	if r.Criteria == nil {
 		return ErrMissingRubric
 	}
-	if err := validateAttempts(r.Attempts); err != nil {
-		return err
-	}
-	for _, named := range r.Criteria.List() {
-		if err := validateCriterion(named.Name, named.Criterion); err != nil {
-			return err
-		}
-	}
-	return validateStatusConsistency(r)
-}
-
-func validateAttempts(attempts []Attempt) error {
-	if len(attempts) != attemptCount {
-		return fmt.Errorf("attempts has %d entries, want %d", len(attempts), attemptCount)
-	}
 	seen := make(map[int]bool, attemptCount)
-	for i, attempt := range attempts {
-		if attempt.Number < 1 || attempt.Number > attemptCount || seen[attempt.Number] {
+	for i, attempt := range r.Attempts {
+		if seen[attempt.Number] {
 			return fmt.Errorf("attempts[%d].number %d is not unique in 1..%d", i, attempt.Number, attemptCount)
 		}
 		seen[attempt.Number] = true
-		if !oneOf(attempt.Outcome, "reproduced", "not_reproduced", "not_attempted") {
-			return fmt.Errorf("attempts[%d].outcome %q is not valid", i, attempt.Outcome)
-		}
-		if strings.TrimSpace(attempt.Evidence) == "" {
-			return fmt.Errorf("attempts[%d].evidence is empty", i)
-		}
-	}
-	return nil
-}
-
-func validateStatusConsistency(r Report) error {
-	switch r.Status {
-	case "confirmed":
-		if err := requireAttemptOutcome(r.Attempts, "reproduced", "confirmed"); err != nil {
-			return err
-		}
-		return requireCriterionVerdict(r.Criteria.List(), "pass", "confirmed")
-	case "fixed":
-		if err := requireAttemptOutcome(r.Attempts, "not_reproduced", "fixed"); err != nil {
-			return err
-		}
-		if r.Criteria.ReproducesThreeOfThree.Verdict != "fail" {
-			return errors.New("fixed verification requires the reproduction criterion to fail")
-		}
-	case "deferred", "not_attempted":
-		if err := requireAttemptOutcome(r.Attempts, "not_attempted", r.Status); err != nil {
-			return err
-		}
-		if err := requireCriterionVerdict(r.Criteria.List(), "not_attempted", r.Status); err != nil {
-			return err
-		}
-	}
-	if r.Status == "deferred" && (r.Preflight == nil ||
-		r.Preflight.Classification != "external-reach" || strings.TrimSpace(r.Preflight.Justification) == "") {
-		return errors.New("deferred verification requires external-reach preflight evidence")
-	}
-	return nil
-}
-
-func requireAttemptOutcome(attempts []Attempt, outcome, status string) error {
-	for _, attempt := range attempts {
-		if attempt.Outcome != outcome {
-			return fmt.Errorf("%s verification requires all attempts to be %s", status, outcome)
-		}
-	}
-	return nil
-}
-
-func requireCriterionVerdict(criteria []NamedCriterion, verdict, status string) error {
-	for _, named := range criteria {
-		if named.Criterion.Verdict != verdict {
-			return fmt.Errorf("%s verification requires %s to be %s", status, named.Name, verdict)
-		}
 	}
 	return nil
 }
@@ -193,33 +121,4 @@ func (c Criteria) List() []NamedCriterion {
 		{Name: "Public interface to first-party sink", Criterion: c.PublicInterfaceToFirstPartySink},
 		{Name: "Deterministic", Criterion: c.Deterministic},
 	}
-}
-
-func validateCriterion(name string, criterion Criterion) error {
-	if !oneOf(criterion.Verdict, "pass", "fail", "not_attempted") {
-		return fmt.Errorf("criterion %q verdict %q is not valid", name, criterion.Verdict)
-	}
-	if strings.TrimSpace(criterion.Method) == "" {
-		return fmt.Errorf("criterion %q method is empty", name)
-	}
-	if strings.TrimSpace(criterion.Evidence) == "" {
-		return fmt.Errorf("criterion %q evidence is empty", name)
-	}
-	if !oneOf(criterion.Confidence, "high", "medium", "low") {
-		return fmt.Errorf("criterion %q confidence %q is not valid", name, criterion.Confidence)
-	}
-	return nil
-}
-
-func validStatus(status string) bool {
-	return oneOf(status, "confirmed", "fixed", "inconclusive", "deferred", "not_attempted")
-}
-
-func oneOf(value string, allowed ...string) bool {
-	for _, candidate := range allowed {
-		if value == candidate {
-			return true
-		}
-	}
-	return false
 }

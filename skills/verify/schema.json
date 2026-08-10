@@ -7,7 +7,8 @@
   "properties": {
     "status": {
       "type": "string",
-      "enum": ["confirmed", "fixed", "inconclusive", "deferred", "not_attempted"]
+      "enum": ["confirmed", "fixed", "inconclusive", "deferred", "not_attempted"],
+      "description": "confirmed = all three attempts reproduce and all criteria pass; fixed = all three attempts reach current code without reproducing; inconclusive = execution leaves conflicting evidence; deferred = external-reach preflight prevents execution; not_attempted = setup never reaches the target."
     },
     "preflight": {
       "type": "object",
@@ -15,11 +16,14 @@
       "properties": {
         "classification": {
           "type": "string",
-          "enum": ["local-safe", "external-reach"]
+          "enum": ["local-safe", "external-reach"],
+          "description": "local-safe uses only local input, loopback and workspace/temp writes; external-reach contacts another host, reads credentials or writes outside those locations."
         },
         "justification": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "The exact lines from the reproduction that decided the classification, quoted verbatim."
         }
       },
       "required": ["classification", "justification"]
@@ -69,11 +73,13 @@
         "number": { "type": "integer", "minimum": 1, "maximum": 3 },
         "outcome": {
           "type": "string",
-          "enum": ["reproduced", "not_reproduced", "not_attempted"]
+          "enum": ["reproduced", "not_reproduced", "not_attempted"],
+          "description": "Whether this independent run reproduced the claimed failure, reached the target without it, or never reached the target."
         },
         "evidence": {
           "type": "string",
           "minLength": 1,
+          "pattern": "\\S",
           "description": "Attempt-specific output, or the concrete reason this attempt could not start."
         },
         "failure_class": {
@@ -95,13 +101,30 @@
           "type": "string",
           "enum": ["pass", "fail", "not_attempted"]
         },
-        "method": { "type": "string", "minLength": 1 },
-        "evidence": { "type": "string", "minLength": 1 },
-        "counterevidence": { "type": "string" },
-        "proof_gap": { "type": "string" },
+        "method": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "How this criterion was checked, such as executing the PoC, tracing the stack or inspecting callers."
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "Positive facts supporting this criterion's verdict."
+        },
+        "counterevidence": {
+          "type": "string",
+          "description": "Facts that weaken or contradict the verdict; empty only when none were found."
+        },
+        "proof_gap": {
+          "type": "string",
+          "description": "What could not be established and what evidence would resolve it; empty only when there is no gap."
+        },
         "confidence": {
           "type": "string",
-          "enum": ["high", "medium", "low"]
+          "enum": ["high", "medium", "low"],
+          "description": "Confidence in this criterion's verdict based on the recorded method and evidence."
         }
       }
     },
