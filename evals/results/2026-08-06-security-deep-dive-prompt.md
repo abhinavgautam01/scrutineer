@@ -21,10 +21,7 @@ injection assertions before another promotion decision.
 - Experiment: `security-deep-dive-prompt`
 - Variants: `production`, `reference-driven`
 
-The documented command reached Go's default 10-minute test timeout while its
-first model-backed scenario was still running. The timed-out Claude process
-group was terminated, and the experiment was restarted from fresh temporary
-workspaces with only the Go test deadline extended:
+The experiment was run with:
 
 ```sh
 SCRUTINEER_RUN_EVALS=1 \
