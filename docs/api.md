@@ -2,7 +2,7 @@
 
 Scrutineer's HTTP endpoints are split by caller and trust boundary. They are not one uniformly authenticated public API: running skills use short-lived scan tokens, host-side operator tools rely on the loopback boundary, and federation peers reach a separately deployed claim-check endpoint.
 
-The complete method, path, parameter, request, and response definitions are in the [OpenAPI document](../openapi.yaml). This page explains how callers reach those routes and which authentication rule applies.
+The complete method, path, parameter, request, and response definitions are in the [OpenAPI document](../openapi.yaml). See the [threat model](../threatmodel.md) for the DNS-rebinding, CSRF, runner, and federation threats these controls address. Developers adding a route should also read the [development guide](development.md#skill-http-api) and add the route to `openapi.yaml`; route coverage tests reject undocumented API handlers. This page explains how callers reach those routes and which authentication rule applies.
 
 ## Surfaces
 
@@ -40,11 +40,9 @@ The token is accepted only while its originating scan has status `running`. Repo
 
 The skill API lets an active skill read repository context and prior scan data, validate a report, enqueue repository- or finding-scoped skills, and update finding records. The exact routes and schemas are in [`openapi.yaml`](../openapi.yaml). See [Writing skills](skills.md#calling-scrutineer-from-a-skill) for the workspace-facing contract and examples of bundled skills that use it.
 
-Do not treat a scan token as a reusable operator credential. It expires when the scan stops running and is deliberately scoped to that scan's repository.
-
 ## Operator API: `/api/v1/*`
 
-The `/api/v1` surface is for commands running on the Scrutineer host. It does not accept or require a scan bearer token. Instead, it passes through the same security middleware as the browser UI and rejects a request whose `Host` is not `127.0.0.1`, `localhost`, or `::1` (with or without a port).
+The `/api/v1` surface is for commands running on the Scrutineer host. It does not accept or require a scan bearer token. Instead, it passes through the same security middleware as the browser UI and rejects a request whose `Host` is not `127.0.0.1`, `localhost`, or `::1` (with or without a port). Browser POST requests through this middleware also check `Sec-Fetch-Site`; non-browser clients such as `curl` do not send that header.
 
 Use a loopback URL from the host:
 
@@ -78,14 +76,3 @@ The repository copy of [`openapi.yaml`](../openapi.yaml) is authoritative and is
 - A skill whose container-facing API hostname is not loopback must send its active scan bearer token.
 
 This hybrid rule applies only to OpenAPI discovery. It does not make the rest of `/api/*` available without a token or the rest of `/api/v1/*` available to a container token.
-
-## Security model
-
-The API boundaries assume Scrutineer is a local operator tool:
-
-- Skill tokens are short-lived, repository-scoped capabilities.
-- Host-side routes rely on the loopback listener and Host-header validation.
-- Browser POST routes additionally check `Sec-Fetch-Site`; non-browser clients such as `curl` do not send that header.
-- Claim-check is the only route intended to be selectively proxied to peers.
-
-See the [threat model](../threatmodel.md) for the DNS-rebinding, CSRF, runner, and federation threats these controls address. Developers adding a route should also read the [development guide](development.md#skill-http-api) and add the route to `openapi.yaml`; route coverage tests reject undocumented API handlers.
