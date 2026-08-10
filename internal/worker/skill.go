@@ -412,9 +412,9 @@ func truncateSchemaRepairReport(report string) string {
 
 func (w *Worker) parseSkillOutput(skill *db.Skill, scan *db.Scan, report string, emit func(Event)) error {
 	if skill.SchemaJSON != "" {
-		if detail := ValidateSkillReport(skill.Name, skill.SchemaJSON, report); detail != "" {
+		if detail, recoverable := reportValidationForParsing(skill, report); detail != "" {
 			emit(reportValidationEvent(skill, detail))
-			if w.SchemaStrict {
+			if w.SchemaStrict && !recoverable {
 				return &SchemaValidationError{Skill: skill.Name, Detail: detail}
 			}
 		}
@@ -477,6 +477,17 @@ func (w *Worker) clearCloneError(scan *db.Scan) {
 		w.DB.Model(&db.Repository{}).Where("id = ?", scan.RepositoryID).
 			Update("clone_error", "")
 	}
+}
+
+// reportValidationForParsing keeps schema failures strict while allowing the
+// verify parser to preserve a schema-valid but internally inconsistent rubric
+// as ungraded after the repair loop has had its chance to fix it.
+func reportValidationForParsing(skill *db.Skill, report string) (string, bool) {
+	if detail := ValidateReportSchema(skill.SchemaJSON, report); detail != "" {
+		return detail, false
+	}
+	detail := ValidateReportSemantics(skill.Name, report)
+	return detail, detail != "" && skill.Name == verifySkillName
 }
 
 // parseFindingsOutput feeds the existing spec-deep parser so skill-driven

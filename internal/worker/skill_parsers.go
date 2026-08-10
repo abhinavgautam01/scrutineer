@@ -16,11 +16,26 @@ import (
 	"gorm.io/gorm"
 
 	"scrutineer/internal/db"
+	"scrutineer/internal/verification"
 )
 
 const insertBatchSize = 50
 
-const findingDedupSkill = "finding-dedup"
+const (
+	findingDedupSkill = "finding-dedup"
+	verifySkillName   = "verify"
+)
+
+type verifyOutput struct {
+	Status    string `json:"status"`
+	Preflight struct {
+		Classification string `json:"classification"`
+		Justification  string `json:"justification"`
+	} `json:"preflight"`
+	Reproducer string `json:"reproducer"`
+	Evidence   string `json:"evidence"`
+	Notes      string `json:"notes"`
+}
 
 // parseRepoMetadataOutput updates the Repository columns that previously
 // came from the metadata Go handler. Shape matches the subset of
@@ -867,72 +882,98 @@ func (w *Worker) parsePostureOutput(scan *db.Scan, report string, emit func(Even
 	return nil
 }
 
-// parseVerifyOutput records the outcome of a finding-scoped verification
-// run. Reproducer, evidence and notes become a FindingNote; the status
-// transition is written via WriteFindingField with source=model_suggested so
-// the audit trail on the finding page shows the skill as the author.
+// parseVerifyOutput records the outcome of a finding-scoped verification run.
+// Each scan gets an immutable rubric row, while the human-readable summary and
+// any lifecycle transition retain their existing finding audit trail entries.
 func (w *Worker) parseVerifyOutput(scan *db.Scan, report string, emit func(Event)) error {
 	if scan.FindingID == nil {
 		return fmt.Errorf("verify scan has no finding_id")
 	}
-	var result struct {
-		Status    string `json:"status"`
-		Preflight struct {
-			Classification string `json:"classification"`
-			Justification  string `json:"justification"`
-		} `json:"preflight"`
-		Reproducer string `json:"reproducer"`
-		Evidence   string `json:"evidence"`
-		Notes      string `json:"notes"`
-	}
-	if err := json.Unmarshal([]byte(report), &result); err != nil {
-		return fmt.Errorf("parse verify report: %w", err)
+	result, rubric, score, gradingError, err := decodeVerifyOutput(report)
+	if err != nil {
+		return err
 	}
 	var f db.Finding
 	if err := w.DB.First(&f, *scan.FindingID).Error; err != nil {
 		return fmt.Errorf("load finding %d: %w", *scan.FindingID, err)
 	}
+	nextStatus, err := verifyNextStatus(f, scan, result, gradingError)
+	if err != nil {
+		return err
+	}
+	note := verifyNote(result, rubric, score, gradingError)
+	if err := w.recordVerifyOutput(scan, f, result.Status, report, note, score, nextStatus); err != nil {
+		return err
+	}
 
-	var nextStatus db.FindingLifecycle
+	emit(Event{Kind: KindText, Text: "finding " + fmt.Sprint(f.ID) + " -> " + result.Status})
+	return nil
+}
+
+func decodeVerifyOutput(report string) (verifyOutput, *verification.Report, *float64, string, error) {
+	var result verifyOutput
+	if err := json.Unmarshal([]byte(report), &result); err != nil {
+		return verifyOutput{}, nil, nil, "", fmt.Errorf("parse verify report: %w", err)
+	}
+	rubric, err := verification.Parse(report)
+	if errors.Is(err, verification.ErrMissingRubric) {
+		return result, nil, nil, "", nil
+	}
+	if err != nil {
+		return result, nil, nil, err.Error(), nil
+	}
+	score := rubric.Score()
+	return result, &rubric, &score, "", nil
+}
+
+func verifyNextStatus(f db.Finding, scan *db.Scan, result verifyOutput, gradingError string) (db.FindingLifecycle, error) {
+	if !verifyStatusValid(result.Status) {
+		return "", fmt.Errorf("verify status %q is not one of confirmed|fixed|inconclusive|deferred|not_attempted", result.Status)
+	}
+	if gradingError != "" {
+		return "", nil
+	}
 	switch result.Status {
 	case "confirmed":
 		if f.Status == db.FindingNew {
-			nextStatus = db.FindingEnriched
+			return db.FindingEnriched, nil
 		}
 	case "fixed":
-		// Only a verify against the default branch (empty Ref) moves the
-		// finding to fixed. A "fixed" verdict on an explicit fix ref — the
-		// validate-fix pipeline points verify at a candidate ref, often an
-		// unmerged PR branch — means the fix works there, not that a release
-		// carries it; the note below and the fix-validation report still
-		// capture the per-ref verdict.
+		// An explicit ref may be an unmerged fix branch. Only the default
+		// branch proves that the finding itself has moved to fixed.
 		if scan.Ref == "" {
-			nextStatus = db.FindingFixed
+			return db.FindingFixed, nil
 		}
-	case "inconclusive":
-		// Leave status alone: the reproduction could not be run or its
-		// outcome was unclassifiable.
+	case "inconclusive", "not_attempted":
 	case "deferred":
-		// Leave status alone: preflight found the reproduction reaches an
-		// external host or credential file and it was not run at all — a
-		// human must run it somewhere the callback can land. deferred is
-		// meaningless without the preflight that decided it, so an empty
-		// classification or justification is a hard error rather than a
-		// note that quietly loses the offending lines.
 		if result.Preflight.Classification == "" || strings.TrimSpace(result.Preflight.Justification) == "" {
-			return fmt.Errorf("verify status \"deferred\" requires preflight.classification and preflight.justification")
-		}
-	default:
-		return fmt.Errorf("verify status %q is not one of confirmed|fixed|inconclusive|deferred", result.Status)
-	}
-	if nextStatus != "" {
-		if err := db.WriteFindingField(w.DB, f.ID, "status", string(nextStatus), db.SourceModel, "verify"); err != nil {
-			return fmt.Errorf("update status: %w", err)
+			return "", fmt.Errorf("verify status \"deferred\" requires preflight.classification and preflight.justification")
 		}
 	}
+	return "", nil
+}
 
+func verifyStatusValid(status string) bool {
+	switch status {
+	case "confirmed", "fixed", "inconclusive", "deferred", "not_attempted":
+		return true
+	default:
+		return false
+	}
+}
+
+func verifyNote(result verifyOutput, rubric *verification.Report, score *float64, gradingError string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "verify: %s\n", result.Status)
+	if gradingError != "" {
+		fmt.Fprintf(&b, "grading: ungraded\nrubric validation: %s\n", gradingError)
+	}
+	if rubric != nil && score != nil {
+		fmt.Fprintf(&b, "score: %.2f\n", *score)
+		for _, named := range rubric.Criteria.List() {
+			fmt.Fprintf(&b, "criterion: %s = %s\n", named.Name, named.Criterion.Verdict)
+		}
+	}
 	if result.Preflight.Classification != "" {
 		fmt.Fprintf(&b, "preflight: %s\n", result.Preflight.Classification)
 		if j := strings.TrimSpace(result.Preflight.Justification); j != "" {
@@ -948,12 +989,45 @@ func (w *Worker) parseVerifyOutput(scan *db.Scan, report string, emit func(Event
 	if result.Notes != "" {
 		fmt.Fprintf(&b, "\n%s\n", strings.TrimSpace(result.Notes))
 	}
-	if _, err := db.AddFindingNote(w.DB, f.ID, b.String(), "verify"); err != nil {
-		return fmt.Errorf("record verify note: %w", err)
-	}
+	return b.String()
+}
 
-	emit(Event{Kind: KindText, Text: "finding " + fmt.Sprint(f.ID) + " -> " + result.Status})
-	return nil
+func (w *Worker) recordVerifyOutput(
+	scan *db.Scan,
+	f db.Finding,
+	status, report, note string,
+	score *float64,
+	nextStatus db.FindingLifecycle,
+) error {
+	return w.DB.Transaction(func(tx *gorm.DB) error {
+		var existing db.FindingVerification
+		lookup := tx.Where("finding_id = ? AND scan_id = ?", f.ID, scan.ID).Limit(1).Find(&existing)
+		if lookup.Error != nil {
+			return fmt.Errorf("check existing verify record: %w", lookup.Error)
+		}
+		if lookup.RowsAffected > 0 {
+			return nil
+		}
+		if nextStatus != "" {
+			if err := db.WriteFindingField(tx, f.ID, "status", string(nextStatus), db.SourceModel, "verify"); err != nil {
+				return fmt.Errorf("update status: %w", err)
+			}
+		}
+		row := db.FindingVerification{
+			FindingID: f.ID,
+			ScanID:    scan.ID,
+			Status:    status,
+			Score:     score,
+			Report:    report,
+		}
+		if err := tx.Create(&row).Error; err != nil {
+			return fmt.Errorf("record verification: %w", err)
+		}
+		if _, err := db.AddFindingNote(tx, f.ID, note, "verify"); err != nil {
+			return fmt.Errorf("record verify note: %w", err)
+		}
+		return nil
+	})
 }
 
 // parseBreakingChangeOutput records the breaking-change verdict on a

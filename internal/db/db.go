@@ -927,6 +927,7 @@ type Finding struct {
 	Communications []FindingCommunication `gorm:"constraint:OnDelete:CASCADE"`
 	References     []FindingReference     `gorm:"constraint:OnDelete:CASCADE"`
 	History        []FindingHistory       `gorm:"constraint:OnDelete:CASCADE"`
+	Verifications  []FindingVerification  `gorm:"constraint:OnDelete:CASCADE"`
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -1181,6 +1182,22 @@ type FindingReview struct {
 	CreatedAt time.Time
 }
 
+// FindingVerification is one immutable grading record produced by a
+// finding-scoped verify scan. Report preserves the complete structured rubric;
+// Status and Score are promoted for cheap display and filtering. Score is nil
+// for legacy reports and rubric reports that remain internally inconsistent
+// after the repair attempt.
+type FindingVerification struct {
+	ID        uint   `gorm:"primarykey"`
+	FindingID uint   `gorm:"index;not null;uniqueIndex:idx_finding_verification_scan,priority:1"`
+	ScanID    uint   `gorm:"not null;uniqueIndex:idx_finding_verification_scan,priority:2"`
+	Status    string `gorm:"index;not null"`
+	Score     *float64
+	Report    string `gorm:"type:text;not null"`
+
+	CreatedAt time.Time
+}
+
 // Skill is one scan recipe expressed as a claude-code skill. It maps 1:1 to
 // the agentskills.io SKILL.md format: Body is the markdown that sits after
 // the frontmatter, the other fields are frontmatter. Metadata holds the raw
@@ -1408,7 +1425,7 @@ func Open(dsn string) (*gorm.DB, error) {
 	if err := gdb.AutoMigrate(
 		&Repository{}, &Scan{},
 		&Finding{}, &FindingLabel{}, &FindingNote{},
-		&FindingCommunication{}, &FindingReference{}, &FindingHistory{}, &FindingReview{}, &AuditEvent{},
+		&FindingCommunication{}, &FindingReference{}, &FindingHistory{}, &FindingReview{}, &FindingVerification{}, &AuditEvent{},
 		&Dependency{}, &ExpectedFinding{}, &Package{}, &PackageAlternative{}, &Dependent{}, &FindingDependent{}, &Advisory{}, &AdvisoryAudit{},
 		&Maintainer{}, &Skill{}, &Subproject{},
 		&SBOMUpload{}, &SBOMPackage{}, &CNA{}, &Setting{},

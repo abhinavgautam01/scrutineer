@@ -299,6 +299,20 @@ findings that already have a row here.
 | reviewer | text | Optional free-text reviewer identity. |
 | created_at | datetime | |
 
+## finding_verifications
+
+Append-only grading records produced by finding-scoped `verify` scans. The complete rubric report remains immutable in `report`; `status` and `score` are promoted for display and filtering. The finding page derives its current verification result from the newest row rather than overwriting prior runs.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | integer PK | |
+| finding_id | integer FK | References `findings.id`; cascade delete. Unique with `scan_id`. |
+| scan_id | integer | The verify scan that produced this record. Unique with `finding_id`. |
+| status | text | `confirmed`, `fixed`, `inconclusive`, `deferred`, or `not_attempted`. |
+| score | real, nullable | Fraction of the five rubric criteria that passed, from `0.0` to `1.0`. Null for legacy pre-rubric reports and reports that remain internally inconsistent after repair. |
+| report | text | Complete structured JSON report, including three attempts and per-criterion method, evidence, counterevidence, proof gap, and confidence. |
+| created_at | datetime | |
+
 ## finding_communications
 
 External interactions about a finding: emails, GHSA submissions, issue replies, etc.

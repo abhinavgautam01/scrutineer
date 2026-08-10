@@ -374,6 +374,14 @@ func (s *Server) apiGetFinding(w http.ResponseWriter, r *http.Request) {
 	summary["suggested_recipients"] = f.SuggestedRecipients
 	summary["suggested_fix"] = f.SuggestedFix
 	summary["suggested_fix_commit"] = f.SuggestedFixCommit
+	verification, err := db.LatestFindingVerification(s.DB, f.ID)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "load finding verification")
+		return
+	}
+	if verification != nil {
+		summary["verification"] = findingVerificationResponse(verification)
+	}
 	writeJSON(w, http.StatusOK, summary)
 }
 

@@ -165,6 +165,20 @@ func TestBundledSchemas_compileAndAcceptSamples(t *testing.T) {
 			  "notes":["Examples and vendored code were excluded."]}`,
 		},
 		{
+			"../../skills/verify/schema.json",
+			`{"status":"confirmed","preflight":{"classification":"local-safe","justification":"local file input"},
+			  "attempts":[
+			    {"number":1,"outcome":"reproduced","evidence":"boom","failure_class":"panic","crash_site":"parser.go:42"},
+			    {"number":2,"outcome":"reproduced","evidence":"boom","failure_class":"panic","crash_site":"parser.go:42"},
+			    {"number":3,"outcome":"reproduced","evidence":"boom","failure_class":"panic","crash_site":"parser.go:42"}],
+			  "criteria":{
+			    "poc_well_formed":{"verdict":"pass","method":"run","evidence":"parsed","counterevidence":"","proof_gap":"","confidence":"high"},
+			    "reproduces_three_of_three":{"verdict":"pass","method":"run three times","evidence":"3/3","counterevidence":"","proof_gap":"","confidence":"high"},
+			    "claimed_failure_class":{"verdict":"pass","method":"trace","evidence":"panic","counterevidence":"","proof_gap":"","confidence":"high"},
+			    "public_interface_to_first_party_sink":{"verdict":"pass","method":"stack","evidence":"public API to parser.go","counterevidence":"","proof_gap":"","confidence":"high"},
+			    "deterministic":{"verdict":"pass","method":"compare","evidence":"same site","counterevidence":"","proof_gap":"","confidence":"high"}}}`,
+		},
+		{
 			"../../skills/security-deep-dive/schema.json",
 			`{"repository":"https://github.com/o/r","commit":"abc1234","spec_version":13,
 			  "model":"claude","date":"2026-07-16","languages":["C"],
@@ -379,6 +393,18 @@ func TestBundledSchemas_rejectBadShapes(t *testing.T) {
 			`{"upstream":"owner/repo","url":"https://github.com/owner/repo/issues/123"}`, "oneOf"},
 		{"../../skills/threat-model/schema.json", `{"spec_version":2}`, "/spec_version"},
 		{"../../skills/recon/schema.json", `{"focus_areas":[{"name":"parser","surface":"bytes","paths":[]}],"notes":[]}`, "/focus_areas/0/paths"},
+		{"../../skills/verify/schema.json",
+			`{"status":"confirmed","attempts":[
+			  {"number":1,"outcome":"reproduced","evidence":"x","failure_class":"panic","crash_site":"x.go:1"},
+			  {"number":2,"outcome":"reproduced","evidence":"x","failure_class":"panic","crash_site":"x.go:1"},
+			  {"number":3,"outcome":"not_reproduced","evidence":"clean","failure_class":"","crash_site":""}],
+			  "criteria":{
+			    "poc_well_formed":{"verdict":"pass","method":"run","evidence":"x","counterevidence":"","proof_gap":"","confidence":"high"},
+			    "reproduces_three_of_three":{"verdict":"fail","method":"run","evidence":"2/3","counterevidence":"","proof_gap":"","confidence":"high"},
+			    "claimed_failure_class":{"verdict":"pass","method":"trace","evidence":"x","counterevidence":"","proof_gap":"","confidence":"high"},
+			    "public_interface_to_first_party_sink":{"verdict":"pass","method":"trace","evidence":"x","counterevidence":"","proof_gap":"","confidence":"high"},
+			    "deterministic":{"verdict":"fail","method":"compare","evidence":"flaky","counterevidence":"","proof_gap":"","confidence":"high"}}}`,
+			"/attempts/2/outcome"},
 		{"../../skills/security-deep-dive/schema.json",
 			`{"repository":"https://github.com/o/r","commit":"abc1234","spec_version":13,
 			  "model":"claude","date":"2026-07-16","languages":["C"],"boundaries":[],

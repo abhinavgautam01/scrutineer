@@ -97,6 +97,15 @@
     <dt class="text-muted-foreground">Quality tier</dt>
     <dd>{{if $f.QualityTier}}{{$f.QualityTier}}{{else}}-{{end}}</dd>
   </div>
+  {{with .LatestVerification}}
+  <div>
+    <dt class="text-muted-foreground">Verification</dt>
+    <dd>
+      <a href="/scans/{{.ScanID}}" class="hover:underline">{{.Status}}</a>
+      <span class="badge-outline ml-1">{{.ScoreLabel}}</span>
+    </dd>
+  </div>
+  {{end}}
   <div>
     <dt class="text-muted-foreground">Sinks</dt>
     <dd>{{if $f.Sinks}}<a href="/repositories/{{$repo.ID}}#rt10"
@@ -649,6 +658,62 @@ git commit -m "fix: {{$f.Title}}"</pre>
       </ul>
     </section>
   </details>
+
+  {{if .Verifications}}
+  <details open class="group border-b">
+    <summary class="w-full outline-none rounded-md focus-visible:ring-ring/50 focus-visible:ring-[3px]">
+      <h3 class="flex flex-1 items-center justify-between gap-4 py-4 text-sm font-medium hover:underline">
+        Verification history <span class="text-muted-foreground ml-auto mr-2 text-xs">{{len .Verifications}}</span>
+        <i data-lucide="chevron-down" class="text-muted-foreground size-4 shrink-0 transition-transform duration-200 group-open:rotate-180"></i>
+      </h3>
+    </summary>
+    <section class="pb-4 grid gap-4">
+      {{range .Verifications}}
+      <article class="border-b pb-4 last:border-b-0">
+        <div class="flex items-center gap-2 text-sm mb-3">
+          <a href="/scans/{{.ScanID}}" class="font-medium hover:underline">scan #{{.ScanID}}</a>
+          <span class="badge-outline">{{.Status}}</span>
+          <span class="badge-outline">{{.ScoreLabel}}</span>
+          <span class="text-xs text-muted-foreground">{{.CreatedAt.Format "2006-01-02 15:04"}}</span>
+        </div>
+        {{if .HasRubric}}
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead><tr class="border-b"><th class="text-left py-2">Criterion</th><th class="text-left">Verdict</th><th class="text-left">Evidence</th><th class="text-left">Proof gap</th></tr></thead>
+            <tbody>
+            {{range .Criteria}}
+              <tr class="border-b align-top">
+                <td class="py-2 pr-3 font-medium">{{.Name}}</td>
+                <td class="py-2 pr-3">{{.Criterion.Verdict}}</td>
+                <td class="py-2 pr-3"><div>{{.Criterion.Evidence}}</div><div class="text-xs text-muted-foreground mt-1">Method: {{.Criterion.Method}}</div>{{if .Criterion.Counterevidence}}<div class="text-xs text-muted-foreground mt-1">Against: {{.Criterion.Counterevidence}}</div>{{end}}</td>
+                <td class="py-2">{{if .Criterion.ProofGap}}{{.Criterion.ProofGap}}{{else}}-{{end}}</td>
+              </tr>
+            {{end}}
+            </tbody>
+          </table>
+        </div>
+        <div class="overflow-x-auto mt-4">
+          <table class="w-full text-sm">
+            <thead><tr class="border-b"><th class="text-left py-2">Attempt</th><th class="text-left">Outcome</th><th class="text-left">Failure class</th><th class="text-left">First-party site</th><th class="text-left">Evidence</th></tr></thead>
+            <tbody>
+            {{range .Attempts}}
+              <tr class="border-b align-top">
+                <td class="py-2 pr-3 font-medium">#{{.Number}}</td>
+                <td class="py-2 pr-3">{{.Outcome}}</td>
+                <td class="py-2 pr-3">{{if .FailureClass}}{{.FailureClass}}{{else}}-{{end}}</td>
+                <td class="py-2 pr-3">{{if .CrashSite}}{{.CrashSite}}{{else}}-{{end}}</td>
+                <td class="py-2">{{.Evidence}}</td>
+              </tr>
+            {{end}}
+            </tbody>
+          </table>
+        </div>
+        {{end}}
+      </article>
+      {{end}}
+    </section>
+  </details>
+  {{end}}
 
   <details class="group border-b">
     <summary class="w-full outline-none rounded-md focus-visible:ring-ring/50 focus-visible:ring-[3px]">

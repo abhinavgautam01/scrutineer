@@ -18,6 +18,7 @@ import (
 
 	"scrutineer/internal/db"
 	"scrutineer/internal/queue"
+	"scrutineer/internal/verification"
 )
 
 func TestParseSubprojectsOutput(t *testing.T) {
@@ -780,6 +781,114 @@ func findingNotes(gdb *gorm.DB, findingID uint) []db.FindingNote {
 	var rows []db.FindingNote
 	gdb.Where("finding_id = ?", findingID).Order("created_at desc").Find(&rows)
 	return rows
+}
+
+func confirmedVerificationReport(t *testing.T) string {
+	t.Helper()
+	criterion := verification.Criterion{
+		Verdict: "pass", Method: "executed supplied PoC", Evidence: "observed expected behavior", Confidence: "high",
+	}
+	report := verification.Report{
+		Status: "confirmed",
+		Attempts: []verification.Attempt{
+			{Number: 1, Outcome: "reproduced", Evidence: "boom", FailureClass: "panic", CrashSite: "parser.go:42"},
+			{Number: 2, Outcome: "reproduced", Evidence: "boom", FailureClass: "panic", CrashSite: "parser.go:42"},
+			{Number: 3, Outcome: "reproduced", Evidence: "boom", FailureClass: "panic", CrashSite: "parser.go:42"},
+		},
+		Criteria: &verification.Criteria{
+			PoCWellFormed:                   criterion,
+			ReproducesThreeOfThree:          criterion,
+			ClaimedFailureClass:             criterion,
+			PublicInterfaceToFirstPartySink: criterion,
+			Deterministic:                   criterion,
+		},
+		Reproducer: "go run ./poc.go",
+		Evidence:   "3/3 attempts reached parser.go:42",
+	}
+	raw, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func TestParseVerify_recordsStructuredRubric(t *testing.T) {
+	f, gdb := runSkillWithFinding(t, "verify", confirmedVerificationReport(t), db.FindingNew)
+	var rows []db.FindingVerification
+	if err := gdb.Where("finding_id = ?", f.ID).Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("verification rows = %d, want 1", len(rows))
+	}
+	if rows[0].Status != "confirmed" || rows[0].Score == nil || *rows[0].Score != 1 {
+		t.Fatalf("verification = %+v, want confirmed score 1", rows[0])
+	}
+	if !strings.Contains(findingNotes(gdb, f.ID)[0].Body, "score: 1.00") {
+		t.Error("verify note should include the derived score")
+	}
+}
+
+func TestParseVerify_isIdempotentPerScan(t *testing.T) {
+	report := confirmedVerificationReport(t)
+	f, gdb := runSkillWithFinding(t, "verify", report, db.FindingNew)
+	var row db.FindingVerification
+	if err := gdb.Where("finding_id = ?", f.ID).First(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	var scan db.Scan
+	if err := gdb.First(&scan, row.ScanID).Error; err != nil {
+		t.Fatal(err)
+	}
+	w := &Worker{DB: gdb, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if err := w.parseVerifyOutput(&scan, report, func(Event) {}); err != nil {
+		t.Fatal(err)
+	}
+	var verificationCount int64
+	if err := gdb.Model(&db.FindingVerification{}).Where("finding_id = ?", f.ID).Count(&verificationCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if verificationCount != 1 {
+		t.Fatalf("verification rows = %d, want 1", verificationCount)
+	}
+	if notes := findingNotes(gdb, f.ID); len(notes) != 1 {
+		t.Fatalf("verify notes = %d, want 1", len(notes))
+	}
+}
+
+func TestParseVerify_invalidRubricIsStoredUngraded(t *testing.T) {
+	report := strings.Replace(confirmedVerificationReport(t), `"number":2`, `"number":1`, 1)
+	f, gdb := runSkillWithFinding(t, "verify", report, db.FindingNew)
+	if f.Status != db.FindingNew {
+		t.Fatalf("status = %s, want new: an ungraded report must not change lifecycle", f.Status)
+	}
+	var row db.FindingVerification
+	if err := gdb.Where("finding_id = ?", f.ID).First(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if row.Status != "confirmed" || row.Score != nil || row.Report != report {
+		t.Fatalf("ungraded verification = %+v", row)
+	}
+	notes := findingNotes(gdb, f.ID)
+	if len(notes) != 1 {
+		t.Fatalf("verify notes = %d, want 1", len(notes))
+	}
+	for _, want := range []string{"grading: ungraded", "not unique", "3/3 attempts reached parser.go:42"} {
+		if !strings.Contains(notes[0].Body, want) {
+			t.Errorf("ungraded note missing %q: %s", want, notes[0].Body)
+		}
+	}
+}
+
+func TestParseVerify_legacyReportGetsUnscoredRecord(t *testing.T) {
+	f, gdb := runSkillWithFinding(t, "verify", `{"status":"inconclusive","notes":"old queued scan"}`, db.FindingNew)
+	var row db.FindingVerification
+	if err := gdb.Where("finding_id = ?", f.ID).First(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if row.Score != nil {
+		t.Fatalf("legacy score = %v, want nil", *row.Score)
+	}
 }
 
 func TestParseVerify_confirmedMovesNewToEnriched(t *testing.T) {

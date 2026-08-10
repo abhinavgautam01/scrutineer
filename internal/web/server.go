@@ -1836,6 +1836,10 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 		Limit(historyRowCap).Find(&history)
 	reviews, _ := db.ListFindingReviews(s.DB, f.ID)
 	latestRevalidate := db.LatestRevalidateVerdict(s.DB, f.ID)
+	verifications, err := loadFindingVerificationViews(s.DB, f.ID)
+	if err != nil {
+		s.Log.Warn("load finding verifications", "finding", f.ID, "err", err)
+	}
 	var labels []db.FindingLabel
 	s.DB.Order("name").Find(&labels)
 	selected := make(map[string]bool, len(f.Labels))
@@ -1891,6 +1895,7 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 		"History":          history,
 		"HistoryTotal":     historyTotal,
 		"Reviews":          reviews,
+		"Verifications":    verifications,
 		"LatestRevalidate": latestRevalidate,
 		"AllLabels":        labels,
 		"Selected":         selected,
@@ -1902,6 +1907,9 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 		"Exposures":     exposures,
 		"HasDependents": hasDependents,
 		"ShowExposure":  findingSupportsExposure(scan) && hasDependents,
+	}
+	if len(verifications) > 0 {
+		data["LatestVerification"] = verifications[0]
 	}
 	vinceReason := "VINCE API key is not configured"
 	vinceReady := false
