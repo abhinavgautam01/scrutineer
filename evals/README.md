@@ -12,7 +12,7 @@ The actual model-backed skills remain off by default. To run them against every
 fixture, opt in explicitly:
 
 ```sh
-SCRUTINEER_RUN_EVALS=1 SCRUTINEER_EVAL_MODEL=claude-sonnet-5 go test -tags evals ./internal/evals/... -run TestRunFixtures -v
+SCRUTINEER_RUN_EVALS=1 SCRUTINEER_EVAL_MODEL=claude-sonnet-5 go test -timeout 2h -tags evals ./internal/evals/... -run TestRunFixtures -v
 ```
 
 Each scenario YAML names:
@@ -48,6 +48,10 @@ baseline and candidate are directly comparable. For example, the
 `reference-driven`; the latter keeps intent and phase order in `SKILL.md` and
 loads sink taxonomy and report policy from `references/` when needed.
 
+Committed experiment decisions live under [`results/`](results/). Each report
+records the tested revision, model, environment, aggregate metrics, and whether
+the candidate was promoted.
+
 Each `should_find` or `should_not_find` assertion may include
 `evidence_contains`:
 
@@ -79,7 +83,7 @@ SCRUTINEER_RUN_EVALS=1 \
   SCRUTINEER_EVAL_JUDGE=model \
   SCRUTINEER_EVAL_JUDGE_MODEL=claude-haiku-4-5 \
   ANTHROPIC_API_KEY=sk-ant-... \
-  go test -tags evals ./internal/evals/... -run TestRunFixtures -v
+  go test -timeout 2h -tags evals ./internal/evals/... -run TestRunFixtures -v
 ```
 
 `SCRUTINEER_EVAL_JUDGE` is unset by default, so ordinary local and CI checks
