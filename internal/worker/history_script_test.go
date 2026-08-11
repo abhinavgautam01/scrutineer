@@ -90,6 +90,13 @@ func runHistoryList(t *testing.T, repo string, extra ...string) historyCandidate
 	if err := json.Unmarshal(out, &got); err != nil {
 		t.Fatalf("decode history list: %v\n%s", err, out)
 	}
+	var raw map[string]any
+	if err := json.Unmarshal(out, &raw); err != nil {
+		t.Fatalf("decode history list shape: %v\n%s", err, out)
+	}
+	if _, ok := raw["cache_invalid_reason"].(string); !ok {
+		t.Fatalf("cache_invalid_reason = %#v, want JSON string", raw["cache_invalid_reason"])
+	}
 	return got
 }
 

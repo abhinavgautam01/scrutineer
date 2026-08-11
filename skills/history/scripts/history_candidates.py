@@ -163,7 +163,7 @@ def list_candidates(args):
         "head": head,
         "requested_base": args.base or None,
         "cache_reusable": reusable,
-        "cache_invalid_reason": invalid_reason,
+        "cache_invalid_reason": invalid_reason or "",
         "range": revision,
         "scope_path": scope_path,
         "shallow": shallow,
