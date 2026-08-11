@@ -4,9 +4,9 @@ Use this reference when `${{ }}` expressions appear inside `run:` blocks, compos
 
 ## Core Rule
 
-GitHub expression expansion happens before the runner reaches the interpreter. If attacker-controlled context is placed directly into a shell, JavaScript, Python, or other code-evaluating field, the attacker injects code, not data. The interpreter does not have to be a shell. `actions/github-script` is a JavaScript `eval` sink. CVE-2026-27701 (LiveCode) shipped exactly that bug.
+GitHub expression expansion happens before the runner reaches the interpreter. If attacker-controlled context is placed directly into a shell, JavaScript, Python, or other code-evaluating field, the attacker injects code, not data. The interpreter does not have to be a shell. `actions/github-script` is a JavaScript `eval` sink. CVE-2026-27701 (LiveCodes) shipped exactly that bug.
 
-Manual and reusable workflow inputs are not automatically safe. A `workflow_dispatch` caller or `workflow_call` caller controls `inputs.*` values, and GitHub expands `${{ inputs.x }}` into the generated script before the shell runs. Treat free-form string inputs as untrusted whenever the job has secrets, PATs, write tokens, OIDC, release/deploy/package-publish power, or sensitive runner access. Warden PR #277 hardened this shape in a release workflow by moving `inputs.bump` into `env:` and using `"$BUMP"`; its `bump` input was a finite `choice`, so exploitability depends on whether the finite set can be bypassed.
+Manual and reusable workflow inputs are not automatically safe. A `workflow_dispatch` caller or `workflow_call` caller controls `inputs.*` values, and GitHub expands `${{ inputs.x }}` into the generated script before the shell runs. Treat free-form string inputs as untrusted whenever the job has secrets, PATs, write tokens, OIDC, release/deploy/package-publish power, or sensitive runner access. Move such inputs into `env:` and use quoted shell variables. A finite `choice` input is different: exploitability depends on whether values outside the declared set can be supplied.
 
 ## Attacker-Controlled Values
 
@@ -49,10 +49,10 @@ Report when untrusted expressions land in:
 - loops over changed filenames injected through `${{ steps.changed.outputs.files }}`
 - heredocs without safe quoting
 - shell commands composed inside composite actions
-- `${{ inputs.* }}` interpolated into `run:` inside a composite action whose caller is externally reachable or otherwise passes caller-controlled values (sentry e93ee1ce)
+- `${{ inputs.* }}` interpolated into `run:` inside a composite action whose caller is externally reachable or otherwise passes caller-controlled values
 - `bash -c`, `sh -c`, `python -c`, `node -e`, `ruby -e`
 - `actions/github-script` and `actions/script` `script:` bodies that interpolate `${{ x }}` rather than read `process.env.X`
-- `echo "key=${{ x }}" >> $GITHUB_OUTPUT`, `>> $GITHUB_ENV`, `>> $GITHUB_STEP_SUMMARY`, `>> $GITHUB_PATH`; both the shell line and the file format are parsed (getsentry 0898b3d8 fixed this; PR titles, branch names, and `||`-fallback expressions all reach the line)
+- `echo "key=${{ x }}" >> $GITHUB_OUTPUT`, `>> $GITHUB_ENV`, `>> $GITHUB_STEP_SUMMARY`, `>> $GITHUB_PATH`; both the shell line and the file format are parsed, and PR titles, branch names, and `||`-fallback expressions can all reach the line
 - `npx semver -i ${{ inputs.bump }} $CURRENT`, `gh pr create --fill ${{ inputs.pr_options }}`, `docker build -t ${{ inputs.tag }}`, `git checkout ${{ inputs.ref }}`, or any other manual/reusable input expanded directly into a command line. For finite `choice` inputs, inspect the full option set before calling it exploitable.
 - command arguments later passed to `eval`, `exec`, `os.system`, `child_process.exec`, or equivalent
 

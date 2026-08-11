@@ -36,11 +36,11 @@ A reusable workflow defines its secret surface under `on: workflow_call: secrets
 - a future caller that passes secrets explicitly silently breaks
 - reviewers reading the callee cannot see which secrets the workflow needs
 
-Detection signal: grep the reusable workflow for `secrets\.` references and compare against the declared `secrets:` map. Anything missing is a finding. getsentry #19582 (`b7c2a401ba`) fixed exactly this on `select-sentry-tests.yml` by declaring `SENTRY_INTERNAL_APP_PRIVATE_KEY`, `SENTRY_GCP_DEV_WORKLOAD_IDENTITY_POOL`, and `COLLECT_TEST_DATA_SERVICE_ACCOUNT_EMAIL`.
+Detection signal: inspect the reusable workflow for `secrets.` references and compare them against the declared `secrets:` map. An undeclared secret hides the callee's required secret surface and commonly forces callers to use the broader `secrets: inherit` form.
 
 ## Missing Permissions in Reusable Workflows
 
-A reusable workflow without a top-level or job-level `permissions:` block inherits whatever the caller granted. That is fine when the callee is a thin trusted helper; it is not fine when the caller routinely grants write scopes the callee does not actually need. getsentry #19634 (`ff221468c1`) added `permissions: {contents: read, id-token: write, pull-requests: read}` to a reusable workflow that previously over-inherited.
+A reusable workflow without a top-level or job-level `permissions:` block inherits whatever the caller granted. That is fine when the callee is a thin trusted helper; it is not fine when the caller grants write scopes the callee does not actually need. Declare the narrow read, OIDC, or pull-request scopes required by the callee instead of inheriting the caller's broader token.
 
 Report when the reusable workflow has no `permissions:` block AND the operations inside it (read source, mint OIDC, write a single check, etc.) need a strictly narrower scope than callers commonly grant.
 

@@ -37,7 +37,7 @@ Read only the files relevant to each hit:
 - `references/reusable-and-indirect-flows.md` for `workflow_call`, `workflow_run`, local actions, artifacts, and caches crossing trust boundaries.
 - `references/permissions-secrets-runners.md` for token scopes, secrets, OIDC, ArtiPACKED, caches, and self-hosted runners.
 - `references/supply-chain.md` for mutable third-party action or reusable-workflow references and runtime downloads.
-- `references/examples-and-usage.md` for positive and negative examples that help distinguish an exploitable chain from hardening advice.
+- `references/examples.md` for positive and negative examples that help distinguish an exploitable chain from hardening advice.
 
 The references are review guidance, not evidence that the target is vulnerable. A finding's evidence must come from files under `./src` and the locations emitted by zizmor.
 

@@ -1235,7 +1235,7 @@ func TestBundledZizmorReferencePack(t *testing.T) {
 
 	requiredReferences := map[string][]string{
 		"comment-commands.md":            {"TOCTOU Between Approval and Checkout", "author_association"},
-		"examples-and-usage.md":          {"Negative: safe metadata workflow", "Positive: ArtiPACKED artifact upload"},
+		"examples.md":                    {"Negative: safe metadata workflow", "Positive: ArtiPACKED artifact upload", "LiveCodes"},
 		"expression-injection.md":        {"GitHub expression expansion", "workflow_dispatch"},
 		"permissions-secrets-runners.md": {"ArtiPACKED", "OIDC Trust Boundaries"},
 		"privileged-pr-context.md":       {"pull_request_target", "Safe or Broken But Not Vulnerable"},
@@ -1262,16 +1262,41 @@ func TestBundledZizmorReferencePack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read zizmor reference source: %v", err)
 	}
-	const revision = "a0d797daa87c5d3bcae85fda9f96d1659801fefd"
+	const revision = "9111d2524f6c03388861a63dfc81825b4ba911e1"
 	if !strings.Contains(string(source), revision) {
 		t.Errorf("zizmor reference source does not pin revision %s", revision)
 	}
+	if !strings.Contains(string(source), "Adapted") {
+		t.Error("zizmor reference source does not describe the adaptation")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "references", "examples-and-usage.md")); !os.IsNotExist(err) {
+		t.Errorf("stale Warden examples-and-usage.md still exists: %v", err)
+	}
+	assertNoInternalZizmorCitations(t, dir)
+
 	license, err := os.ReadFile(filepath.Join(dir, "references", "LICENSE.warden"))
 	if err != nil {
 		t.Fatalf("read zizmor reference license: %v", err)
 	}
 	if !strings.Contains(string(license), "Copyright (c) 2026 Functional Software, Inc. dba Sentry") {
 		t.Error("zizmor reference license is missing the upstream copyright notice")
+	}
+}
+
+func assertNoInternalZizmorCitations(t *testing.T, dir string) {
+	t.Helper()
+	var references strings.Builder
+	for _, name := range []string{"expression-injection.md", "reusable-and-indirect-flows.md"} {
+		data, err := os.ReadFile(filepath.Join(dir, "references", name))
+		if err != nil {
+			t.Fatalf("read zizmor reference %s: %v", name, err)
+		}
+		references.Write(data)
+	}
+	for _, stale := range []string{"Warden PR #277", "sentry e93ee1ce", "getsentry 0898b3d8", "getsentry #19582", "getsentry #19634"} {
+		if strings.Contains(references.String(), stale) {
+			t.Errorf("zizmor references retain internal citation %q", stale)
+		}
 	}
 }
 

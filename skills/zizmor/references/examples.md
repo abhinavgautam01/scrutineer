@@ -1,57 +1,4 @@
-# Examples and Usage
-
-This file captures sample Warden configuration, trigger-quality checks, and lightweight eval prompts for `wrdn-gha-workflows`.
-
-## Sample Warden Config
-
-```toml
-[[skills]]
-name = "wrdn-gha-workflows"
-paths = [
-  ".github/workflows/**/*.yml",
-  ".github/workflows/**/*.yaml",
-  ".github/actions/**/*.yml",
-  ".github/actions/**/*.yaml",
-  ".github/actions/**/action.yml",
-  ".github/actions/**/action.yaml",
-  "action.yml",
-  "action.yaml",
-]
-
-[[skills.triggers]]
-type = "pull_request"
-actions = ["opened", "synchronize", "reopened"]
-
-[[skills.triggers]]
-type = "local"
-
-[[skills.triggers]]
-type = "schedule"
-```
-
-The skill may also need scripts or config files referenced by workflows. Add those paths in repositories where CI loads repo-local shell, Python, JavaScript, Makefile, package, or agent-instruction files.
-
-## Should Trigger
-
-- "Audit our GitHub Actions workflows for pwn request bugs."
-- "Review this `.github/workflows` diff for unsafe `pull_request_target` usage."
-- "Check whether this comment-triggered deployment workflow can be abused."
-- "Scan these local composite actions for expression injection."
-- "Review this release workflow for `workflow_dispatch` input command injection."
-- "Review GHA permissions and secrets exposure in this PR workflow."
-- "Does this reusable workflow chain execute fork code with write permissions?"
-
-## Should Not Trigger
-
-- "Run actionlint on the workflow formatting."
-- "Add a new CI job for unit tests."
-- "Explain GitHub Actions syntax."
-- "Review Dockerfile security."
-- "Find hardcoded secrets in source code."
-- "Check branch protection settings in GitHub."
-- "Tune the labels and defaults for a manual workflow form."
-
-## Lightweight Eval Prompts
+# Eval Prompt Examples
 
 Use these prompts against small fixture repos or targeted diffs.
 
@@ -109,7 +56,7 @@ Workflow grants `id-token: write` on PR-reachable jobs and the repo includes a c
 
 ### Positive: github-script JS injection
 
-Workflow uses `actions/github-script@v7` and concatenates `${{ github.event.issue.title }}` directly into the `script:` body to build a comment. Expected result: medium-or-high finding; the issue title is evaluated as JavaScript inside the action's Node context with the workflow token (CVE-2026-27701 shape). Fix is `env:` plus `process.env.X`.
+Workflow uses `actions/github-script@v7` and concatenates `${{ github.event.issue.title }}` directly into the `script:` body to build a comment. Expected result: medium-or-high finding; the issue title is evaluated as JavaScript inside the action's Node context with the workflow token (the CVE-2026-27701 LiveCodes shape). Fix is `env:` plus `process.env.X`.
 
 ### Positive: ArtiPACKED artifact upload
 
