@@ -974,8 +974,38 @@ func TestBundledReconPipelineMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse threat-model: %v", err)
 	}
-	if !slices.Contains(threatModel.Requires, "recon") {
-		t.Errorf("threat-model requires = %v, want recon", threatModel.Requires)
+	if !slices.Contains(threatModel.Requires, "recon") || !slices.Contains(threatModel.Requires, "history") {
+		t.Errorf("threat-model requires = %v, want recon and history", threatModel.Requires)
+	}
+}
+
+func TestBundledHistoryMetadata(t *testing.T) {
+	history, err := ParseFile(filepath.Join("..", "..", "skills", "history", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("parse history: %v", err)
+	}
+	if history.OutputKind != "freeform" || history.MaxTurns != 80 || history.Model != "high" {
+		t.Errorf("history metadata = kind %q, turns %d, model %q", history.OutputKind, history.MaxTurns, history.Model)
+	}
+	for _, tool := range []string{"Read", "Write", "Bash", "Task"} {
+		if !strings.Contains(history.AllowedTools, tool) {
+			t.Errorf("history allowed tools %q missing %q", history.AllowedTools, tool)
+		}
+	}
+	if !strings.Contains(history.Body, "merge-base --is-ancestor") ||
+		!strings.Contains(history.Body, "three to five commits per batch") ||
+		!strings.Contains(history.Body, "partial") {
+		t.Error("history instructions are missing cache, batching, or partial-history contract")
+	}
+
+	for _, name := range []string{"threat-model", "advisory-deep-dive"} {
+		consumer, parseErr := ParseFile(filepath.Join("..", "..", "skills", name, "SKILL.md"))
+		if parseErr != nil {
+			t.Fatalf("parse %s: %v", name, parseErr)
+		}
+		if !slices.Contains(consumer.Requires, "history") {
+			t.Errorf("%s requires = %v, want history", name, consumer.Requires)
+		}
 	}
 }
 
