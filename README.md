@@ -156,7 +156,7 @@ Adding a repo enqueues the `triage` skill, whose SKILL.md lists the further skil
 | `threat-model` | Derives the project's security contract (components, entry-point trust table, claimed and disclaimed properties) for the deep-dive to load |
 | `semgrep` | Static analysis mapped into findings shape |
 | `vuln-scan` | High-recall model-backed static candidate scan adapted from Anthropic's defending-code reference harness |
-| `zizmor` | GitHub Actions workflow audit mapped into findings shape |
+| `zizmor` | GitHub Actions workflow audit enriched with bundled trust-boundary, credential, and supply-chain guidance |
 | `ingest` | Normalizes external reports in arbitrary formats into findings when `/v1/import` cannot recognise the payload |
 | `security-deep-dive` | The model-backed audit producing structured findings |
 | `advisory-deep-dive` | Re-audits every past advisory against its fix commit for a fix bypass, an incomplete fix, or the same bug class in sibling code the patch never touched; the deep-dive scoped to the advisory space |
