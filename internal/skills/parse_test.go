@@ -1286,10 +1286,14 @@ func TestBundledZizmorReferencePack(t *testing.T) {
 func assertNoInternalZizmorCitations(t *testing.T, dir string) {
 	t.Helper()
 	var references strings.Builder
-	for _, name := range []string{"expression-injection.md", "reusable-and-indirect-flows.md"} {
-		data, err := os.ReadFile(filepath.Join(dir, "references", name))
+	files, err := filepath.Glob(filepath.Join(dir, "references", "*.md"))
+	if err != nil {
+		t.Fatalf("glob zizmor references: %v", err)
+	}
+	for _, path := range files {
+		data, err := os.ReadFile(path)
 		if err != nil {
-			t.Fatalf("read zizmor reference %s: %v", name, err)
+			t.Fatalf("read zizmor reference %s: %v", filepath.Base(path), err)
 		}
 		references.Write(data)
 	}

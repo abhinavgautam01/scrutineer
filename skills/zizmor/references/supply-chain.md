@@ -1,4 +1,4 @@
-# Supply-Chain Risk in Action References
+# GitHub Actions Supply-Chain Risk
 
 Use this reference when a workflow uses a third-party action by tag, branch, partial SHA, or floating ref, when it pulls a third-party reusable workflow, or when it executes content fetched at runtime by an otherwise-trusted action.
 
