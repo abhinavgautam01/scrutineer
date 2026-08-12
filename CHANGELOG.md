@@ -4,8 +4,11 @@ Entries are grouped by release, newest first. Each entry is a summary written fo
 
 ## Unreleased
 
+## 2026-08-11
+
 - Monorepos can now be scanned one sub-package at a time, with each package getting its own findings, advisories and disclosure route instead of everything rolling up into one entry. ([#806](https://github.com/alpha-omega-security/scrutineer/pull/806), [@dkw-oss](https://github.com/dkw-oss))
 - Scanning a repository now records the list of components it depends on, giving licence and known-vulnerability checks a single inventory to work from. ([#801](https://github.com/alpha-omega-security/scrutineer/pull/801), [@andrew](https://github.com/andrew))
+- Finding pages now show a migration guide for abandoned or zombie packages, combining repository health, published packages, alternatives, and dependent exposure status. ([#762](https://github.com/alpha-omega-security/scrutineer/pull/762), [@abhinavgautam01](https://github.com/abhinavgautam01))
 - For a finding in an abandoned package, operators can now record where each affected downstream project stands on migrating away from it. ([#808](https://github.com/alpha-omega-security/scrutineer/pull/808), [@abhinavgautam01](https://github.com/abhinavgautam01))
 - Confirming a finding now runs its reproduction three times and grades the result against a fixed checklist, so a pass carries repeatable evidence. ([#831](https://github.com/alpha-omega-security/scrutineer/pull/831), [@abhinavgautam01](https://github.com/abhinavgautam01))
 - Every scan now keeps a copy of the settings it ran with and a link to the run it was retried from, so past results can be reproduced and compared. ([#823](https://github.com/alpha-omega-security/scrutineer/pull/823), [@charlie-morrison](https://github.com/charlie-morrison))
@@ -26,7 +29,6 @@ Entries are grouped by release, newest first. Each entry is a summary written fo
 - Added a forensics mode that investigates a suspected account or release compromise and produces a cited evidence timeline without touching the repository. ([#643](https://github.com/alpha-omega-security/scrutineer/pull/643), [@abhinavgautam01](https://github.com/abhinavgautam01))
 - Added a variant search that, once a vulnerability is confirmed, checks the rest of the repository for other places the same flaw appears. ([#686](https://github.com/alpha-omega-security/scrutineer/pull/686), [@abhinavgautam01](https://github.com/abhinavgautam01))
 - Each repository is now scored on maintainer activity so abandoned and unmaintained projects are flagged for priority, and operators can record a maintained replacement to point users at. ([#692](https://github.com/alpha-omega-security/scrutineer/pull/692) [#699](https://github.com/alpha-omega-security/scrutineer/pull/699), [@abhinavgautam01](https://github.com/abhinavgautam01))
-- Finding pages now show a migration guide for abandoned or zombie packages, combining repository health, published packages, alternatives, and dependent exposure status. ([#762](https://github.com/alpha-omega-security/scrutineer/pull/762), [@abhinavgautam01](https://github.com/abhinavgautam01))
 - The past-advisory audit now records whether each published fix held, issues a public certificate when it did, and re-runs automatically when the project ships a new release. ([#698](https://github.com/alpha-omega-security/scrutineer/pull/698), [@alexandre-daubois](https://github.com/alexandre-daubois))
 - Findings that a re-check confirms are already fixed upstream are now closed automatically rather than waiting for an analyst. ([#717](https://github.com/alpha-omega-security/scrutineer/pull/717), [@abhinavgautam01](https://github.com/abhinavgautam01))
 - Analysts can now question the agent about a repository or one of its findings in a chat that reads the code but cannot change it. ([#722](https://github.com/alpha-omega-security/scrutineer/pull/722), [@alexandre-daubois](https://github.com/alexandre-daubois))
