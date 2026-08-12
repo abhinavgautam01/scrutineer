@@ -798,6 +798,7 @@ func confirmedVerificationReport(t *testing.T) string {
 			Nodes: []verification.AttackTreeNode{
 				{ID: root, Kind: "goal", Description: "Trigger parser panic", Status: "satisfied", Evidence: "attempts 1-3 panic at parser.go:42"},
 				{ID: "AT2", ParentID: &root, Kind: "entry_point", Description: "Supply input through Parse", Status: "satisfied", Evidence: "api.go:18 calls parser"},
+				{ID: "AT3", ParentID: verificationStringPtr("AT2"), Kind: "sink", Description: "Reach parser panic", Status: "satisfied", Evidence: "parser.go:42 panics"},
 			},
 			Blockers: []string{},
 		},
@@ -821,6 +822,10 @@ func confirmedVerificationReport(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return string(raw)
+}
+
+func verificationStringPtr(value string) *string {
+	return &value
 }
 
 func TestParseVerify_recordsStructuredRubric(t *testing.T) {

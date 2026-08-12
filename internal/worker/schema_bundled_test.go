@@ -187,7 +187,8 @@ func TestBundledSchemas_compileAndAcceptSamples(t *testing.T) {
 			`{"status":"confirmed","preflight":{"classification":"local-safe","justification":"local file input"},
 			  "attack_tree":{"goal":"Trigger parser panic","root_id":"AT1","verdict":"reachable","nodes":[
 			    {"id":"AT1","parent_id":null,"kind":"goal","description":"Trigger parser panic","status":"satisfied","evidence":"attempts 1-3 panic"},
-			    {"id":"AT2","parent_id":"AT1","kind":"sink","description":"Reach parser sink","status":"satisfied","evidence":"parser.go:42"}],"blockers":[]},
+			    {"id":"AT2","parent_id":"AT1","kind":"entry_point","description":"Call public Parse","status":"satisfied","evidence":"api.go:18"},
+			    {"id":"AT3","parent_id":"AT2","kind":"sink","description":"Reach parser sink","status":"satisfied","evidence":"parser.go:42"}],"blockers":[]},
 			  "attempts":[
 			    {"number":1,"outcome":"reproduced","evidence":"boom","failure_class":"panic","crash_site":"parser.go:42"},
 			    {"number":2,"outcome":"reproduced","evidence":"boom","failure_class":"panic","crash_site":"parser.go:42"},
@@ -478,7 +479,9 @@ func TestBundledSchemas_rejectBadShapes(t *testing.T) {
 			"validation failed"},
 		{"../../skills/verify/schema.json",
 			`{"status":"confirmed","attack_tree":{"goal":"Trigger panic","root_id":"AT1","verdict":"reachable","nodes":[
-			  {"id":"AT1","parent_id":null,"kind":"goal","description":"Trigger panic","status":"satisfied","evidence":"attempts 1-3"}],"blockers":[]},"attempts":[
+			  {"id":"AT1","parent_id":null,"kind":"goal","description":"Trigger panic","status":"satisfied","evidence":"attempts 1-3"},
+			  {"id":"AT2","parent_id":"AT1","kind":"entry_point","description":"Call public API","status":"satisfied","evidence":"api.go:1"},
+			  {"id":"AT3","parent_id":"AT2","kind":"sink","description":"Reach sink","status":"satisfied","evidence":"x.go:1"}],"blockers":[]},"attempts":[
 			  {"number":1,"outcome":"reproduced","evidence":"x","failure_class":"panic","crash_site":"x.go:1"},
 			  {"number":2,"outcome":"reproduced","evidence":"x","failure_class":"panic","crash_site":"x.go:1"},
 			  {"number":3,"outcome":"not_reproduced","evidence":"clean","failure_class":"","crash_site":""}],

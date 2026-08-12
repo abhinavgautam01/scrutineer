@@ -84,7 +84,8 @@ func completeVerificationReport() verification.Report {
 			Verdict: "reachable",
 			Nodes: []verification.AttackTreeNode{
 				{ID: root, Kind: "goal", Description: "Trigger parser panic", Status: "satisfied", Evidence: "3/3 attempts panic"},
-				{ID: "AT2", ParentID: &root, Kind: "sink", Description: "Reach parser sink", Status: "satisfied", Evidence: "parser.go:42"},
+				{ID: "AT2", ParentID: &root, Kind: "entry_point", Description: "Call public Parse", Status: "satisfied", Evidence: "api.go:18"},
+				{ID: "AT3", ParentID: webVerificationStringPtr("AT2"), Kind: "sink", Description: "Reach parser sink", Status: "satisfied", Evidence: "parser.go:42"},
 			},
 			Blockers: []string{},
 		},
@@ -101,4 +102,8 @@ func completeVerificationReport() verification.Report {
 			Deterministic:                   criterion,
 		},
 	}
+}
+
+func webVerificationStringPtr(value string) *string {
+	return &value
 }

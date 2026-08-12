@@ -789,11 +789,12 @@ git commit -m "fix: {{$f.Title}}"</pre>
           </div>
           <div class="overflow-x-auto">
             <table class="w-full text-sm">
-              <thead><tr class="border-b"><th class="text-left py-2">Node</th><th class="text-left">Kind</th><th class="text-left">Status</th><th class="text-left">Condition</th><th class="text-left">Evidence</th></tr></thead>
+              <thead><tr class="border-b"><th class="text-left py-2">Node</th><th class="text-left">Parent</th><th class="text-left">Kind</th><th class="text-left">Status</th><th class="text-left">Condition</th><th class="text-left">Evidence</th></tr></thead>
               <tbody>
               {{range .Nodes}}
                 <tr class="border-b align-top">
                   <td class="py-2 pr-3 font-medium">{{.ID}}</td>
+                  <td class="py-2 pr-3">{{if .ParentID}}{{.ParentID}}{{else}}-{{end}}</td>
                   <td class="py-2 pr-3">{{.Kind}}</td>
                   <td class="py-2 pr-3">{{.Status}}</td>
                   <td class="py-2 pr-3">{{.Description}}</td>

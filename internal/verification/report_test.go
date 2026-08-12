@@ -3,6 +3,7 @@ package verification
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -19,6 +20,7 @@ func completeReport() Report {
 			Nodes: []AttackTreeNode{
 				{ID: root, Kind: "goal", Description: "Trigger parser panic", Status: "satisfied", Evidence: "3/3 attempts panic at parser.go:42"},
 				{ID: "AT2", ParentID: &root, Kind: "entry_point", Description: "Supply document to Parse", Status: "satisfied", Evidence: "api.go:18 calls parser"},
+				{ID: "AT3", ParentID: ptr("AT2"), Kind: "sink", Description: "Reach parser panic", Status: "satisfied", Evidence: "parser.go:42 panics"},
 			},
 			Blockers: []string{},
 		},
@@ -105,14 +107,14 @@ func TestReportValidateRejectsInvalidAttackTrees(t *testing.T) {
 		{
 			name: "cycle",
 			edit: func(r *Report) {
-				third := "AT3"
-				second := "AT2"
-				r.AttackTree.Nodes[1].ParentID = &third
-				r.AttackTree.Nodes = append(r.AttackTree.Nodes, AttackTreeNode{
-					ID: third, ParentID: &second, Kind: "sink", Description: "panic", Status: "satisfied", Evidence: "parser.go:42",
-				})
+				r.AttackTree.Nodes[1].ParentID = ptr("AT3")
 			},
 			want: "parent cycle",
+		},
+		{
+			name: "second goal",
+			edit: func(r *Report) { r.AttackTree.Nodes[1].Kind = "goal" },
+			want: "has kind goal but is not the root",
 		},
 		{
 			name: "status mismatch",
@@ -124,6 +126,35 @@ func TestReportValidateRejectsInvalidAttackTrees(t *testing.T) {
 			edit: func(r *Report) { r.AttackTree.Nodes[0].Status = "unproven" },
 			want: `root status "unproven" does not match verdict "reachable"`,
 		},
+		{
+			name: "reachable without entry point",
+			edit: func(r *Report) { r.AttackTree.Nodes[1].Kind = "transition" },
+			want: "requires an entry_point node",
+		},
+		{
+			name: "reachable without sink",
+			edit: func(r *Report) { r.AttackTree.Nodes[2].Kind = "effect" },
+			want: "requires a sink node",
+		},
+		{
+			name: "inconclusive reachable tree",
+			edit: func(r *Report) {
+				r.Status = "inconclusive"
+			},
+			want: `status "inconclusive" requires attack_tree.verdict "blocked" or "unproven"`,
+		},
+		{
+			name: "too many nodes",
+			edit: func(r *Report) {
+				for i := len(r.AttackTree.Nodes); i <= attackTreeMaxNodes; i++ {
+					id := fmt.Sprintf("AT%d", i+1)
+					r.AttackTree.Nodes = append(r.AttackTree.Nodes, AttackTreeNode{
+						ID: id, ParentID: ptr("AT1"), Kind: "transition", Description: "step", Status: "satisfied", Evidence: "observed",
+					})
+				}
+			},
+			want: "maximum is 64",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -134,4 +165,8 @@ func TestReportValidateRejectsInvalidAttackTrees(t *testing.T) {
 			}
 		})
 	}
+}
+
+func ptr(value string) *string {
+	return &value
 }

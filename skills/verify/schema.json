@@ -92,6 +92,7 @@
         "nodes": {
           "type": "array",
           "minItems": 1,
+          "maxItems": 64,
           "items": { "$ref": "#/$defs/attackTreeNode" }
         },
         "blockers": {
@@ -264,7 +265,15 @@
             }
           },
           "attack_tree": {
-            "properties": { "verdict": { "const": "reachable" } }
+            "properties": {
+              "verdict": { "const": "reachable" },
+              "nodes": {
+                "allOf": [
+                  { "contains": { "properties": { "kind": { "const": "entry_point" } }, "required": ["kind"] }, "minContains": 1 },
+                  { "contains": { "properties": { "kind": { "const": "sink" } }, "required": ["kind"] }, "minContains": 1 }
+                ]
+              }
+            }
           }
         }
       }
@@ -286,6 +295,16 @@
               "verdict": { "const": "blocked" },
               "blockers": { "minItems": 1 }
             }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "inconclusive" } }, "required": ["status"] },
+      "then": {
+        "properties": {
+          "attack_tree": {
+            "properties": { "verdict": { "enum": ["blocked", "unproven"] } }
           }
         }
       }

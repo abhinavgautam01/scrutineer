@@ -7,8 +7,11 @@ import (
 )
 
 const (
-	attemptCount   = 3
-	criterionCount = 5
+	attemptCount        = 3
+	criterionCount      = 5
+	attackTreeMaxNodes  = 64
+	attackTreeVisiting  = 1
+	attackTreeValidated = 2
 )
 
 // ErrMissingRubric identifies reports produced by the pre-rubric verify skill.
@@ -133,7 +136,11 @@ func (r Report) validateAttackTree() error {
 	if len(tree.Nodes) == 0 {
 		return errors.New("attack_tree.nodes is empty")
 	}
+	if len(tree.Nodes) > attackTreeMaxNodes {
+		return fmt.Errorf("attack_tree.nodes has %d entries; maximum is %d", len(tree.Nodes), attackTreeMaxNodes)
+	}
 	nodes := make(map[string]AttackTreeNode, len(tree.Nodes))
+	pathState := map[string]uint8{tree.RootID: attackTreeValidated}
 	for i, node := range tree.Nodes {
 		if _, exists := nodes[node.ID]; exists {
 			return fmt.Errorf("attack_tree.nodes[%d].id %q is not unique", i, node.ID)
@@ -154,13 +161,13 @@ func (r Report) validateAttackTree() error {
 		if node.ID == tree.RootID {
 			continue
 		}
+		if node.Kind == "goal" {
+			return fmt.Errorf("attack_tree.nodes[%d] %q has kind goal but is not the root", i, node.ID)
+		}
 		if node.ParentID == nil {
 			return fmt.Errorf("attack_tree.nodes[%d] %q has null parent_id but is not the root", i, node.ID)
 		}
-		if _, ok := nodes[*node.ParentID]; !ok {
-			return fmt.Errorf("attack_tree.nodes[%d] %q names missing parent %q", i, node.ID, *node.ParentID)
-		}
-		if err := attackTreeNodeReachesRoot(node.ID, tree.RootID, nodes); err != nil {
+		if err := validateAttackTreePath(node.ID, tree.RootID, nodes, pathState); err != nil {
 			return err
 		}
 	}
@@ -200,6 +207,19 @@ func validateAttackTreeNodeStatuses(tree AttackTree) error {
 	if tree.Verdict == "reachable" && len(tree.Blockers) != 0 {
 		return errors.New("attack_tree verdict reachable requires an empty blockers list")
 	}
+	if tree.Verdict == "reachable" {
+		for _, requirement := range []struct {
+			kind    string
+			article string
+		}{
+			{kind: "entry_point", article: "an"},
+			{kind: "sink", article: "a"},
+		} {
+			if !attackTreeHasKind(tree.Nodes, requirement.kind) {
+				return fmt.Errorf("attack_tree verdict reachable requires %s %s node", requirement.article, requirement.kind)
+			}
+		}
+	}
 	if tree.Verdict == "blocked" {
 		if !hasVerdictNode {
 			return errors.New("attack_tree verdict blocked requires at least one blocked node")
@@ -214,20 +234,35 @@ func validateAttackTreeNodeStatuses(tree AttackTree) error {
 	return nil
 }
 
-func attackTreeNodeReachesRoot(id, rootID string, nodes map[string]AttackTreeNode) error {
-	seen := make(map[string]bool, len(nodes))
-	current := id
-	for current != rootID {
-		if seen[current] {
-			return fmt.Errorf("attack_tree contains a parent cycle at node %q", current)
+func attackTreeHasKind(nodes []AttackTreeNode, kind string) bool {
+	for _, node := range nodes {
+		if node.Kind == kind {
+			return true
 		}
-		seen[current] = true
-		node := nodes[current]
-		if node.ParentID == nil {
-			return fmt.Errorf("attack_tree node %q is disconnected from root %q", id, rootID)
-		}
-		current = *node.ParentID
 	}
+	return false
+}
+
+func validateAttackTreePath(id, rootID string, nodes map[string]AttackTreeNode, state map[string]uint8) error {
+	switch state[id] {
+	case attackTreeVisiting:
+		return fmt.Errorf("attack_tree contains a parent cycle at node %q", id)
+	case attackTreeValidated:
+		return nil
+	}
+	state[id] = attackTreeVisiting
+	node := nodes[id]
+	if node.ParentID == nil {
+		return fmt.Errorf("attack_tree node %q is disconnected from root %q", id, rootID)
+	}
+	parentID := *node.ParentID
+	if _, ok := nodes[parentID]; !ok {
+		return fmt.Errorf("attack_tree node %q names missing parent %q", id, parentID)
+	}
+	if err := validateAttackTreePath(parentID, rootID, nodes, state); err != nil {
+		return err
+	}
+	state[id] = attackTreeValidated
 	return nil
 }
 
@@ -240,6 +275,10 @@ func validateAttackTreeVerdict(status, verdict string) error {
 		want = "blocked"
 	case "deferred", "not_attempted":
 		want = "not_attempted"
+	case "inconclusive":
+		if verdict != "blocked" && verdict != "unproven" {
+			return fmt.Errorf("verify status \"inconclusive\" requires attack_tree.verdict \"blocked\" or \"unproven\", got %q", verdict)
+		}
 	}
 	if want != "" && verdict != want {
 		return fmt.Errorf("verify status %q requires attack_tree.verdict %q, got %q", status, want, verdict)
