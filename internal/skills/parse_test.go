@@ -1213,6 +1213,97 @@ func TestBundledAuditAuthzMetadata(t *testing.T) {
 	}
 }
 
+func TestBundledZizmorReferencePack(t *testing.T) {
+	dir := filepath.Join("..", "..", "skills", "zizmor")
+	zizmor, err := ParseFile(filepath.Join(dir, "SKILL.md"))
+	if err != nil {
+		t.Fatalf("parse zizmor: %v", err)
+	}
+	if zizmor.OutputKind != "findings" || zizmor.Model != "mid" {
+		t.Errorf("zizmor metadata = kind %q, model %q", zizmor.OutputKind, zizmor.Model)
+	}
+	for _, text := range []string{
+		"python3 scripts/scan.py > ./zizmor.json",
+		"Preserve its `id`, `title`, `severity`, `location`, `locations`",
+		"Do not add, remove, merge, or reclassify findings.",
+		"The references are review guidance, not evidence",
+	} {
+		if !strings.Contains(zizmor.Body, text) {
+			t.Errorf("zizmor instructions missing %q", text)
+		}
+	}
+
+	requiredReferences := map[string][]string{
+		"comment-commands.md":            {"TOCTOU Between Approval and Checkout", "author_association"},
+		"examples.md":                    {"Negative: safe metadata workflow", "Positive: ArtiPACKED artifact upload", "LiveCodes"},
+		"expression-injection.md":        {"GitHub expression expansion", "workflow_dispatch"},
+		"permissions-secrets-runners.md": {"ArtiPACKED", "OIDC Trust Boundaries"},
+		"privileged-pr-context.md":       {"pull_request_target", "Safe or Broken But Not Vulnerable"},
+		"reusable-and-indirect-flows.md": {"workflow_call", "Cache Eviction and Trust Crossing"},
+		"supply-chain.md":                {"CVE-2025-30066", "Over 23,000 repositories referenced the action", "payload executed in dozens", "40-character commit SHA"},
+	}
+	for name, required := range requiredReferences {
+		data, readErr := os.ReadFile(filepath.Join(dir, "references", name))
+		if readErr != nil {
+			t.Errorf("read zizmor reference %s: %v", name, readErr)
+			continue
+		}
+		if !strings.HasPrefix(string(data), "# ") {
+			t.Errorf("zizmor reference %s has no heading", name)
+		}
+		for _, text := range required {
+			if !strings.Contains(string(data), text) {
+				t.Errorf("zizmor reference %s missing %q", name, text)
+			}
+		}
+	}
+
+	source, err := os.ReadFile(filepath.Join(dir, "references", "SOURCE"))
+	if err != nil {
+		t.Fatalf("read zizmor reference source: %v", err)
+	}
+	const revision = "9111d2524f6c03388861a63dfc81825b4ba911e1"
+	if !strings.Contains(string(source), revision) {
+		t.Errorf("zizmor reference source does not pin revision %s", revision)
+	}
+	if !strings.Contains(string(source), "Adapted") {
+		t.Error("zizmor reference source does not describe the adaptation")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "references", "examples-and-usage.md")); !os.IsNotExist(err) {
+		t.Errorf("stale Warden examples-and-usage.md still exists: %v", err)
+	}
+	assertNoInternalZizmorCitations(t, dir)
+
+	license, err := os.ReadFile(filepath.Join(dir, "references", "LICENSE.warden"))
+	if err != nil {
+		t.Fatalf("read zizmor reference license: %v", err)
+	}
+	if !strings.Contains(string(license), "Copyright (c) 2026 Functional Software, Inc. dba Sentry") {
+		t.Error("zizmor reference license is missing the upstream copyright notice")
+	}
+}
+
+func assertNoInternalZizmorCitations(t *testing.T, dir string) {
+	t.Helper()
+	var references strings.Builder
+	files, err := filepath.Glob(filepath.Join(dir, "references", "*.md"))
+	if err != nil {
+		t.Fatalf("glob zizmor references: %v", err)
+	}
+	for _, path := range files {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read zizmor reference %s: %v", filepath.Base(path), err)
+		}
+		references.Write(data)
+	}
+	for _, stale := range []string{"Warden PR #277", "sentry e93ee1ce", "getsentry 0898b3d8", "getsentry #19582", "getsentry #19634"} {
+		if strings.Contains(references.String(), stale) {
+			t.Errorf("zizmor references retain internal citation %q", stale)
+		}
+	}
+}
+
 func TestBundledAuditPIIMetadata(t *testing.T) {
 	dir := filepath.Join("..", "..", "skills", "audit-pii")
 	auditPII, err := ParseFile(filepath.Join(dir, "SKILL.md"))
