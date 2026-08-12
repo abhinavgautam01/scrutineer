@@ -157,7 +157,18 @@ def list_candidates(args):
         if matched:
             candidates.append({"commit": commit, "title": subject, "matched_terms": sorted(set(matched))})
     total = len(candidates)
-    candidates = candidates[: args.max_candidates]
+    page_offset = 0
+    if args.after:
+        if not COMMIT_RE.fullmatch(args.after):
+            raise ValueError("--after must be a full commit id")
+        try:
+            page_offset = next(
+                index + 1 for index, candidate in enumerate(candidates) if candidate["commit"] == args.after
+            )
+        except StopIteration as exc:
+            raise ValueError("--after commit is not a candidate in the selected history range") from exc
+    page = candidates[page_offset : page_offset + args.max_candidates]
+    has_more = page_offset + len(page) < total
     shallow = git(args.repo, "rev-parse", "--is-shallow-repository").stdout.strip() == "true"
     result = {
         "head": head,
@@ -169,8 +180,10 @@ def list_candidates(args):
         "shallow": shallow,
         "ecosystems": ecosystems,
         "total_matched": total,
-        "truncated": total > len(candidates),
-        "candidates": candidates,
+        "page_offset": page_offset,
+        "truncated": has_more,
+        "next_cursor": page[-1]["commit"] if has_more else "",
+        "candidates": page,
     }
     encoded = json.dumps(result, indent=2, sort_keys=True) + "\n"
     if args.output == "-":
@@ -230,6 +243,7 @@ def parser():
     listing.add_argument("--repo", default="./src")
     listing.add_argument("--base", default="")
     listing.add_argument("--path", default="")
+    listing.add_argument("--after", default="")
     listing.add_argument("--max-candidates", type=int, default=200)
     listing.add_argument("--output", default="-")
     listing.set_defaults(func=list_candidates)

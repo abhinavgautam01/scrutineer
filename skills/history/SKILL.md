@@ -42,8 +42,9 @@ Write the selected report to `history_cache.json`. If the API is unavailable, ev
 Get the current commit with `git -C ./src rev-parse HEAD`. A cache is reusable only when `git -C ./src merge-base --is-ancestor <cached analyzed_head> HEAD` exits zero. This test is mandatory: a force-push or rebase invalidates the cache even if the branch name is unchanged.
 
 - Reusable complete cache: preserve its `fixes` and process only `<cached analyzed_head>..HEAD`.
-- Reusable partial cache while the current clone is also shallow: preserve its `fixes`, process only new commits, and keep the final report partial.
-- Partial cache followed by a complete clone: discard the cache and rescan all available history so previously missing old commits can be considered.
+- Reusable partial cache whose `gaps` record unfinished candidate pagination: preserve its `fixes` and continue after its `analyzed_head`, which is the last fully classified continuation commit.
+- Reusable partial cache whose `gaps` record shallow history while the current clone is also shallow: preserve its `fixes`, process only new commits, and keep the final report partial.
+- Cache whose `gaps` record shallow history followed by a complete clone: discard the cache and rescan all available history so previously missing old commits can be considered.
 - Missing, malformed, non-ancestor, wrong-scope, or otherwise incompatible cache: discard it and scan all history reachable from HEAD.
 - Cache already at HEAD: preserve the cached fixes, update cache metadata, write the report, validate it, and stop without reclassifying old commits.
 
@@ -61,10 +62,13 @@ The script detects repository ecosystems, applies security-shaped base terms plu
 
 - `cache_reusable` and `cache_invalid_reason` from its own ancestry check;
 - `shallow`, determined by Git rather than inferred from commit count;
-- `truncated` when the deterministic candidate ceiling was reached;
-- `total_matched`, the number of keyword candidates before that ceiling.
+- `page_offset`, the current page's zero-based position in the matched candidate list;
+- `truncated` and `next_cursor` when more candidates remain after the current page;
+- `total_matched`, the number of keyword candidates in the selected history range across all pages.
 
 If the script rejects the cached base, discard the cached fixes and rerun the list command without `--base`. The script's ancestry result is authoritative.
+
+When `truncated` is true, classify the current page, then request the next page with the same `--base` and `--path` arguments plus `--after <next_cursor>`. Repeat until `truncated` is false. If a tool failure or turn limit prevents pagination from completing after at least one full page, set `analyzed_head` to the last fully classified page's `next_cursor`, keep the report partial, and record the unreviewed continuation in `gaps`. The next scan will use that cursor as its cached `--base` and begin with the remaining candidates. Set `analyzed_head` to HEAD only after reaching the final page; never mark an unreviewed suffix as analyzed.
 
 Keyword matching creates a review queue, not findings. A message saying "security", "bounds", "sanitize", "auth", or "overflow" is not enough by itself.
 
@@ -111,7 +115,7 @@ For each confirmed fix emit:
 Set `partial` true when any of these holds:
 
 - the repository is shallow;
-- candidate enumeration was truncated;
+- candidate pagination or classification did not reach the final page;
 - any candidate remained unclear because required history or diff content was unavailable;
 - a tool failure prevented complete candidate classification.
 

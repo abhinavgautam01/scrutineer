@@ -2,9 +2,11 @@ package worker
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -16,6 +18,9 @@ type historyCandidateList struct {
 	Shallow            bool     `json:"shallow"`
 	Ecosystems         []string `json:"ecosystems"`
 	TotalMatched       int      `json:"total_matched"`
+	PageOffset         int      `json:"page_offset"`
+	Truncated          bool     `json:"truncated"`
+	NextCursor         string   `json:"next_cursor"`
 	Candidates         []struct {
 		Commit       string   `json:"commit"`
 		Title        string   `json:"title"`
@@ -168,6 +173,69 @@ func TestHistoryCandidates_capsDiffsAndDetectsShallowClone(t *testing.T) {
 	}
 	if got := runHistoryList(t, clone); !got.Shallow {
 		t.Error("depth-1 clone was not reported as shallow")
+	}
+}
+
+func TestHistoryCandidates_paginatesPastCandidateLimit(t *testing.T) {
+	repo := t.TempDir()
+	historyGit(t, repo, "init")
+	historyGit(t, repo, "config", "user.name", "History Test")
+	historyGit(t, repo, "config", "user.email", "history@example.invalid")
+	historyCommit(t, repo, "initial import", "src/parser.c", "int parse(int n) { return n; }\n")
+
+	want := make([]string, 0, 7)
+	for i := range 7 {
+		want = append(want, historyCommit(
+			t, repo, "fix security bounds check", "src/parser.c",
+			fmt.Sprintf("int parse(int n) { return n < %d ? n : -1; }\n", i+1),
+		))
+	}
+
+	firstPage := runHistoryList(t, repo, "--max-candidates", "3")
+	if !firstPage.Truncated || firstPage.NextCursor != want[2] {
+		t.Fatalf("first page = truncated %v cursor %q, want true and %q", firstPage.Truncated, firstPage.NextCursor, want[2])
+	}
+	resumed := runHistoryList(t, repo, "--base", firstPage.NextCursor, "--max-candidates", "10")
+	if !resumed.CacheReusable || resumed.TotalMatched != 4 || len(resumed.Candidates) != 4 {
+		t.Fatalf("resumed page = reusable %v total %d candidates %d, want true, 4, 4", resumed.CacheReusable, resumed.TotalMatched, len(resumed.Candidates))
+	}
+	for i, candidate := range resumed.Candidates {
+		if candidate.Commit != want[i+3] {
+			t.Fatalf("resumed candidate %d = %s, want %s", i, candidate.Commit, want[i+3])
+		}
+	}
+
+	var got []string
+	cursor := ""
+	for pageNumber := 0; ; pageNumber++ {
+		extra := []string{"--max-candidates", "3"}
+		if cursor != "" {
+			extra = append(extra, "--after", cursor)
+		}
+		page := runHistoryList(t, repo, extra...)
+		if page.TotalMatched != len(want) {
+			t.Fatalf("page %d total = %d, want %d", pageNumber, page.TotalMatched, len(want))
+		}
+		if page.PageOffset != len(got) {
+			t.Fatalf("page %d offset = %d, want %d", pageNumber, page.PageOffset, len(got))
+		}
+		for _, candidate := range page.Candidates {
+			got = append(got, candidate.Commit)
+		}
+		if !page.Truncated {
+			if page.NextCursor != "" {
+				t.Fatalf("final page cursor = %q, want empty", page.NextCursor)
+			}
+			break
+		}
+		if page.NextCursor == "" {
+			t.Fatalf("page %d is truncated without a continuation cursor", pageNumber)
+		}
+		cursor = page.NextCursor
+	}
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("paginated candidates = %v, want %v", got, want)
 	}
 }
 
