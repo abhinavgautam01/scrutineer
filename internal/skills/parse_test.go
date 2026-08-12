@@ -974,8 +974,8 @@ func TestBundledReconPipelineMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse threat-model: %v", err)
 	}
-	if !slices.Contains(threatModel.Requires, "recon") || !slices.Contains(threatModel.Requires, "history") {
-		t.Errorf("threat-model requires = %v, want recon and history", threatModel.Requires)
+	if !slices.Equal(threatModel.Requires, []string{"recon"}) {
+		t.Errorf("threat-model requires = %v, want [recon]", threatModel.Requires)
 	}
 }
 
@@ -998,13 +998,17 @@ func TestBundledHistoryMetadata(t *testing.T) {
 		t.Error("history instructions are missing cache, batching, or partial-history contract")
 	}
 
-	for _, name := range []string{"threat-model", "advisory-deep-dive"} {
+	consumers := map[string][]string{
+		"threat-model":       {"recon"},
+		"advisory-deep-dive": {"advisories"},
+	}
+	for name, wantRequires := range consumers {
 		consumer, parseErr := ParseFile(filepath.Join("..", "..", "skills", name, "SKILL.md"))
 		if parseErr != nil {
 			t.Fatalf("parse %s: %v", name, parseErr)
 		}
-		if !slices.Contains(consumer.Requires, "history") {
-			t.Errorf("%s requires = %v, want history", name, consumer.Requires)
+		if !slices.Equal(consumer.Requires, wantRequires) {
+			t.Errorf("%s requires = %v, want %v (history is best-effort)", name, consumer.Requires, wantRequires)
 		}
 	}
 }

@@ -9,7 +9,6 @@ metadata:
   scrutineer.output_kind: threat_model
   scrutineer.requires:
     - recon
-    - history
 ---
 
 # threat-model

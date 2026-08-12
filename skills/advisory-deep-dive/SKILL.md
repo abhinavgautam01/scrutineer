@@ -13,7 +13,6 @@ metadata:
   scrutineer.requires_remote: true
   scrutineer.requires:
     - advisories
-    - history
 ---
 
 # advisory-deep-dive
