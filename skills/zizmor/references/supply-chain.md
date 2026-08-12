@@ -8,7 +8,7 @@ Every `uses:` is a delegation. The workflow runs whatever code the resolved ref 
 
 ## What Has Already Happened
 
-- **CVE-2025-30066, tj-actions/changed-files (March 2025).** The attacker rewrote multiple version tags (including `v1` through `v45`) to point at a malicious commit. The injected code dumped runner process memory, base64-encoded the result, and printed it to the workflow log. Around 23,000 repositories ran the compromise; CISA issued an advisory and a remediation deadline.
+- **CVE-2025-30066, tj-actions/changed-files (March 2025).** The attacker rewrote multiple version tags (including `v1` through `v45`) to point at a malicious commit. The injected code dumped runner process memory, base64-encoded the result, and printed it to the workflow log. Over 23,000 repositories referenced the action; Wiz confirmed the payload executed in dozens of them. CISA issued an advisory and a remediation deadline.
 - **CVE-2025-30154, reviewdog/action-setup (March 2025).** Same wave. The compromise of `reviewdog/action-setup@v1` is the suspected initial vector for the tj-actions takeover, demonstrating how a single popular dependency cascades through unrelated maintainers.
 - **ArtiPACKED (Unit 42, August 2024).** Repeatedly compromised maintainers via persisted `GITHUB_TOKEN` written to artifacts, harvested from public repository workflow runs.
 

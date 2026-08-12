@@ -1240,7 +1240,7 @@ func TestBundledZizmorReferencePack(t *testing.T) {
 		"permissions-secrets-runners.md": {"ArtiPACKED", "OIDC Trust Boundaries"},
 		"privileged-pr-context.md":       {"pull_request_target", "Safe or Broken But Not Vulnerable"},
 		"reusable-and-indirect-flows.md": {"workflow_call", "Cache Eviction and Trust Crossing"},
-		"supply-chain.md":                {"CVE-2025-30066", "40-character commit SHA"},
+		"supply-chain.md":                {"CVE-2025-30066", "Over 23,000 repositories referenced the action", "payload executed in dozens", "40-character commit SHA"},
 	}
 	for name, required := range requiredReferences {
 		data, readErr := os.ReadFile(filepath.Join(dir, "references", name))
