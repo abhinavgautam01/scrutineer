@@ -4,6 +4,8 @@ Entries are grouped by release, newest first. Each entry is a summary written fo
 
 ## Unreleased
 
+- A `default_model` pinned in the config file but missing from the model pick list is now reported at startup instead of being silently ignored, and the documentation and sample configuration now use current-generation model ids. ([#816](https://github.com/alpha-omega-security/scrutineer/pull/816), [@alexandre-daubois](https://github.com/alexandre-daubois))
+
 ## 2026-08-11
 
 - Monorepos can now be scanned one sub-package at a time, with each package getting its own findings, advisories and disclosure route instead of everything rolling up into one entry. ([#806](https://github.com/alpha-omega-security/scrutineer/pull/806), [@dkw-oss](https://github.com/dkw-oss))
@@ -20,7 +22,6 @@ Entries are grouped by release, newest first. Each entry is a summary written fo
 - Four focused audits can now be run on demand alongside the general scan, covering data exfiltration, authorisation boundaries, personal-data exposure, and memory safety in native code. ([#777](https://github.com/alpha-omega-security/scrutineer/pull/777) [#784](https://github.com/alpha-omega-security/scrutineer/pull/784) [#809](https://github.com/alpha-omega-security/scrutineer/pull/809) [#822](https://github.com/alpha-omega-security/scrutineer/pull/822), [@abhinavgautam01](https://github.com/abhinavgautam01))
 - Re-checking an open finding now skips the AI call when the affected file has not changed since the finding was raised. ([#785](https://github.com/alpha-omega-security/scrutineer/pull/785), [@abhinavgautam01](https://github.com/abhinavgautam01))
 - The scans list, repositories list and per-repository Scans tab now update live as scans start, finish or change state, without disturbing the reader's place, filters or sort. ([#813](https://github.com/alpha-omega-security/scrutineer/pull/813), [@alexandre-daubois](https://github.com/alexandre-daubois))
-- A `default_model` pinned in the config file but missing from the model pick list is now reported at startup instead of being silently ignored, and the documentation and sample configuration now use current-generation model ids. ([#816](https://github.com/alpha-omega-security/scrutineer/pull/816), [@alexandre-daubois](https://github.com/alexandre-daubois))
 - Fixed a case where the access token for a private skills repository could appear in logs and process listings; it is now kept off the command line and URLs that embed one are rejected. ([#814](https://github.com/alpha-omega-security/scrutineer/pull/814), [@abhinavgautam01](https://github.com/abhinavgautam01))
 
 ## 2026-07-28
