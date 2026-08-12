@@ -970,6 +970,12 @@ func verifyNote(result verifyOutput, rubric *verification.Report, score *float64
 	}
 	if rubric != nil && score != nil {
 		fmt.Fprintf(&b, "score: %.2f\n", *score)
+		if rubric.AttackTree != nil {
+			fmt.Fprintf(&b, "attack tree: %s\n", rubric.AttackTree.Verdict)
+			for _, blocker := range rubric.AttackTree.Blockers {
+				fmt.Fprintf(&b, "attack blocker: %s\n", blocker)
+			}
+		}
 		for _, named := range rubric.Criteria.List() {
 			fmt.Fprintf(&b, "criterion: %s = %s\n", named.Name, named.Criterion.Verdict)
 		}

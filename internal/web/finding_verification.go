@@ -18,6 +18,7 @@ type findingVerificationView struct {
 	HasRubric  bool
 	Criteria   []verification.NamedCriterion
 	Attempts   []verification.Attempt
+	AttackTree *verification.AttackTree
 }
 
 func loadFindingVerificationViews(gdb *gorm.DB, findingID uint) ([]findingVerificationView, error) {
@@ -33,6 +34,7 @@ func loadFindingVerificationViews(gdb *gorm.DB, findingID uint) ([]findingVerifi
 			view.HasRubric = true
 			view.Criteria = report.Criteria.List()
 			view.Attempts = report.Attempts
+			view.AttackTree = report.AttackTree
 			if row.Score != nil {
 				view.ScoreLabel = fmt.Sprintf("%.0f%%", *row.Score*verificationPercentScale)
 			}

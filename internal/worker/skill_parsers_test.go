@@ -788,8 +788,19 @@ func confirmedVerificationReport(t *testing.T) string {
 	criterion := verification.Criterion{
 		Verdict: "pass", Method: "executed supplied PoC", Evidence: "observed expected behavior", Confidence: "high",
 	}
+	root := "AT1"
 	report := verification.Report{
 		Status: "confirmed",
+		AttackTree: &verification.AttackTree{
+			Goal:    "Trigger the parser panic through the public API",
+			RootID:  root,
+			Verdict: "reachable",
+			Nodes: []verification.AttackTreeNode{
+				{ID: root, Kind: "goal", Description: "Trigger parser panic", Status: "satisfied", Evidence: "attempts 1-3 panic at parser.go:42"},
+				{ID: "AT2", ParentID: &root, Kind: "entry_point", Description: "Supply input through Parse", Status: "satisfied", Evidence: "api.go:18 calls parser"},
+			},
+			Blockers: []string{},
+		},
 		Attempts: []verification.Attempt{
 			{Number: 1, Outcome: "reproduced", Evidence: "boom", FailureClass: "panic", CrashSite: "parser.go:42"},
 			{Number: 2, Outcome: "reproduced", Evidence: "boom", FailureClass: "panic", CrashSite: "parser.go:42"},
@@ -826,6 +837,9 @@ func TestParseVerify_recordsStructuredRubric(t *testing.T) {
 	}
 	if !strings.Contains(findingNotes(gdb, f.ID)[0].Body, "score: 1.00") {
 		t.Error("verify note should include the derived score")
+	}
+	if !strings.Contains(findingNotes(gdb, f.ID)[0].Body, "attack tree: reachable") {
+		t.Error("verify note should include the attack-tree verdict")
 	}
 }
 

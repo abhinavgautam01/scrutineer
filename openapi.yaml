@@ -1665,11 +1665,25 @@ components:
 
     VerificationReport:
       type: object
-      description: "Immutable verify output containing three attempt records and the five fixed grading criteria. See skills/verify/schema.json for the complete contract."
+      description: "Immutable verify output containing an evidenced attack tree, three attempt records and the five fixed grading criteria. Reports created before attack-tree support may omit attack_tree. See skills/verify/schema.json for the current output contract."
       required: [status]
       additionalProperties: true
       properties:
         status: { type: string, enum: [confirmed, fixed, inconclusive, deferred, not_attempted] }
+        attack_tree:
+          type: object
+          description: "Claim-specific attack path with a rooted parent-linked node set, per-node evidence, an overall reachable/blocked/unproven/not_attempted verdict, and concrete blockers."
+          additionalProperties: true
+          properties:
+            goal: { type: string }
+            root_id: { type: string }
+            verdict: { type: string, enum: [reachable, blocked, unproven, not_attempted] }
+            nodes:
+              type: array
+              items: { type: object, additionalProperties: true }
+            blockers:
+              type: array
+              items: { type: string }
         attempts:
           type: array
           minItems: 3

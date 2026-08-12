@@ -17,13 +17,14 @@ var ErrMissingRubric = errors.New("verify report has no grading rubric")
 
 // Report is the structured output of the verify skill.
 type Report struct {
-	Status     string     `json:"status"`
-	Preflight  *Preflight `json:"preflight,omitempty"`
-	Attempts   []Attempt  `json:"attempts"`
-	Criteria   *Criteria  `json:"criteria,omitempty"`
-	Reproducer string     `json:"reproducer,omitempty"`
-	Evidence   string     `json:"evidence,omitempty"`
-	Notes      string     `json:"notes,omitempty"`
+	Status     string      `json:"status"`
+	Preflight  *Preflight  `json:"preflight,omitempty"`
+	AttackTree *AttackTree `json:"attack_tree,omitempty"`
+	Attempts   []Attempt   `json:"attempts"`
+	Criteria   *Criteria   `json:"criteria,omitempty"`
+	Reproducer string      `json:"reproducer,omitempty"`
+	Evidence   string      `json:"evidence,omitempty"`
+	Notes      string      `json:"notes,omitempty"`
 }
 
 // Preflight records whether the supplied reproduction is safe to execute in
@@ -31,6 +32,29 @@ type Report struct {
 type Preflight struct {
 	Classification string `json:"classification"`
 	Justification  string `json:"justification"`
+}
+
+// AttackTree records the concrete preconditions and code path that support or
+// block the claimed security effect. It is optional here so verification rows
+// written before attack trees were introduced remain readable; schema.json
+// requires it for newly generated reports.
+type AttackTree struct {
+	Goal     string           `json:"goal"`
+	RootID   string           `json:"root_id"`
+	Verdict  string           `json:"verdict"`
+	Nodes    []AttackTreeNode `json:"nodes"`
+	Blockers []string         `json:"blockers"`
+}
+
+// AttackTreeNode is one evidenced condition in the attack tree. ParentID is
+// nil only for the root goal; every other node must name another node.
+type AttackTreeNode struct {
+	ID          string  `json:"id"`
+	ParentID    *string `json:"parent_id"`
+	Kind        string  `json:"kind"`
+	Description string  `json:"description"`
+	Status      string  `json:"status"`
+	Evidence    string  `json:"evidence"`
 }
 
 // Attempt records one of the three independent reproduction attempts.
@@ -85,8 +109,8 @@ func Parse(raw string) (Report, error) {
 	return report, nil
 }
 
-// Validate enforces attempt-number uniqueness, which JSON Schema cannot
-// express. Structural and status-consistency rules live in schema.json.
+// Validate enforces relationships that JSON Schema cannot express. Structural
+// and most status-consistency rules live in schema.json.
 func (r Report) Validate() error {
 	if r.Criteria == nil {
 		return ErrMissingRubric
@@ -97,6 +121,128 @@ func (r Report) Validate() error {
 			return fmt.Errorf("attempts[%d].number %d is not unique in 1..%d", i, attempt.Number, attemptCount)
 		}
 		seen[attempt.Number] = true
+	}
+	if r.AttackTree == nil {
+		return nil
+	}
+	return r.validateAttackTree()
+}
+
+func (r Report) validateAttackTree() error {
+	tree := r.AttackTree
+	if len(tree.Nodes) == 0 {
+		return errors.New("attack_tree.nodes is empty")
+	}
+	nodes := make(map[string]AttackTreeNode, len(tree.Nodes))
+	for i, node := range tree.Nodes {
+		if _, exists := nodes[node.ID]; exists {
+			return fmt.Errorf("attack_tree.nodes[%d].id %q is not unique", i, node.ID)
+		}
+		nodes[node.ID] = node
+	}
+	root, ok := nodes[tree.RootID]
+	if !ok {
+		return fmt.Errorf("attack_tree.root_id %q does not identify a node", tree.RootID)
+	}
+	if root.ParentID != nil {
+		return fmt.Errorf("attack_tree root %q must have null parent_id", tree.RootID)
+	}
+	if root.Kind != "goal" {
+		return fmt.Errorf("attack_tree root %q must have kind goal", tree.RootID)
+	}
+	for i, node := range tree.Nodes {
+		if node.ID == tree.RootID {
+			continue
+		}
+		if node.ParentID == nil {
+			return fmt.Errorf("attack_tree.nodes[%d] %q has null parent_id but is not the root", i, node.ID)
+		}
+		if _, ok := nodes[*node.ParentID]; !ok {
+			return fmt.Errorf("attack_tree.nodes[%d] %q names missing parent %q", i, node.ID, *node.ParentID)
+		}
+		if err := attackTreeNodeReachesRoot(node.ID, tree.RootID, nodes); err != nil {
+			return err
+		}
+	}
+	if err := validateAttackTreeVerdict(r.Status, tree.Verdict); err != nil {
+		return err
+	}
+	wantRootStatus := map[string]string{
+		"reachable":     "satisfied",
+		"blocked":       "blocked",
+		"unproven":      "unproven",
+		"not_attempted": "not_attempted",
+	}[tree.Verdict]
+	if wantRootStatus != "" && root.Status != wantRootStatus {
+		return fmt.Errorf("attack_tree root status %q does not match verdict %q", root.Status, tree.Verdict)
+	}
+	return validateAttackTreeNodeStatuses(*tree)
+}
+
+func validateAttackTreeNodeStatuses(tree AttackTree) error {
+	hasVerdictNode := false
+	for _, node := range tree.Nodes {
+		switch tree.Verdict {
+		case "reachable":
+			if node.Status != "satisfied" {
+				return fmt.Errorf("attack_tree verdict reachable requires node %q to be satisfied", node.ID)
+			}
+		case "blocked":
+			hasVerdictNode = hasVerdictNode || node.Status == "blocked"
+		case "unproven":
+			hasVerdictNode = hasVerdictNode || node.Status == "unproven"
+		case "not_attempted":
+			if node.Status != "not_attempted" {
+				return fmt.Errorf("attack_tree verdict not_attempted requires node %q to be not_attempted", node.ID)
+			}
+		}
+	}
+	if tree.Verdict == "reachable" && len(tree.Blockers) != 0 {
+		return errors.New("attack_tree verdict reachable requires an empty blockers list")
+	}
+	if tree.Verdict == "blocked" {
+		if !hasVerdictNode {
+			return errors.New("attack_tree verdict blocked requires at least one blocked node")
+		}
+		if len(tree.Blockers) == 0 {
+			return errors.New("attack_tree verdict blocked requires at least one blocker")
+		}
+	}
+	if tree.Verdict == "unproven" && !hasVerdictNode {
+		return errors.New("attack_tree verdict unproven requires at least one unproven node")
+	}
+	return nil
+}
+
+func attackTreeNodeReachesRoot(id, rootID string, nodes map[string]AttackTreeNode) error {
+	seen := make(map[string]bool, len(nodes))
+	current := id
+	for current != rootID {
+		if seen[current] {
+			return fmt.Errorf("attack_tree contains a parent cycle at node %q", current)
+		}
+		seen[current] = true
+		node := nodes[current]
+		if node.ParentID == nil {
+			return fmt.Errorf("attack_tree node %q is disconnected from root %q", id, rootID)
+		}
+		current = *node.ParentID
+	}
+	return nil
+}
+
+func validateAttackTreeVerdict(status, verdict string) error {
+	want := ""
+	switch status {
+	case "confirmed":
+		want = "reachable"
+	case "fixed":
+		want = "blocked"
+	case "deferred", "not_attempted":
+		want = "not_attempted"
+	}
+	if want != "" && verdict != want {
+		return fmt.Errorf("verify status %q requires attack_tree.verdict %q, got %q", status, want, verdict)
 	}
 	return nil
 }
