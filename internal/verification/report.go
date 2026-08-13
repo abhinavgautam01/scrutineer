@@ -15,7 +15,8 @@ const (
 )
 
 // ErrMissingRubric identifies reports produced by the pre-rubric verify skill.
-// The worker keeps accepting those reports so queued scans survive an upgrade.
+// Stored-row readers use it to keep historical verification records visible as
+// ungraded; live verify ingestion requires the current report shape.
 var ErrMissingRubric = errors.New("verify report has no grading rubric")
 
 // Report is the structured output of the verify skill.

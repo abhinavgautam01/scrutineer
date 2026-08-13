@@ -27,8 +27,9 @@ const (
 )
 
 type verifyOutput struct {
-	Status    string `json:"status"`
-	Preflight struct {
+	Status     string                   `json:"status"`
+	AttackTree *verification.AttackTree `json:"attack_tree"`
+	Preflight  struct {
 		Classification string `json:"classification"`
 		Justification  string `json:"justification"`
 	} `json:"preflight"`
@@ -914,6 +915,9 @@ func decodeVerifyOutput(report string) (verifyOutput, *verification.Report, *flo
 	var result verifyOutput
 	if err := json.Unmarshal([]byte(report), &result); err != nil {
 		return verifyOutput{}, nil, nil, "", fmt.Errorf("parse verify report: %w", err)
+	}
+	if result.AttackTree == nil {
+		return verifyOutput{}, nil, nil, "", errors.New("verify report requires attack_tree")
 	}
 	rubric, err := verification.Parse(report)
 	if errors.Is(err, verification.ErrMissingRubric) {
