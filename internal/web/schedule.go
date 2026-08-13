@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -22,10 +23,17 @@ const ScheduleOff = "off"
 // created directly in a terminal status and never enter the queue.
 const scheduleKind = "schedule"
 
-// schedulerTick is how often the scheduler re-evaluates every repository's
-// schedule. Due-ness is driven by the persisted NextScheduledScanAt, so the
-// tick interval only bounds the firing latency, not the cadence.
-const schedulerTick = time.Minute
+const (
+	// schedulerTick is how often the scheduler re-evaluates every repository's
+	// schedule. Due-ness is driven by the persisted NextScheduledScanAt, so the
+	// tick interval only bounds the firing latency, not the cadence.
+	schedulerTick = time.Minute
+
+	// Keep remote Git work parallel enough that one slow host does not block
+	// every due repository, but bounded to limit forge and SQLite pressure.
+	schedulerMaxConcurrentRepositories = 5
+	schedulerRepositoryTimeout         = 10 * time.Minute
+)
 
 // ScheduleNext validates a scan-schedule value, the "daily"/"weekly"
 // presets or anything cron.ParseStandard accepts (5-field cron expressions
@@ -83,34 +91,70 @@ func (s *Server) scheduleTick(ctx context.Context, now time.Time) {
 		s.Log.Error("scheduler: list repositories", "err", err)
 		return
 	}
+	s.runScheduledRepositories(ctx, now, global, repos, schedulerMaxConcurrentRepositories, schedulerRepositoryTimeout)
+}
+
+func (s *Server) runScheduledRepositories(
+	ctx context.Context,
+	now time.Time,
+	global string,
+	repos []db.Repository,
+	maxConcurrent int,
+	timeout time.Duration,
+) {
+	if len(repos) == 0 {
+		return
+	}
+	if maxConcurrent < 1 {
+		maxConcurrent = 1
+	}
+
+	jobs := make(chan db.Repository, len(repos))
 	for _, repo := range repos {
-		expr := repo.ScanSchedule
-		if expr == "" {
-			expr = global
-		}
-		if expr == "" || expr == ScheduleOff {
-			if repo.NextScheduledScanAt != nil {
-				if err := s.DB.Model(&db.Repository{}).Where("id = ?", repo.ID).
-					UpdateColumn("next_scheduled_scan_at", nil).Error; err != nil {
-					s.Log.Error("scheduler: clear next_scheduled_scan_at", "repo", repo.Name, "err", err)
-				}
+		jobs <- repo
+	}
+	close(jobs)
+
+	var workers sync.WaitGroup
+	for range min(maxConcurrent, len(repos)) {
+		workers.Go(func() {
+			for repo := range jobs {
+				repoCtx, cancel := context.WithTimeout(ctx, timeout)
+				s.processScheduledRepository(repoCtx, now, global, repo)
+				cancel()
 			}
-			continue
-		}
-		next, err := ScheduleNext(expr, now)
-		if err != nil {
-			// Save paths validate, so this only happens on hand-edited
-			// data; skip rather than firing on a schedule we can't read.
-			s.Log.Warn("scheduler: invalid schedule", "repo", repo.Name, "schedule", expr, "err", err)
-			continue
-		}
+		})
+	}
+	workers.Wait()
+}
+
+func (s *Server) processScheduledRepository(ctx context.Context, now time.Time, global string, repo db.Repository) {
+	expr := repo.ScanSchedule
+	if expr == "" {
+		expr = global
+	}
+	if expr == "" || expr == ScheduleOff {
 		if repo.NextScheduledScanAt != nil {
-			s.runScheduledScan(ctx, repo)
+			if err := s.DB.Model(&db.Repository{}).Where("id = ?", repo.ID).
+				UpdateColumn("next_scheduled_scan_at", nil).Error; err != nil {
+				s.Log.Error("scheduler: clear next_scheduled_scan_at", "repo", repo.Name, "err", err)
+			}
 		}
-		if err := s.DB.Model(&db.Repository{}).Where("id = ?", repo.ID).
-			UpdateColumn("next_scheduled_scan_at", next).Error; err != nil {
-			s.Log.Error("scheduler: advance next_scheduled_scan_at", "repo", repo.Name, "err", err)
-		}
+		return
+	}
+	next, err := ScheduleNext(expr, now)
+	if err != nil {
+		// Save paths validate, so this only happens on hand-edited
+		// data; skip rather than firing on a schedule we can't read.
+		s.Log.Warn("scheduler: invalid schedule", "repo", repo.Name, "schedule", expr, "err", err)
+		return
+	}
+	if repo.NextScheduledScanAt != nil {
+		s.runScheduledScan(ctx, repo)
+	}
+	if err := s.DB.Model(&db.Repository{}).Where("id = ?", repo.ID).
+		UpdateColumn("next_scheduled_scan_at", next).Error; err != nil {
+		s.Log.Error("scheduler: advance next_scheduled_scan_at", "repo", repo.Name, "err", err)
 	}
 }
 
@@ -130,9 +174,8 @@ func (s *Server) runScheduledScan(ctx context.Context, repo db.Repository) {
 	// and the remote HEAD lookup have already contacted their host, which is
 	// the other half of what the opt-out asks us not to do. Read live rather
 	// than off the tick's snapshot: the tick loads every due repository up
-	// front and then fires them one at a time, each doing its own network I/O,
-	// so an opt-out recorded mid-tick has to be seen by the repositories still
-	// waiting their turn.
+	// front, so an opt-out recorded while its bounded worker is waiting has to
+	// be seen before that repository performs network I/O.
 	optedOut, err := s.repoFederationOptedOut(repo.ID)
 	if err != nil {
 		s.Log.Error("scheduler: read federation opt-out", "repo", repo.Name, "err", err)
