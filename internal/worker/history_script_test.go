@@ -56,6 +56,20 @@ func historyGit(t *testing.T, repo string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
+func historyIsAncestor(t *testing.T, repo, ancestor, descendant string) bool {
+	t.Helper()
+	cmd := exec.Command("git", "-C", repo, "merge-base", "--is-ancestor", ancestor, descendant)
+	err := cmd.Run()
+	if err == nil {
+		return true
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+		return false
+	}
+	t.Fatalf("git merge-base --is-ancestor %s %s: %v", ancestor, descendant, err)
+	return false
+}
+
 func historyCommit(t *testing.T, repo, message, path, content string) string {
 	t.Helper()
 	full := filepath.Join(repo, filepath.FromSlash(path))
@@ -133,6 +147,15 @@ func TestHistoryCandidates_filtersAndChecksCacheAncestry(t *testing.T) {
 	if invalid.CacheReusable || !strings.Contains(invalid.CacheInvalidReason, "unavailable") {
 		t.Errorf("invalid cache = reusable %v reason %q", invalid.CacheReusable, invalid.CacheInvalidReason)
 	}
+	invalidContinuation := exec.Command(
+		"python3", historyScriptPath(t), "list", "--repo", repo,
+		"--base", strings.Repeat("0", 40), "--after", securityCommit,
+	)
+	if out, err := invalidContinuation.CombinedOutput(); err == nil {
+		t.Fatalf("history list accepted an invalid continuation base:\n%s", out)
+	} else if !strings.Contains(string(out), "--after cannot be used with an invalid --base") {
+		t.Fatalf("invalid continuation error = %q", out)
+	}
 
 	historyGit(t, repo, "switch", "-c", "rewritten", securityCommit+"^")
 	historyCommit(t, repo, "rewrite documentation", "README.md", "Rewritten history.\n")
@@ -181,7 +204,7 @@ func TestHistoryCandidates_paginatesPastCandidateLimit(t *testing.T) {
 	historyGit(t, repo, "init")
 	historyGit(t, repo, "config", "user.name", "History Test")
 	historyGit(t, repo, "config", "user.email", "history@example.invalid")
-	historyCommit(t, repo, "initial import", "src/parser.c", "int parse(int n) { return n; }\n")
+	base := historyCommit(t, repo, "initial import", "src/parser.c", "int parse(int n) { return n; }\n")
 
 	want := make([]string, 0, 7)
 	for i := range 7 {
@@ -191,13 +214,22 @@ func TestHistoryCandidates_paginatesPastCandidateLimit(t *testing.T) {
 		))
 	}
 
-	firstPage := runHistoryList(t, repo, "--max-candidates", "3")
+	firstPage := runHistoryList(t, repo, "--base", base, "--max-candidates", "3")
 	if !firstPage.Truncated || firstPage.NextCursor != want[2] {
 		t.Fatalf("first page = truncated %v cursor %q, want true and %q", firstPage.Truncated, firstPage.NextCursor, want[2])
 	}
-	resumed := runHistoryList(t, repo, "--base", firstPage.NextCursor, "--max-candidates", "10")
-	if !resumed.CacheReusable || resumed.TotalMatched != 4 || len(resumed.Candidates) != 4 {
-		t.Fatalf("resumed page = reusable %v total %d candidates %d, want true, 4, 4", resumed.CacheReusable, resumed.TotalMatched, len(resumed.Candidates))
+	resumed := runHistoryList(
+		t, repo,
+		"--head", firstPage.Head,
+		"--base", base,
+		"--after", firstPage.NextCursor,
+		"--max-candidates", "10",
+	)
+	if !resumed.CacheReusable || resumed.TotalMatched != len(want) || resumed.PageOffset != 3 || len(resumed.Candidates) != 4 {
+		t.Fatalf(
+			"resumed page = reusable %v total %d offset %d candidates %d, want true, %d, 3, 4",
+			resumed.CacheReusable, resumed.TotalMatched, resumed.PageOffset, len(resumed.Candidates), len(want),
+		)
 	}
 	for i, candidate := range resumed.Candidates {
 		if candidate.Commit != want[i+3] {
@@ -208,7 +240,7 @@ func TestHistoryCandidates_paginatesPastCandidateLimit(t *testing.T) {
 	var got []string
 	cursor := ""
 	for pageNumber := 0; ; pageNumber++ {
-		extra := []string{"--max-candidates", "3"}
+		extra := []string{"--base", base, "--max-candidates", "3"}
 		if cursor != "" {
 			extra = append(extra, "--after", cursor)
 		}
@@ -236,6 +268,99 @@ func TestHistoryCandidates_paginatesPastCandidateLimit(t *testing.T) {
 
 	if !slices.Equal(got, want) {
 		t.Fatalf("paginated candidates = %v, want %v", got, want)
+	}
+
+	newCommit := historyCommit(
+		t, repo, "fix security bounds check", "src/parser.c",
+		"int parse(int n) { return n < 99 ? n : -1; }\n",
+	)
+	pinned := runHistoryList(
+		t, repo,
+		"--head", firstPage.Head,
+		"--base", base,
+		"--after", firstPage.NextCursor,
+		"--max-candidates", "10",
+	)
+	if len(pinned.Candidates) != 4 || pinned.Candidates[len(pinned.Candidates)-1].Commit != want[len(want)-1] {
+		t.Fatalf("pinned continuation included commits outside %s: %+v", firstPage.Head, pinned.Candidates)
+	}
+	incremental := runHistoryList(t, repo, "--base", firstPage.Head)
+	if len(incremental.Candidates) != 1 || incremental.Candidates[0].Commit != newCommit {
+		t.Fatalf("incremental candidates = %+v, want only %s", incremental.Candidates, newCommit)
+	}
+}
+
+func TestHistoryCandidates_mergedHistoryKeepsBaseAndCursorSeparate(t *testing.T) {
+	repo := t.TempDir()
+	historyGit(t, repo, "init")
+	historyGit(t, repo, "config", "user.name", "History Test")
+	historyGit(t, repo, "config", "user.email", "history@example.invalid")
+	base := historyCommit(t, repo, "initial import", "src/base.c", "int base(void) { return 0; }\n")
+	mainBranch := historyGit(t, repo, "branch", "--show-current")
+
+	historyGit(t, repo, "switch", "-c", "left")
+	historyCommit(t, repo, "fix security left bounds", "src/left.c", "int left(void) { return 1; }\n")
+	historyCommit(t, repo, "fix security left validation", "src/left.c", "int left(void) { return 2; }\n")
+
+	historyGit(t, repo, "switch", "-c", "right", base)
+	historyCommit(t, repo, "fix security right bounds", "src/right.c", "int right(void) { return 1; }\n")
+	historyCommit(t, repo, "fix security right validation", "src/right.c", "int right(void) { return 2; }\n")
+
+	historyGit(t, repo, "switch", mainBranch)
+	historyGit(t, repo, "-c", "commit.gpgsign=false", "merge", "--no-ff", "left", "-m", "merge left")
+	historyGit(t, repo, "-c", "commit.gpgsign=false", "merge", "--no-ff", "right", "-m", "merge right")
+
+	full := runHistoryList(t, repo, "--base", base, "--max-candidates", "100")
+	if len(full.Candidates) != 4 {
+		t.Fatalf("merged history candidates = %+v, want four", full.Candidates)
+	}
+	want := make([]string, 0, len(full.Candidates))
+	for _, candidate := range full.Candidates {
+		want = append(want, candidate.Commit)
+	}
+
+	split := -1
+	reviewedSibling := ""
+	for index := 1; index < len(want)-1 && split == -1; index++ {
+		for _, prior := range want[:index] {
+			if !historyIsAncestor(t, repo, prior, want[index]) {
+				split = index
+				reviewedSibling = prior
+				break
+			}
+		}
+	}
+	if split == -1 {
+		t.Fatal("test history did not produce a sibling-branch cursor")
+	}
+
+	firstPage := runHistoryList(t, repo, "--base", base, "--max-candidates", fmt.Sprint(split+1))
+	if !firstPage.Truncated || firstPage.NextCursor != want[split] {
+		t.Fatalf("first page = truncated %v cursor %q, want true and %q", firstPage.Truncated, firstPage.NextCursor, want[split])
+	}
+
+	wrongBase := runHistoryList(t, repo, "--base", firstPage.NextCursor, "--max-candidates", "100")
+	wrongCommits := make([]string, 0, len(wrongBase.Candidates))
+	for _, candidate := range wrongBase.Candidates {
+		wrongCommits = append(wrongCommits, candidate.Commit)
+	}
+	if !slices.Contains(wrongCommits, reviewedSibling) {
+		t.Fatalf("cursor-as-base did not reproduce reviewed sibling %s: %v", reviewedSibling, wrongCommits)
+	}
+
+	resumed := runHistoryList(
+		t, repo,
+		"--head", firstPage.Head,
+		"--base", base,
+		"--after", firstPage.NextCursor,
+		"--max-candidates", "100",
+	)
+	got := append([]string(nil), want[:split+1]...)
+	for _, candidate := range resumed.Candidates {
+		got = append(got, candidate.Commit)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("resumed merged candidates = %v, want %v", got, want)
 	}
 }
 

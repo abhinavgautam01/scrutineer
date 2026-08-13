@@ -41,18 +41,18 @@ Write the selected report to `history_cache.json`. If the API is unavailable, ev
 
 Get the current commit with `git -C ./src rev-parse HEAD`. A cache is reusable only when `git -C ./src merge-base --is-ancestor <cached analyzed_head> HEAD` exits zero. This test is mandatory: a force-push or rebase invalidates the cache even if the branch name is unchanged.
 
-- Reusable complete cache: preserve its `fixes` and process only `<cached analyzed_head>..HEAD`.
-- Reusable partial cache whose `gaps` record unfinished candidate pagination: preserve its `fixes` and continue after its `analyzed_head`, which is the last fully classified continuation commit.
+- Reusable complete cache with `continuation: null`: preserve its `fixes` and process only `<cached analyzed_head>..HEAD`.
+- Reusable partial cache with a non-null `continuation`: preserve its `fixes` and finish the pinned range at `<cached analyzed_head>`. Pass that commit as `--head`, pass `continuation.base` as `--base` when it is non-null, and pass `continuation.after` as `--after`. The continuation base is the original lower bound of the range; never replace it with the cursor. After finishing the pinned range, process `<cached analyzed_head>..HEAD` as a second range if the checkout has advanced.
 - Reusable partial cache whose `gaps` record shallow history while the current clone is also shallow: preserve its `fixes`, process only new commits, and keep the final report partial.
 - Cache whose `gaps` record shallow history followed by a complete clone: discard the cache and rescan all available history so previously missing old commits can be considered.
 - Missing, malformed, non-ancestor, wrong-scope, or otherwise incompatible cache: discard it and scan all history reachable from HEAD.
-- Cache already at HEAD: preserve the cached fixes, update cache metadata, write the report, validate it, and stop without reclassifying old commits.
+- Complete cache already at HEAD: preserve the cached fixes, update cache metadata, write the report with `continuation: null`, validate it, and stop without reclassifying old commits. A cache with a non-null continuation must resume pagination even when `analyzed_head` equals HEAD.
 
 Never carry cached fixes across a failed ancestry or scope check.
 
 ## Step 2: Build the deterministic candidate list
 
-Run the list command. Include `--base <cached analyzed_head>` only for a reusable cache. Include `--path <scan_subpath>` only when `scan_subpath` is non-empty.
+Run the list command. For a reusable complete cache, include `--base <cached analyzed_head>`. For a reusable partial cache with a continuation, include `--head <cached analyzed_head>`, the original `--base <continuation.base>` when it is non-null, and `--after <continuation.after>`. Include `--path <scan_subpath>` only when `scan_subpath` is non-empty.
 
 ```bash
 python3 scripts/history_candidates.py list --repo ./src --output ./history_candidates.json
@@ -66,9 +66,11 @@ The script detects repository ecosystems, applies security-shaped base terms plu
 - `truncated` and `next_cursor` when more candidates remain after the current page;
 - `total_matched`, the number of keyword candidates in the selected history range across all pages.
 
-If the script rejects the cached base, discard the cached fixes and rerun the list command without `--base`. The script's ancestry result is authoritative.
+If the script rejects a cached head, base, or continuation cursor, or reports a non-null cached base as not reusable, discard the cached fixes and rerun the list command against the current checkout without `--head`, `--base`, or `--after`. The script's validation is authoritative. When a valid continuation has `base: null`, omitting `--base` is intentional; `cache_reusable: false` with `cache_invalid_reason: "no prior cache"` does not invalidate that full-history continuation.
 
-When `truncated` is true, classify the current page, then request the next page with the same `--base` and `--path` arguments plus `--after <next_cursor>`. Repeat until `truncated` is false. If a tool failure or turn limit prevents pagination from completing after at least one full page, set `analyzed_head` to the last fully classified page's `next_cursor`, keep the report partial, and record the unreviewed continuation in `gaps`. The next scan will use that cursor as its cached `--base` and begin with the remaining candidates. Set `analyzed_head` to HEAD only after reaching the final page; never mark an unreviewed suffix as analyzed.
+When `truncated` is true, classify the current page, then request the next page with the same `--head`, `--base`, and `--path` arguments plus `--after <next_cursor>`. Repeat until `truncated` is false. If a tool failure or turn limit prevents pagination from completing after at least one full page, keep `analyzed_head` equal to the list output's `head`, set `continuation` to `{"base": <the original requested base or null>, "after": <the last fully classified page cursor>}`, keep the report partial, and record the unreviewed continuation in `gaps`. Never use the cursor as `analyzed_head` or as the next run's `--base`: on merged histories, a cursor commit may not contain already reviewed candidates from sibling branches. Set `continuation` to null only after reaching the final page of the pinned range.
+
+After completing a resumed pinned range, compare its `analyzed_head` with the current checkout HEAD. If HEAD has advanced, start a new list operation with `--base <analyzed_head>` and no `--head` or `--after`, then process that new range to completion. A complete final report has `analyzed_head` equal to the current checkout HEAD and `continuation: null`.
 
 Keyword matching creates a review queue, not findings. A message saying "security", "bounds", "sanitize", "auth", or "overflow" is not enough by itself.
 

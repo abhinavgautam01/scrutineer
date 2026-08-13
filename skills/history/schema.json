@@ -12,6 +12,7 @@
       "required": [
         "schema_version",
         "analyzed_head",
+        "continuation",
         "scope_ref",
         "scope_subpath",
         "partial",
@@ -21,9 +22,30 @@
         "fixes"
       ],
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": ["continuation"],
+            "properties": { "continuation": { "type": "object" } }
+          },
+          "then": {
+            "properties": { "partial": { "const": true } }
+          }
+        }
+      ],
       "properties": {
         "schema_version": { "type": "integer", "const": 1 },
-        "analyzed_head": { "$ref": "#/$defs/commit" },
+        "analyzed_head": {
+          "$ref": "#/$defs/commit",
+          "description": "The pinned range head while pagination is incomplete, or the latest fully analyzed repository head otherwise."
+        },
+        "continuation": {
+          "description": "Pagination state for an incomplete pinned history range, kept separate from analyzed_head.",
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/continuation" }
+          ]
+        },
         "scope_ref": { "type": "string" },
         "scope_subpath": { "type": "string" },
         "partial": { "type": "boolean" },
@@ -85,6 +107,21 @@
         "cve_if_any": {
           "type": ["string", "null"],
           "pattern": "^(?:CVE-[0-9]{4}-[0-9]+|GHSA-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4})$"
+        }
+      }
+    },
+    "continuation": {
+      "type": "object",
+      "required": ["base", "after"],
+      "additionalProperties": false,
+      "properties": {
+        "base": {
+          "description": "The original lower bound of the pinned range, or null for a full-history scan.",
+          "oneOf": [{ "$ref": "#/$defs/commit" }, { "type": "null" }]
+        },
+        "after": {
+          "$ref": "#/$defs/commit",
+          "description": "The last candidate fully classified in the pinned range."
         }
       }
     },

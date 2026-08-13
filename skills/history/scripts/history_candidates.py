@@ -88,8 +88,8 @@ def clean_scope_path(value):
     return "/".join(parts)
 
 
-def repository_paths(repo, scope_path):
-    args = ["ls-tree", "-r", "--name-only", "HEAD"]
+def repository_paths(repo, scope_path, head):
+    args = ["ls-tree", "-r", "--name-only", head]
     if scope_path:
         args.extend(["--", scope_path])
     return [line for line in git(repo, *args).stdout.splitlines() if line]
@@ -124,6 +124,21 @@ def cache_state(repo, base, head):
     return True, None
 
 
+def selected_head(repo, requested_head):
+    checkout_head = git(repo, "rev-parse", "HEAD").stdout.strip()
+    if not COMMIT_RE.fullmatch(checkout_head):
+        raise RuntimeError("HEAD is not a full commit id")
+    if not requested_head:
+        return checkout_head
+    if not COMMIT_RE.fullmatch(requested_head):
+        raise ValueError("--head must be a full commit id")
+    if git(repo, "cat-file", "-e", f"{requested_head}^{{commit}}", check=False).returncode != 0:
+        raise ValueError("--head commit is unavailable in this clone")
+    if git(repo, "merge-base", "--is-ancestor", requested_head, checkout_head, check=False).returncode != 0:
+        raise ValueError("--head commit is not an ancestor of the checkout HEAD")
+    return requested_head
+
+
 def parse_log(raw):
     records = []
     for record in raw.split("\x1e"):
@@ -138,12 +153,12 @@ def parse_log(raw):
 
 def list_candidates(args):
     scope_path = clean_scope_path(args.path)
-    head = git(args.repo, "rev-parse", "HEAD").stdout.strip()
-    if not COMMIT_RE.fullmatch(head):
-        raise RuntimeError("HEAD is not a full commit id")
+    head = selected_head(args.repo, args.head)
     reusable, invalid_reason = cache_state(args.repo, args.base, head)
+    if args.after and args.base and not reusable:
+        raise ValueError(f"--after cannot be used with an invalid --base: {invalid_reason}")
     revision = f"{args.base}..{head}" if reusable else head
-    paths = repository_paths(args.repo, scope_path)
+    paths = repository_paths(args.repo, scope_path, head)
     ecosystems = detect_ecosystems(paths)
     log_args = ["log", "--reverse", "--no-merges", "--format=%H%x1f%s%x1f%b%x1e", revision]
     if scope_path:
@@ -241,6 +256,7 @@ def parser():
 
     listing = commands.add_parser("list", help="list security-shaped commit-message candidates")
     listing.add_argument("--repo", default="./src")
+    listing.add_argument("--head", default="")
     listing.add_argument("--base", default="")
     listing.add_argument("--path", default="")
     listing.add_argument("--after", default="")
