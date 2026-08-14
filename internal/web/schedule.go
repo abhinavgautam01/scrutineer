@@ -174,8 +174,9 @@ func (s *Server) runScheduledScan(ctx context.Context, repo db.Repository) {
 	// and the remote HEAD lookup have already contacted their host, which is
 	// the other half of what the opt-out asks us not to do. Read live rather
 	// than off the tick's snapshot: the tick loads every due repository up
-	// front, so an opt-out recorded while its bounded worker is waiting has to
-	// be seen before that repository performs network I/O.
+	// front, so an opt-out recorded while a repository is waiting in the
+	// bounded work queue has to be seen before that repository performs
+	// network I/O.
 	optedOut, err := s.repoFederationOptedOut(repo.ID)
 	if err != nil {
 		s.Log.Error("scheduler: read federation opt-out", "repo", repo.Name, "err", err)
