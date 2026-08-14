@@ -156,7 +156,7 @@ type Server struct {
 	// syncUpstream force-syncs a staging repository from its configured
 	// upstream before the scheduler's new-commit check. Field rather than
 	// a direct worker call so tests can stub the git traffic.
-	syncUpstream func(ctx context.Context, repoURL, upstreamURL string) error
+	syncUpstream func(ctx context.Context, repoURL, upstreamURL string, headTimeout time.Duration) error
 
 	// prefetchEcosystems warms the per-repository ecosyste.ms cache
 	// when a new repo is added, in parallel with the triage enqueue. Field
@@ -434,7 +434,7 @@ func New(gdb *gorm.DB, q *queue.Queue, log *slog.Logger, broker *Broker, w *work
 		resolvePURL: resolvePURLRepo, listBranches: worker.ListRemoteBranches,
 		fetchOrgRepos:     fetchGitHubOrgRepos,
 		resolveRemoteHead: defaultResolveRemoteHead,
-		syncUpstream:      w.SyncUpstream}
+		syncUpstream:      w.SyncUpstreamWithHeadTimeout}
 	s.prefetchEcosystems = s.ecosystemsPrefetch
 	s.ecosystemsEnrichment = true
 	s.chatActive = map[uint]struct{}{}

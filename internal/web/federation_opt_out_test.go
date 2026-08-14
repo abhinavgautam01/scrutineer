@@ -321,7 +321,7 @@ func TestRunScheduledScan_optOutRecordedMidFiringWaitsForItAndStopsTheScans(t *t
 
 	reached, release := make(chan struct{}), make(chan struct{})
 	s.resolveRemoteHead = func(context.Context, db.Repository) (string, error) { return "deadbeef", nil }
-	s.syncUpstream = func(context.Context, string, string) error {
+	s.syncUpstream = func(context.Context, string, string, time.Duration) error {
 		close(reached)
 		<-release
 		return nil

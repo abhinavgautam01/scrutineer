@@ -29,10 +29,9 @@ const (
 	// tick interval only bounds the firing latency, not the cadence.
 	schedulerTick = time.Minute
 
-	// Keep remote Git work parallel enough that one slow host does not block
-	// every due repository, but bounded to limit forge and SQLite pressure.
-	schedulerMaxConcurrentRepositories = 5
-	schedulerRepositoryTimeout         = 10 * time.Minute
+	// Bound remote HEAD probes without also placing large first-time mirror
+	// clones under a deadline that would make them restart on every tick.
+	schedulerRemoteHeadTimeout = 10 * time.Minute
 )
 
 // ScheduleNext validates a scan-schedule value, the "daily"/"weekly"
@@ -91,7 +90,17 @@ func (s *Server) scheduleTick(ctx context.Context, now time.Time) {
 		s.Log.Error("scheduler: list repositories", "err", err)
 		return
 	}
-	s.runScheduledRepositories(ctx, now, global, repos, schedulerMaxConcurrentRepositories, schedulerRepositoryTimeout)
+	s.runScheduledRepositories(ctx, now, global, repos, s.schedulerConcurrency(), schedulerRemoteHeadTimeout)
+}
+
+// schedulerConcurrency keeps scheduled Git work under the same operator-set
+// concurrency budget as scan jobs. Tests may construct a Server without a
+// queue, in which case one worker preserves forward progress.
+func (s *Server) schedulerConcurrency() int {
+	if s.Queue == nil {
+		return 1
+	}
+	return max(1, s.Queue.Concurrency())
 }
 
 func (s *Server) runScheduledRepositories(
@@ -100,7 +109,7 @@ func (s *Server) runScheduledRepositories(
 	global string,
 	repos []db.Repository,
 	maxConcurrent int,
-	timeout time.Duration,
+	remoteHeadTimeout time.Duration,
 ) {
 	if len(repos) == 0 {
 		return
@@ -119,16 +128,20 @@ func (s *Server) runScheduledRepositories(
 	for range min(maxConcurrent, len(repos)) {
 		workers.Go(func() {
 			for repo := range jobs {
-				repoCtx, cancel := context.WithTimeout(ctx, timeout)
-				s.processScheduledRepository(repoCtx, now, global, repo)
-				cancel()
+				s.processScheduledRepository(ctx, now, global, repo, remoteHeadTimeout)
 			}
 		})
 	}
 	workers.Wait()
 }
 
-func (s *Server) processScheduledRepository(ctx context.Context, now time.Time, global string, repo db.Repository) {
+func (s *Server) processScheduledRepository(
+	ctx context.Context,
+	now time.Time,
+	global string,
+	repo db.Repository,
+	remoteHeadTimeout time.Duration,
+) {
 	expr := repo.ScanSchedule
 	if expr == "" {
 		expr = global
@@ -150,7 +163,7 @@ func (s *Server) processScheduledRepository(ctx context.Context, now time.Time, 
 		return
 	}
 	if repo.NextScheduledScanAt != nil {
-		s.runScheduledScan(ctx, repo)
+		s.runScheduledScanWithRemoteHeadTimeout(ctx, repo, remoteHeadTimeout)
 	}
 	if err := s.DB.Model(&db.Repository{}).Where("id = ?", repo.ID).
 		UpdateColumn("next_scheduled_scan_at", next).Error; err != nil {
@@ -164,6 +177,14 @@ func (s *Server) processScheduledRepository(ctx context.Context, now time.Time, 
 // diff-rescan group (which falls back to full coverage when no baseline
 // exists, e.g. on a never-scanned repository).
 func (s *Server) runScheduledScan(ctx context.Context, repo db.Repository) {
+	s.runScheduledScanWithRemoteHeadTimeout(ctx, repo, schedulerRemoteHeadTimeout)
+}
+
+func (s *Server) runScheduledScanWithRemoteHeadTimeout(
+	ctx context.Context,
+	repo db.Repository,
+	remoteHeadTimeout time.Duration,
+) {
 	// Held for the whole firing, so the opt-out cannot commit between the check
 	// below and the network calls it gates: recording one waits here, then sweeps
 	// whatever this firing enqueued. See lockRepoFederation.
@@ -198,12 +219,18 @@ func (s *Server) runScheduledScan(ctx context.Context, repo db.Repository) {
 		return
 	}
 	if repo.UpstreamURL != "" {
-		if err := s.syncUpstream(ctx, repo.URL, repo.UpstreamURL); err != nil {
+		if err := s.syncUpstream(ctx, repo.URL, repo.UpstreamURL, remoteHeadTimeout); err != nil {
 			s.recordScheduledSkip(repo, "upstream sync failed: "+err.Error())
 			return
 		}
 	}
-	head, err := s.resolveRemoteHead(ctx, repo)
+	remoteCtx := ctx
+	var cancel context.CancelFunc = func() {}
+	if remoteHeadTimeout > 0 {
+		remoteCtx, cancel = context.WithTimeout(ctx, remoteHeadTimeout)
+	}
+	head, err := s.resolveRemoteHead(remoteCtx, repo)
+	cancel()
 	if err != nil {
 		s.recordScheduledSkip(repo, "remote HEAD lookup failed: "+err.Error())
 		return

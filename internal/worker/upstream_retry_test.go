@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestResolveRemoteHeadRetriesTransientFailure(t *testing.T) {
@@ -51,6 +52,37 @@ func TestSyncUpstreamRetriesRemoteCloneAndFetch(t *testing.T) {
 				t.Fatalf("push calls = %d, remote SHA = %q; want 1 and %q", git.pushCalls, git.remoteSHA, git.desiredSHA)
 			}
 		})
+	}
+}
+
+func TestSyncUpstreamHeadTimeoutDoesNotBoundMirrorOperations(t *testing.T) {
+	git := newUpstreamScript()
+	retry := fastRetry()
+	var headProbesWithDeadline int
+	var mirrorOperationWithDeadline bool
+	retry.run = func(ctx context.Context, dir string, env []string, args ...string) (string, error) {
+		_, hasDeadline := ctx.Deadline()
+		if len(args) > 0 && args[0] == "ls-remote" && (len(args) < 2 || args[1] != "--refs") {
+			if hasDeadline {
+				headProbesWithDeadline++
+			}
+		} else if len(args) > 0 {
+			mirrorOperationWithDeadline = mirrorOperationWithDeadline || hasDeadline
+		}
+		return git.run(ctx, dir, env, args...)
+	}
+	worker := &Worker{DataDir: t.TempDir()}
+
+	if err := worker.syncUpstreamWithHeadTimeout(
+		context.Background(), retry, git.repoURL, git.upstreamURL, time.Second,
+	); err != nil {
+		t.Fatalf("syncUpstreamWithHeadTimeout: %v", err)
+	}
+	if headProbesWithDeadline != 2 {
+		t.Fatalf("HEAD probes with deadline = %d, want 2", headProbesWithDeadline)
+	}
+	if mirrorOperationWithDeadline {
+		t.Fatal("clone/fetch/push inherited the remote HEAD deadline")
 	}
 }
 

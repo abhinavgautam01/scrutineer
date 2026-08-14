@@ -49,7 +49,7 @@ func scheduleTestServer(t *testing.T, head string, syncErr error) (*Server, *[]s
 		}
 		return head, nil
 	}
-	s.syncUpstream = func(_ context.Context, repoURL, upstreamURL string) error {
+	s.syncUpstream = func(_ context.Context, repoURL, upstreamURL string, _ time.Duration) error {
 		synced = append(synced, repoURL+"<-"+upstreamURL)
 		return syncErr
 	}
@@ -195,9 +195,11 @@ func TestScheduleTick_invalidScheduleDoesNotFireOrStoreZero(t *testing.T) {
 func TestRunScheduledRepositories_boundsConcurrency(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
+	const maxConcurrent = 3
+	s.Queue.Reconfigure(maxConcurrent)
 	now := time.Now()
-	repos := make([]db.Repository, 0, schedulerMaxConcurrentRepositories+2)
-	for i := range schedulerMaxConcurrentRepositories + 2 {
+	repos := make([]db.Repository, 0, maxConcurrent+2)
+	for i := range maxConcurrent + 2 {
 		repos = append(repos, scheduledNamedRepo(t, s, fmt.Sprintf("repo-%d", i), "daily", now.Add(-time.Minute)))
 	}
 
@@ -227,7 +229,7 @@ func TestRunScheduledRepositories_boundsConcurrency(t *testing.T) {
 	go func() {
 		s.runScheduledRepositories(
 			context.Background(), now, "", repos,
-			schedulerMaxConcurrentRepositories, 5*time.Second,
+			s.schedulerConcurrency(), 5*time.Second,
 		)
 		close(finished)
 	}()
@@ -240,7 +242,7 @@ func TestRunScheduledRepositories_boundsConcurrency(t *testing.T) {
 		<-finished
 	}()
 
-	for range schedulerMaxConcurrentRepositories {
+	for range maxConcurrent {
 		select {
 		case <-started:
 		case <-time.After(time.Second):
@@ -249,7 +251,7 @@ func TestRunScheduledRepositories_boundsConcurrency(t *testing.T) {
 	}
 	select {
 	case <-started:
-		t.Fatalf("more than %d repositories ran concurrently", schedulerMaxConcurrentRepositories)
+		t.Fatalf("more than %d repositories ran concurrently", maxConcurrent)
 	case <-time.After(50 * time.Millisecond):
 	}
 
@@ -259,8 +261,8 @@ func TestRunScheduledRepositories_boundsConcurrency(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("scheduler did not wait for all repository work to finish")
 	}
-	if got := peak.Load(); got != schedulerMaxConcurrentRepositories {
-		t.Fatalf("peak concurrency = %d, want %d", got, schedulerMaxConcurrentRepositories)
+	if got := peak.Load(); got != maxConcurrent {
+		t.Fatalf("peak concurrency = %d, want %d", got, maxConcurrent)
 	}
 }
 
