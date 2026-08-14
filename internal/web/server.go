@@ -434,7 +434,7 @@ func New(gdb *gorm.DB, q *queue.Queue, log *slog.Logger, broker *Broker, w *work
 		resolvePURL: resolvePURLRepo, listBranches: worker.ListRemoteBranches,
 		fetchOrgRepos:     fetchGitHubOrgRepos,
 		resolveRemoteHead: defaultResolveRemoteHead,
-		syncUpstream:      w.SyncUpstreamWithHeadTimeout}
+		syncUpstream:      w.SyncUpstream}
 	s.prefetchEcosystems = s.ecosystemsPrefetch
 	s.ecosystemsEnrichment = true
 	s.chatActive = map[uint]struct{}{}

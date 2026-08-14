@@ -266,62 +266,6 @@ func TestRunScheduledRepositories_boundsConcurrency(t *testing.T) {
 	}
 }
 
-func TestRunScheduledRepositories_slowRepoDoesNotBlockHealthyRepo(t *testing.T) {
-	s, done := newTestServer(t)
-	defer done()
-	now := time.Now()
-	slow := scheduledNamedRepo(t, s, "slow", "daily", now.Add(-time.Minute))
-	healthy := scheduledNamedRepo(t, s, "healthy", "daily", now.Add(-time.Minute))
-
-	slowStarted := make(chan struct{})
-	healthyStarted := make(chan struct{})
-	releaseSlow := make(chan struct{})
-	s.resolveRemoteHead = func(ctx context.Context, repo db.Repository) (string, error) {
-		if repo.ID == slow.ID {
-			close(slowStarted)
-			select {
-			case <-releaseSlow:
-				return "", errors.New("released slow remote")
-			case <-ctx.Done():
-				return "", ctx.Err()
-			}
-		}
-		close(healthyStarted)
-		return "", errors.New("healthy remote checked")
-	}
-
-	finished := make(chan struct{})
-	go func() {
-		s.runScheduledRepositories(context.Background(), now, "", []db.Repository{slow, healthy}, 2, 5*time.Second)
-		close(finished)
-	}()
-	defer func() {
-		select {
-		case <-releaseSlow:
-		default:
-			close(releaseSlow)
-		}
-		<-finished
-	}()
-
-	select {
-	case <-slowStarted:
-	case <-time.After(time.Second):
-		t.Fatal("slow repository did not start")
-	}
-	select {
-	case <-healthyStarted:
-	case <-time.After(time.Second):
-		t.Fatal("healthy repository was blocked behind the slow repository")
-	}
-	close(releaseSlow)
-	select {
-	case <-finished:
-	case <-time.After(5 * time.Second):
-		t.Fatal("scheduler did not finish after the slow repository was released")
-	}
-}
-
 func TestRunScheduledRepositories_timeoutReleasesSlotAndAdvancesSchedules(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()

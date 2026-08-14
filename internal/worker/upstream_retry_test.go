@@ -39,7 +39,7 @@ func TestSyncUpstreamRetriesRemoteCloneAndFetch(t *testing.T) {
 			retry.run = git.run
 			worker := &Worker{DataDir: t.TempDir()}
 
-			if err := worker.syncUpstream(context.Background(), retry, git.repoURL, git.upstreamURL); err != nil {
+			if err := worker.syncUpstream(context.Background(), retry, git.repoURL, git.upstreamURL, 0); err != nil {
 				t.Fatalf("syncUpstream: %v", err)
 			}
 			if failOperation == "clone" && (git.cloneCalls != 2 || !git.cloneResetObserved) {
@@ -73,10 +73,10 @@ func TestSyncUpstreamHeadTimeoutDoesNotBoundMirrorOperations(t *testing.T) {
 	}
 	worker := &Worker{DataDir: t.TempDir()}
 
-	if err := worker.syncUpstreamWithHeadTimeout(
+	if err := worker.syncUpstream(
 		context.Background(), retry, git.repoURL, git.upstreamURL, time.Second,
 	); err != nil {
-		t.Fatalf("syncUpstreamWithHeadTimeout: %v", err)
+		t.Fatalf("syncUpstream: %v", err)
 	}
 	if headProbesWithDeadline != 2 {
 		t.Fatalf("HEAD probes with deadline = %d, want 2", headProbesWithDeadline)
@@ -95,7 +95,7 @@ func TestSyncUpstreamCancelledCloneCleansMirrorForNextInvocation(t *testing.T) {
 	retry.run = git.run
 	worker := &Worker{DataDir: t.TempDir()}
 
-	err := worker.syncUpstream(ctx, retry, git.repoURL, git.upstreamURL)
+	err := worker.syncUpstream(ctx, retry, git.repoURL, git.upstreamURL, 0)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("syncUpstream error = %v, want context.Canceled", err)
 	}
@@ -107,7 +107,7 @@ func TestSyncUpstreamCancelledCloneCleansMirrorForNextInvocation(t *testing.T) {
 	fresh := newUpstreamScript()
 	freshRetry := fastRetry()
 	freshRetry.run = fresh.run
-	if err := worker.syncUpstream(context.Background(), freshRetry, fresh.repoURL, fresh.upstreamURL); err != nil {
+	if err := worker.syncUpstream(context.Background(), freshRetry, fresh.repoURL, fresh.upstreamURL, 0); err != nil {
 		t.Fatalf("fresh sync after cancellation: %v", err)
 	}
 	if fresh.cloneCalls != 1 || fresh.remoteSHA != fresh.desiredSHA {
@@ -125,7 +125,7 @@ func TestSyncUpstreamReconcilesAmbiguousPush(t *testing.T) {
 			retry.run = git.run
 			worker := &Worker{DataDir: t.TempDir()}
 
-			if err := worker.syncUpstream(context.Background(), retry, git.repoURL, git.upstreamURL); err != nil {
+			if err := worker.syncUpstream(context.Background(), retry, git.repoURL, git.upstreamURL, 0); err != nil {
 				t.Fatalf("syncUpstream: %v", err)
 			}
 			wantPushes := 1

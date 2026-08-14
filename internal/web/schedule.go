@@ -29,8 +29,9 @@ const (
 	// tick interval only bounds the firing latency, not the cadence.
 	schedulerTick = time.Minute
 
-	// Bound remote HEAD probes without also placing large first-time mirror
-	// clones under a deadline that would make them restart on every tick.
+	// Ten minutes leaves room for transient retry backoff and slow forge
+	// responses while preventing one unreachable remote from retaining a
+	// scheduler worker indefinitely.
 	schedulerRemoteHeadTimeout = 10 * time.Minute
 )
 
@@ -163,7 +164,7 @@ func (s *Server) processScheduledRepository(
 		return
 	}
 	if repo.NextScheduledScanAt != nil {
-		s.runScheduledScanWithRemoteHeadTimeout(ctx, repo, remoteHeadTimeout)
+		s.runScheduledScan(ctx, repo, remoteHeadTimeout)
 	}
 	if err := s.DB.Model(&db.Repository{}).Where("id = ?", repo.ID).
 		UpdateColumn("next_scheduled_scan_at", next).Error; err != nil {
@@ -176,11 +177,7 @@ func (s *Server) processScheduledRepository(
 // most recent completed scan's commit and either record a skip or enqueue a
 // diff-rescan group (which falls back to full coverage when no baseline
 // exists, e.g. on a never-scanned repository).
-func (s *Server) runScheduledScan(ctx context.Context, repo db.Repository) {
-	s.runScheduledScanWithRemoteHeadTimeout(ctx, repo, schedulerRemoteHeadTimeout)
-}
-
-func (s *Server) runScheduledScanWithRemoteHeadTimeout(
+func (s *Server) runScheduledScan(
 	ctx context.Context,
 	repo db.Repository,
 	remoteHeadTimeout time.Duration,
@@ -225,12 +222,12 @@ func (s *Server) runScheduledScanWithRemoteHeadTimeout(
 		}
 	}
 	remoteCtx := ctx
-	var cancel context.CancelFunc = func() {}
 	if remoteHeadTimeout > 0 {
+		var cancel context.CancelFunc
 		remoteCtx, cancel = context.WithTimeout(ctx, remoteHeadTimeout)
+		defer cancel()
 	}
 	head, err := s.resolveRemoteHead(remoteCtx, repo)
-	cancel()
 	if err != nil {
 		s.recordScheduledSkip(repo, "remote HEAD lookup failed: "+err.Error())
 		return
