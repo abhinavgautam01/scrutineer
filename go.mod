@@ -2,7 +2,7 @@ module scrutineer
 
 go 1.26
 
-toolchain go1.26.5
+toolchain go1.26.6
 
 require (
 	filippo.io/age v1.3.1
@@ -10,19 +10,19 @@ require (
 	github.com/ecosyste-ms/ecosystems-go v0.4.0
 	github.com/git-pkgs/clone v0.2.1
 	github.com/git-pkgs/cwe v0.1.0
-	github.com/git-pkgs/enrichment v0.6.4
+	github.com/git-pkgs/enrichment v0.6.5
 	github.com/git-pkgs/magic v0.2.0
 	github.com/git-pkgs/pom v0.1.5
 	github.com/git-pkgs/purl v0.1.15
 	github.com/git-pkgs/sarif v0.1.1
-	github.com/git-pkgs/sbom v0.1.3
+	github.com/git-pkgs/sbom v0.1.4
 	github.com/git-pkgs/vulns v0.2.1
 	github.com/glebarez/sqlite v1.11.0
 	github.com/google/uuid v1.6.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/yuin/goldmark v1.8.5
-	golang.org/x/crypto v0.54.0
+	golang.org/x/crypto v0.55.0
 	golang.org/x/term v0.45.0
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/gorm v1.31.2
@@ -51,8 +51,8 @@ require (
 	github.com/pandatix/go-cvss v0.6.2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.40.0 // indirect
-	modernc.org/libc v1.75.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
+	modernc.org/libc v1.75.3 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.0 // indirect
 	modernc.org/sqlite v1.56.0 // indirect
