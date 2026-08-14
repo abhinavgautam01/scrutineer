@@ -56,6 +56,7 @@
     "downstream_responsibilities": { "type": "array", "items": { "type": "string" } },
     "known_misuse":      { "$ref": "#/$defs/misuse_or_na" },
     "known_non_findings": { "type": "array", "items": { "$ref": "#/$defs/non_finding" } },
+    "historical_vulnerabilities": { "type": "array", "items": { "$ref": "#/$defs/historical_vulnerability" } },
     "controls":          { "type": "array", "items": { "$ref": "#/$defs/control" } },
 
     "dispositions": {
@@ -227,6 +228,22 @@
         "false_friend": { "type": "boolean" },
         "provenance":   { "$ref": "#/$defs/provenance" },
         "source":       { "$ref": "#/$defs/source" }
+      }
+    },
+
+    "historical_vulnerability": {
+      "type": "object",
+      "required": ["commit", "title", "vuln_type", "code_paths", "implication", "provenance"],
+      "additionalProperties": false,
+      "properties": {
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+        "title": { "type": "string", "minLength": 1 },
+        "vuln_type": { "type": "string", "minLength": 1 },
+        "code_paths": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1, "uniqueItems": true },
+        "cve_if_any": { "type": ["string", "null"] },
+        "implication": { "type": "string", "minLength": 1 },
+        "provenance": { "$ref": "#/$defs/provenance" },
+        "source": { "$ref": "#/$defs/source" }
       }
     },
 

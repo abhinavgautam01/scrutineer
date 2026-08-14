@@ -70,6 +70,7 @@ Only when `has_code`:
 
 - `subprojects`
 - `recon`
+- `history`
 - `threat-model`
 - `semgrep`
 

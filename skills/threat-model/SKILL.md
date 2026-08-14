@@ -2,7 +2,7 @@
 name: threat-model
 description: Derive a project's security contract from its source and docs, then emit it as structured data other skills can cite. Records what the project assumes about callers and inputs, what properties it claims and disclaims, which code is out of scope, and which recurring tool findings are known-safe. This is not a vulnerability scan; it produces the trust map that security-deep-dive loads instead of re-deriving boundaries per run.
 license: MIT
-compatibility: Reads ./src only. Optionally pulls repo-overview and advisories from the scrutineer API for context. No registry or upstream network access required.
+compatibility: Reads ./src only. Optionally pulls repo-overview, advisories, and mined security-fix history from the scrutineer API for context. No registry or upstream network access required.
 metadata:
   scrutineer.version: 1
   scrutineer.output_file: report.json
@@ -30,6 +30,7 @@ Scrutineer API (optional, `Authorization: Bearer {token}`):
 
 - `GET {api_base}/repositories/{repository_id}/scans?skill=repo-overview&status=done` then `GET /scans/{id}` for the one-paragraph project description if you would otherwise have to write one cold.
 - `GET {api_base}/repositories/{repository_id}/advisories` for prior published advisories. A pattern across past CVEs ("historically overflows on 32-bit `size_t`") is a model claim; the CVE list itself is not.
+- `GET {api_base}/repositories/{repository_id}/scans?skill=history&status=done` then `GET {api_base}/scans/{id}` for the latest schema-version-1 history report matching the current `scan_ref` and `scan_subpath`. Its `fixes` include security-shaped commits that may have no advisory. Treat `partial: true` as incomplete evidence, not a clean historical record.
 
 If either returns empty or non-200, carry on without it.
 
@@ -59,6 +60,8 @@ saves a valid proposal only when the analyst has not already configured the
 repository.
 
 Read `README*`, `SECURITY*`, `THREAT*`, anything under `docs/` or `doc/` with security in the name, header-file commentary, `FAQ`, `NOTES`, `CAVEATS`, `LIMITATIONS`, `CHANGELOG` entries that explain why behaviour is the way it is. Search the issue tracker references in the repo (issue numbers in comments and commit messages) for "wontfix", "by design", "not a bug", "out of scope", "won't fix". These are maintainer positions already on record; they are `documented` sources, the highest authority you have. A claim you find here is not `inferred` even if you would have guessed the same thing.
+
+Load the latest compatible `history` report when available. Record each confirmed fix under `historical_vulnerabilities`, including its commit, title, vulnerability class, affected paths, optional CVE/GHSA, and the implication for today's threat model. A mined classification is `inferred` unless the commit itself explicitly identifies the vulnerability or advisory. Do not assume that an old fix has regressed, and do not turn a history entry into a current finding. Use repeated classes and paths to sharpen `attack_classes`, component boundaries, and focus areas. When the report is partial, add an `open_questions` entry stating which historical range is unavailable; never translate partial history into a negative claim.
 
 If `SECURITY.md` or an equivalent contains threat-model content (what the project trusts, what counts as a vulnerability, examples of non-vulnerabilities), lift every such statement directly into the matching report field with a citation. Your output must be a strict superset of what `SECURITY.md` already asserts about scope. If you think an existing claim is wrong, record that in `open_questions`; do not silently override it.
 
@@ -130,6 +133,10 @@ What the caller (for a library) or operator (for a service) must do for the assu
 ### Known misuse
 
 Ways the API permits being called that violate the assumptions. Passing untrusted data to a trusted-only parameter, using the project as a security boundary it is not, exceeding documented limits, mixing modes that are not synchronised. For each: what it looks like, why it is unsafe, what to do instead.
+
+### Historical vulnerabilities
+
+Security fixes mined from Git history, including fixes that never received a public advisory. Preserve the source commit and affected paths, state the vulnerability class, and explain what recurring weakness or trust boundary the fix reveals. This is historical prior art, not evidence that the weakness exists at HEAD. Use an empty array when no compatible history report is available. If history is partial, record the limitation under `open_questions`.
 
 ### Controls
 
