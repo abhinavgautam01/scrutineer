@@ -7,11 +7,9 @@ import (
 )
 
 const (
-	attemptCount        = 3
-	criterionCount      = 5
-	attackTreeMaxNodes  = 64
-	attackTreeVisiting  = 1
-	attackTreeValidated = 2
+	attemptCount       = 3
+	criterionCount     = 5
+	attackTreeMaxNodes = 64
 )
 
 // ErrMissingRubric identifies reports produced by the pre-rubric verify skill.
@@ -141,7 +139,7 @@ func (r Report) validateAttackTree() error {
 		return fmt.Errorf("attack_tree.nodes has %d entries; maximum is %d", len(tree.Nodes), attackTreeMaxNodes)
 	}
 	nodes := make(map[string]AttackTreeNode, len(tree.Nodes))
-	pathState := map[string]uint8{tree.RootID: attackTreeValidated}
+	pathState := make(map[string]uint8, len(tree.Nodes))
 	for i, node := range tree.Nodes {
 		if _, exists := nodes[node.ID]; exists {
 			return fmt.Errorf("attack_tree.nodes[%d].id %q is not unique", i, node.ID)
@@ -209,16 +207,11 @@ func validateAttackTreeNodeStatuses(tree AttackTree) error {
 		return errors.New("attack_tree verdict reachable requires an empty blockers list")
 	}
 	if tree.Verdict == "reachable" {
-		for _, requirement := range []struct {
-			kind    string
-			article string
-		}{
-			{kind: "entry_point", article: "an"},
-			{kind: "sink", article: "a"},
-		} {
-			if !attackTreeHasKind(tree.Nodes, requirement.kind) {
-				return fmt.Errorf("attack_tree verdict reachable requires %s %s node", requirement.article, requirement.kind)
-			}
+		if !attackTreeHasKind(tree.Nodes, "entry_point") {
+			return errors.New("attack_tree verdict reachable requires an entry_point node")
+		}
+		if !attackTreeHasKind(tree.Nodes, "sink") {
+			return errors.New("attack_tree verdict reachable requires a sink node")
 		}
 	}
 	if tree.Verdict == "blocked" {
@@ -245,6 +238,14 @@ func attackTreeHasKind(nodes []AttackTreeNode, kind string) bool {
 }
 
 func validateAttackTreePath(id, rootID string, nodes map[string]AttackTreeNode, state map[string]uint8) error {
+	const (
+		attackTreeVisiting  = 1
+		attackTreeValidated = 2
+	)
+	if id == rootID {
+		state[id] = attackTreeValidated
+		return nil
+	}
 	switch state[id] {
 	case attackTreeVisiting:
 		return fmt.Errorf("attack_tree contains a parent cycle at node %q", id)

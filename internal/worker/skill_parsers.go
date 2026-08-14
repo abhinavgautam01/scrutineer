@@ -921,7 +921,7 @@ func decodeVerifyOutput(report string) (verifyOutput, *verification.Report, *flo
 	}
 	rubric, err := verification.Parse(report)
 	if errors.Is(err, verification.ErrMissingRubric) {
-		return result, nil, nil, "", nil
+		return verifyOutput{}, nil, nil, "", err
 	}
 	if err != nil {
 		return result, nil, nil, err.Error(), nil

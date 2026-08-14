@@ -951,6 +951,21 @@ func TestParseVerify_rejectsPriorRubricWithoutAttackTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	report.AttackTree = nil
+	assertRejectedVerifyReport(t, report, "requires attack_tree")
+}
+
+func TestParseVerify_rejectsAttackTreeWithoutCriteria(t *testing.T) {
+	var report verification.Report
+	if err := json.Unmarshal([]byte(confirmedVerificationReport(t)), &report); err != nil {
+		t.Fatal(err)
+	}
+	report.Criteria = nil
+	assertRejectedVerifyReport(t, report, "no grading rubric")
+}
+
+func assertRejectedVerifyReport(t *testing.T, report verification.Report, wantError string) {
+	t.Helper()
+
 	raw, err := json.Marshal(report)
 	if err != nil {
 		t.Fatal(err)
@@ -958,21 +973,21 @@ func TestParseVerify_rejectsPriorRubricWithoutAttackTree(t *testing.T) {
 
 	f, gdb := runSkillWithFinding(t, "verify", string(raw), db.FindingNew)
 	if f.Status != db.FindingNew {
-		t.Fatalf("status = %s, want new: a live report without attack_tree must not change lifecycle", f.Status)
+		t.Fatalf("status = %s, want new: a rejected live report must not change lifecycle", f.Status)
 	}
 	var verificationCount int64
 	if err := gdb.Model(&db.FindingVerification{}).Where("finding_id = ?", f.ID).Count(&verificationCount).Error; err != nil {
 		t.Fatal(err)
 	}
 	if verificationCount != 0 {
-		t.Fatalf("verification rows = %d, want 0 for a live report without attack_tree", verificationCount)
+		t.Fatalf("verification rows = %d, want 0 for a rejected live report", verificationCount)
 	}
 	var scan db.Scan
 	if err := gdb.Where("finding_id = ? AND skill_name = ?", f.ID, "verify").First(&scan).Error; err != nil {
 		t.Fatal(err)
 	}
-	if scan.Status != db.ScanFailed || !strings.Contains(scan.Error, "requires attack_tree") {
-		t.Fatalf("scan status/error = %s/%q, want failed attack_tree error", scan.Status, scan.Error)
+	if scan.Status != db.ScanFailed || !strings.Contains(scan.Error, wantError) {
+		t.Fatalf("scan status/error = %s/%q, want failed error containing %q", scan.Status, scan.Error, wantError)
 	}
 }
 
