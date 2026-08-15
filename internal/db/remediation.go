@@ -1,6 +1,9 @@
 package db
 
-import "gorm.io/gorm"
+import (
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
 
 const (
 	RemediationVerificationIncomplete = "verification_incomplete"
@@ -25,7 +28,8 @@ func LatestRemediationAttempt(gdb *gorm.DB, findingID uint) (*RemediationAttempt
 // remains verification_incomplete.
 func LatestRemediationValidation(gdb *gorm.DB, attemptID uint) (*RemediationValidation, error) {
 	var row RemediationValidation
-	result := gdb.Where("remediation_attempt_id = ?", attemptID).Order("id desc").Limit(1).Find(&row)
+	result := orderRemediationValidationsFailClosed(gdb.Where("remediation_attempt_id = ?", attemptID)).
+		Limit(1).Find(&row)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -33,6 +37,16 @@ func LatestRemediationValidation(gdb *gorm.DB, attemptID uint) (*RemediationVali
 		return nil, nil
 	}
 	return &row, nil
+}
+
+// orderRemediationValidationsFailClosed keeps bypass evidence sticky. A later
+// unsuccessful re-attack cannot supersede an earlier bypass for the same
+// immutable patch attempt.
+func orderRemediationValidationsFailClosed(gdb *gorm.DB) *gorm.DB {
+	return gdb.Clauses(clause.OrderBy{Expression: clause.Expr{
+		SQL:  "CASE WHEN root_cause_status = ? THEN 0 ELSE 1 END, id DESC",
+		Vars: []any{ReattackBypassedPatch},
+	}})
 }
 
 // RemediationPatchStatus derives the current gate from immutable records.

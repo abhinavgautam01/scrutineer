@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"scrutineer/internal/db"
 	"scrutineer/internal/testutil"
@@ -59,6 +60,7 @@ func TestDecodeReattackReport(t *testing.T) {
 			r.Variants[2].Origin = "prior_bypass"
 		}, wantErr: "at least 3"},
 		{name: "duplicate input", mutate: func(r *reattackReport) { r.Variants[2].Input = r.Variants[1].Input }, wantErr: "duplicates"},
+		{name: "blank input", mutate: func(r *reattackReport) { r.Variants[0].Input = " \t\n " }, wantErr: "must not be blank"},
 		{name: "unrelated blocked input", mutate: func(r *reattackReport) { r.Variants[0].SameBugClass = false }, wantErr: "same bug class"},
 		{name: "benign control did not reach sink", mutate: func(r *reattackReport) { r.BenignControl.ReachedSink = false }, wantErr: "benign input"},
 		{name: "valid bypass", mutate: func(r *reattackReport) {
@@ -92,6 +94,28 @@ func TestDecodeReattackReport(t *testing.T) {
 	}
 }
 
+func TestDecodeReattackReport_boundsBypassInput(t *testing.T) {
+	report := passingReattackReport()
+	report.Outcome = db.ReattackBypassedPatch
+	report.Variants[0].Outcome = "bypassed"
+	report.Variants[0].FailureClass = "path traversal"
+	report.Variants[0].Input = "  " + strings.Repeat("é", maxStagedBypassInputBytes) + "  "
+
+	_, _, bypassInput, err := decodeReattackReport(marshalReattackReport(t, report))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bypassInput) > maxStagedBypassInputBytes {
+		t.Fatalf("bypass input length = %d, want at most %d", len(bypassInput), maxStagedBypassInputBytes)
+	}
+	if !utf8.ValidString(bypassInput) {
+		t.Fatal("bounded bypass input is not valid UTF-8")
+	}
+	if strings.TrimSpace(bypassInput) != bypassInput {
+		t.Fatal("bounded bypass input was not trimmed")
+	}
+}
+
 func TestParseReattackOutput_recordsImmutableValidation(t *testing.T) {
 	w, finding := newPatchOutputFixture(t)
 	patchScan := db.Scan{RepositoryID: finding.RepositoryID, Kind: JobSkill, Status: db.ScanDone, FindingID: &finding.ID}
@@ -121,6 +145,46 @@ func TestParseReattackOutput_recordsImmutableValidation(t *testing.T) {
 	}
 	if got := db.RemediationPatchStatus(&rows[0]); got != db.RemediationVerifiedSecure {
 		t.Errorf("derived status = %q", got)
+	}
+}
+
+func TestParseReattackOutput_persistsBoundedBypassInput(t *testing.T) {
+	w, finding := newPatchOutputFixture(t)
+	patchScan := db.Scan{RepositoryID: finding.RepositoryID, Kind: JobSkill, Status: db.ScanDone, FindingID: &finding.ID}
+	if err := w.DB.Create(&patchScan).Error; err != nil {
+		t.Fatal(err)
+	}
+	attempt := db.RemediationAttempt{FindingID: finding.ID, PatchScanID: patchScan.ID, Attempt: 1, Patch: "diff", BaseCommit: "abc"}
+	if err := w.DB.Create(&attempt).Error; err != nil {
+		t.Fatal(err)
+	}
+	scan := db.Scan{RepositoryID: finding.RepositoryID, Kind: JobSkill, Status: db.ScanRunning,
+		FindingID: &finding.ID, RemediationAttemptID: &attempt.ID}
+	if err := w.DB.Create(&scan).Error; err != nil {
+		t.Fatal(err)
+	}
+	report := passingReattackReport()
+	report.Outcome = db.ReattackBypassedPatch
+	report.Variants[0].Outcome = "bypassed"
+	report.Variants[0].FailureClass = "path traversal"
+	report.Variants[0].Input = "  " + strings.Repeat("x", maxStagedBypassInputBytes+100) + "  "
+	if err := w.parseReattackOutput(&scan, marshalReattackReport(t, report), func(Event) {}); err != nil {
+		t.Fatal(err)
+	}
+
+	var validation db.RemediationValidation
+	if err := w.DB.Where("remediation_attempt_id = ?", attempt.ID).First(&validation).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(validation.BypassInput) != maxStagedBypassInputBytes {
+		t.Errorf("persisted bypass input length = %d, want %d", len(validation.BypassInput), maxStagedBypassInputBytes)
+	}
+	var note db.FindingNote
+	if err := w.DB.Where(map[string]any{"finding_id": finding.ID, "by": reattackSkillName}).First(&note).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(note.Body, validation.BypassInput) {
+		t.Fatal("finding note does not contain the bounded persisted bypass input")
 	}
 }
 

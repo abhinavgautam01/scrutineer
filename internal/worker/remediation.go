@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 
@@ -140,13 +141,13 @@ func (w *Worker) priorBypasses(findingID uint) (priorBypassEnvelope, error) {
 	out := priorBypassEnvelope{Bypasses: make([]priorBypass, 0, min(len(rows), maxStagedPriorBypasses))}
 	seen := make(map[string]bool, len(rows))
 	for _, row := range rows {
-		input := strings.TrimSpace(row.BypassInput)
+		trimmed := strings.TrimSpace(row.BypassInput)
+		input := boundedBypassInput(row.BypassInput)
 		if input == "" || seen[input] {
 			continue
 		}
 		seen[input] = true
-		if len(input) > maxStagedBypassInputBytes {
-			input = input[:maxStagedBypassInputBytes]
+		if len(trimmed) > maxStagedBypassInputBytes {
 			out.Truncated = true
 		}
 		if len(out.Bypasses) == maxStagedPriorBypasses {
@@ -156,6 +157,18 @@ func (w *Worker) priorBypasses(findingID uint) (priorBypassEnvelope, error) {
 		out.Bypasses = append(out.Bypasses, priorBypass{Attempt: row.Attempt, Input: input})
 	}
 	return out, nil
+}
+
+func boundedBypassInput(input string) string {
+	input = strings.TrimSpace(input)
+	if len(input) <= maxStagedBypassInputBytes {
+		return input
+	}
+	input = input[:maxStagedBypassInputBytes]
+	for !utf8.ValidString(input) {
+		input = input[:len(input)-1]
+	}
+	return input
 }
 
 func writeRemediationJSON(path string, value any) error {
@@ -274,13 +287,16 @@ func inspectReattackVariants(variants []reattackVariant) (int, string, error) {
 			validGeneratedVariants++
 		}
 		if variant.Outcome == "bypassed" && bypassInput == "" {
-			bypassInput = variant.Input
+			bypassInput = boundedBypassInput(variant.Input)
 		}
 	}
 	return validGeneratedVariants, bypassInput, nil
 }
 
 func validateReattackVariant(index int, variant reattackVariant) error {
+	if strings.TrimSpace(variant.Input) == "" {
+		return fmt.Errorf("variants[%d] input must not be blank", index)
+	}
 	if variant.Valid && variant.Outcome == "invalid" {
 		return fmt.Errorf("variants[%d] is valid but has outcome invalid", index)
 	}

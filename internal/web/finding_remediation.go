@@ -34,7 +34,10 @@ func loadRemediationAttemptViews(gdb *gorm.DB, findingID uint) ([]remediationAtt
 	}
 	latest := make(map[uint]*db.RemediationValidation, len(validations))
 	for i := range validations {
-		if latest[validations[i].RemediationAttemptID] == nil {
+		selected := latest[validations[i].RemediationAttemptID]
+		if selected == nil ||
+			(selected.RootCauseStatus != db.ReattackBypassedPatch &&
+				validations[i].RootCauseStatus == db.ReattackBypassedPatch) {
 			latest[validations[i].RemediationAttemptID] = &validations[i]
 		}
 	}
