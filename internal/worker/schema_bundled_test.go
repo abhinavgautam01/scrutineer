@@ -730,3 +730,91 @@ func TestBundledSchemas_rejectBadShapes(t *testing.T) {
 		}
 	}
 }
+
+func TestVerifySchema_rejectsAttackTreeVerdictContradictions(t *testing.T) {
+	criterion := func(verdict string) map[string]any {
+		return map[string]any{
+			"verdict": verdict, "method": "run", "evidence": "observed",
+			"counterevidence": "", "proof_gap": "", "confidence": "high",
+		}
+	}
+	base := map[string]any{
+		"status": "confirmed",
+		"attack_tree": map[string]any{
+			"goal": "Trigger parser panic", "root_id": "AT1", "verdict": "reachable",
+			"nodes": []any{
+				map[string]any{"id": "AT1", "parent_id": nil, "kind": "goal", "description": "Trigger parser panic", "status": "satisfied", "evidence": "attempts 1-3 panic"},
+				map[string]any{"id": "AT2", "parent_id": "AT1", "kind": "entry_point", "description": "Call public Parse", "status": "satisfied", "evidence": "api.go:18"},
+				map[string]any{"id": "AT3", "parent_id": "AT2", "kind": "sink", "description": "Reach parser sink", "status": "satisfied", "evidence": "parser.go:42"},
+			},
+			"blockers": []any{},
+		},
+		"attempts": []any{
+			map[string]any{"number": 1, "outcome": "reproduced", "evidence": "boom", "failure_class": "panic", "crash_site": "parser.go:42"},
+			map[string]any{"number": 2, "outcome": "reproduced", "evidence": "boom", "failure_class": "panic", "crash_site": "parser.go:42"},
+			map[string]any{"number": 3, "outcome": "reproduced", "evidence": "boom", "failure_class": "panic", "crash_site": "parser.go:42"},
+		},
+		"criteria": map[string]any{
+			"poc_well_formed":                      criterion("pass"),
+			"reproduces_three_of_three":            criterion("pass"),
+			"claimed_failure_class":                criterion("pass"),
+			"public_interface_to_first_party_sink": criterion("pass"),
+			"deterministic":                        criterion("pass"),
+		},
+	}
+	tests := []struct {
+		name    string
+		mutate  func(map[string]any)
+		wantErr string
+	}{
+		{
+			name: "reachable tree with blocker",
+			mutate: func(report map[string]any) {
+				report["attack_tree"].(map[string]any)["blockers"] = []any{"length guard"}
+			},
+			wantErr: "/attack_tree",
+		},
+		{
+			name: "blocked tree without blocker",
+			mutate: func(report map[string]any) {
+				report["status"] = "inconclusive"
+				tree := report["attack_tree"].(map[string]any)
+				tree["verdict"] = "blocked"
+				tree["nodes"].([]any)[0].(map[string]any)["status"] = "blocked"
+			},
+			wantErr: "/attack_tree",
+		},
+		{
+			name: "blocked tree without blocked node",
+			mutate: func(report map[string]any) {
+				report["status"] = "inconclusive"
+				tree := report["attack_tree"].(map[string]any)
+				tree["verdict"] = "blocked"
+				tree["blockers"] = []any{"length guard"}
+			},
+			wantErr: "/attack_tree",
+		},
+	}
+
+	schema := loadBundledSchema(t, "../../skills/verify/schema.json")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := json.Marshal(base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var report map[string]any
+			if err := json.Unmarshal(raw, &report); err != nil {
+				t.Fatal(err)
+			}
+			tc.mutate(report)
+			raw, err = json.Marshal(report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := ValidateReportSchema(schema, string(raw)); !strings.Contains(got, tc.wantErr) {
+				t.Fatalf("error = %q, want substring %q", got, tc.wantErr)
+			}
+		})
+	}
+}

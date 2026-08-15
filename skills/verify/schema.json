@@ -105,7 +105,38 @@
           "uniqueItems": true,
           "description": "Concrete guards or unmet preconditions that block the supplied path; empty when no blocker was established."
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "verdict": { "const": "blocked" } },
+            "required": ["verdict"]
+          },
+          "then": {
+            "properties": {
+              "blockers": { "minItems": 1 },
+              "nodes": {
+                "contains": {
+                  "properties": { "status": { "const": "blocked" } },
+                  "required": ["status"]
+                },
+                "minContains": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "verdict": { "const": "reachable" } },
+            "required": ["verdict"]
+          },
+          "then": {
+            "properties": {
+              "blockers": { "maxItems": 0 }
+            }
+          }
+        }
+      ]
     },
     "attackTreeNode": {
       "type": "object",
