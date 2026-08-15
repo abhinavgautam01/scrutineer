@@ -797,6 +797,13 @@ func TestVerifySchema_rejectsAttackTreeVerdictContradictions(t *testing.T) {
 	}
 
 	schema := loadBundledSchema(t, "../../skills/verify/schema.json")
+	rawBase, err := json.Marshal(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ValidateReportSchema(schema, string(rawBase)); got != "" {
+		t.Fatalf("base report rejected: %s\nreport: %s", got, rawBase)
+	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			raw, err := json.Marshal(base)
