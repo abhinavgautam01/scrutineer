@@ -94,6 +94,7 @@ var OutputKinds = map[string]bool{
 	"repo_overview":   true,
 	"posture":         true,
 	"patch":           true,
+	"reattack":        true,
 	"threat_model":    true,
 	"exposure":        true,
 }

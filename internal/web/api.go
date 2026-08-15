@@ -430,7 +430,7 @@ func (s *Server) apiRunSkill(w http.ResponseWriter, r *http.Request) {
 }
 
 // apiRunFindingSkill enqueues a finding-scoped skill (verify, patch,
-// disclose). The authenticated scan must be on the same repository that
+// reattack, disclose). The authenticated scan must be on the same repository that
 // owns the finding.
 func (s *Server) apiRunFindingSkill(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(r.PathValue("id"))
@@ -457,14 +457,26 @@ func (s *Server) apiRunFindingSkill(w http.ResponseWriter, r *http.Request) {
 	}
 	s.agentEnqueueMu.Lock()
 	defer s.agentEnqueueMu.Unlock()
-	if s.hasOpenFindingScopedScan(uint(id), skill.ID) {
+	opts, err := s.findingSkillScanOpts(uint(id), name, body.Model)
+	if err != nil {
+		writeAPIError(w, http.StatusPreconditionFailed, err.Error())
+		return
+	}
+	if opts.RemediationAttemptID == nil && s.hasOpenFindingScopedScan(uint(id), skill.ID) {
+		writeAPIError(w, http.StatusConflict, "equivalent scan already queued or running")
+		return
+	}
+	if opts.RemediationAttemptID != nil && s.hasOpenScan(
+		"finding_id = ? AND skill_id = ? AND remediation_attempt_id = ?",
+		uint(id), skill.ID, *opts.RemediationAttemptID) {
 		writeAPIError(w, http.StatusConflict, "equivalent scan already queued or running")
 		return
 	}
 	if !s.agentAPIRepoHasCapacity(w, repoID) {
 		return
 	}
-	scanID, err := s.enqueueSkillScoped(r.Context(), repoID, skill.ID, new(uint(id)), body.Model)
+	opts.FindingID = new(uint(id))
+	scanID, err := s.enqueueSkillWith(r.Context(), repoID, skill.ID, opts)
 	if err != nil {
 		if errors.Is(err, ErrSkillRequiresRemote) {
 			writeAPIError(w, http.StatusNotFound, err.Error())
@@ -599,6 +611,9 @@ func scanSummary(sc db.Scan) map[string]any {
 	}
 	if sc.DiffBaseScanID != nil {
 		m["diff_base_scan_id"] = *sc.DiffBaseScanID
+	}
+	if sc.RemediationAttemptID != nil {
+		m["remediation_attempt_id"] = *sc.RemediationAttemptID
 	}
 	if sc.DiffBaseCommit != "" {
 		m["diff_base_commit"] = sc.DiffBaseCommit

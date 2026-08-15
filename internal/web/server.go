@@ -539,6 +539,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /findings/{id}/public-issue", s.findingPublicIssue)
 	mux.HandleFunc("POST /findings/{id}/mitigate", s.findingMitigate)
 	mux.HandleFunc("POST /findings/{id}/patch", s.findingPatchRun)
+	mux.HandleFunc("POST /findings/{id}/reattack", s.findingReattackRun)
 	mux.HandleFunc("POST /findings/{id}/exposure", s.findingExposureRun)
 	mux.HandleFunc("POST /findings/{id}/dependents/{dependent_id}/campaign", s.findingDependentCampaignUpdate)
 	mux.HandleFunc("GET /findings/{id}/patch.diff", s.findingPatchDownload)
@@ -1565,6 +1566,9 @@ const publicIssueSkillName = "public-issue"
 // patchSkillName is the skill the Propose patch button runs.
 const patchSkillName = "patch"
 
+// reattackSkillName validates one immutable patch attempt with variant inputs.
+const reattackSkillName = "reattack"
+
 // mitigateSkillName is the skill the Draft mitigation button runs.
 const mitigateSkillName = "mitigate"
 
@@ -1582,6 +1586,10 @@ func (s *Server) findingPublicIssue(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) findingPatchRun(w http.ResponseWriter, r *http.Request) {
 	s.runFindingSkill(w, r, patchSkillName, false)
+}
+
+func (s *Server) findingReattackRun(w http.ResponseWriter, r *http.Request) {
+	s.runFindingSkill(w, r, reattackSkillName, true)
 }
 
 func (s *Server) findingMitigate(w http.ResponseWriter, r *http.Request) {
@@ -1603,14 +1611,20 @@ func (s *Server) runFindingSkill(w http.ResponseWriter, r *http.Request, name st
 		http.Error(w, name+" skill is not installed", http.StatusPreconditionFailed)
 		return
 	}
+	opts, err := s.findingSkillScanOpts(f.ID, name, r.FormValue("model"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusPreconditionFailed)
+		return
+	}
 	if skipOpen {
-		if openScan, ok := s.openFindingSkillScan(f.ID, name); ok {
+		if openScan, ok := s.openFindingSkillScanForAttempt(f.ID, name, opts.RemediationAttemptID); ok {
 			setFlash(w, Flash{Category: warningKey, Title: name + " already queued or running"})
 			s.redirect(w, r, fmt.Sprintf("/scans/%d", openScan.ID))
 			return
 		}
 	}
-	scanID, err := s.enqueueSkillScoped(r.Context(), scan.RepositoryID, skill.ID, new(f.ID), r.FormValue("model"))
+	opts.FindingID = new(f.ID)
+	scanID, err := s.enqueueSkillWith(r.Context(), scan.RepositoryID, skill.ID, opts)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1619,10 +1633,18 @@ func (s *Server) runFindingSkill(w http.ResponseWriter, r *http.Request, name st
 }
 
 func (s *Server) openFindingSkillScan(findingID uint, skillName string) (db.Scan, bool) {
+	return s.openFindingSkillScanForAttempt(findingID, skillName, nil)
+}
+
+func (s *Server) openFindingSkillScanForAttempt(findingID uint, skillName string, attemptID *uint) (db.Scan, bool) {
 	var scan db.Scan
-	err := s.DB.
+	query := s.DB.
 		Where("finding_id = ? AND skill_name = ? AND status IN ?",
-			findingID, skillName, []db.ScanStatus{db.ScanQueued, db.ScanRunning}).
+			findingID, skillName, []db.ScanStatus{db.ScanQueued, db.ScanRunning})
+	if attemptID != nil {
+		query = query.Where("remediation_attempt_id = ?", *attemptID)
+	}
+	err := query.
 		Order("status_priority asc, id desc").
 		First(&scan).Error
 	if err != nil {
@@ -1870,6 +1892,10 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.Log.Warn("load finding verifications", "finding", f.ID, "err", err)
 	}
+	remediationAttempts, err := loadRemediationAttemptViews(s.DB, f.ID)
+	if err != nil {
+		s.Log.Warn("load remediation attempts", "finding", f.ID, "err", err)
+	}
 	var labels []db.FindingLabel
 	s.DB.Order("name").Find(&labels)
 	selected := make(map[string]bool, len(f.Labels))
@@ -1878,6 +1904,11 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 	}
 	_, verifyInFlight := s.openFindingSkillScan(f.ID, verifySkillName)
 	_, discloseInFlight := s.openFindingSkillScan(f.ID, discloseSkillName)
+	var currentRemediationAttemptID *uint
+	if len(remediationAttempts) > 0 {
+		currentRemediationAttemptID = new(remediationAttempts[0].ID)
+	}
+	_, reattackInFlight := s.openFindingSkillScanForAttempt(f.ID, reattackSkillName, currentRemediationAttemptID)
 	hasDependents, err := repoHasDependents(s.DB, scan.RepositoryID)
 	if err != nil {
 		s.Log.Warn("count dependents", "repo", scan.RepositoryID, "err", err)
@@ -1917,20 +1948,22 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := map[string]any{
-		"F":                  f,
-		"HasDisclosureDraft": strings.TrimSpace(f.DisclosureDraft) != "",
-		"Scan":               scan,
-		"Repo":               repo,
-		"Notes":              notes,
-		"Communications":     comms,
-		"References":         refs,
-		"History":            history,
-		"HistoryTotal":       historyTotal,
-		"Reviews":            reviews,
-		"Verifications":      verifications,
-		"LatestRevalidate":   latestRevalidate,
-		"AllLabels":          labels,
-		"Selected":           selected,
+		"F":                   f,
+		"HasDisclosureDraft":  strings.TrimSpace(f.DisclosureDraft) != "",
+		"Scan":                scan,
+		"Repo":                repo,
+		"Notes":               notes,
+		"Communications":      comms,
+		"References":          refs,
+		"History":             history,
+		"HistoryTotal":        historyTotal,
+		"Reviews":             reviews,
+		"Verifications":       verifications,
+		"RemediationAttempts": remediationAttempts,
+		"ReattackInFlight":    reattackInFlight,
+		"LatestRevalidate":    latestRevalidate,
+		"AllLabels":           labels,
+		"Selected":            selected,
 		"Workflow": findingWorkflowData{
 			Finding:            f,
 			VerifyInFlight:     verifyInFlight,
@@ -1944,6 +1977,9 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(verifications) > 0 {
 		data["LatestVerification"] = verifications[0]
+	}
+	if len(remediationAttempts) > 0 {
+		data["CurrentRemediation"] = remediationAttempts[0]
 	}
 	vinceReason := "VINCE API key is not configured"
 	vinceReady := false
@@ -3113,7 +3149,10 @@ type ScanOpts struct {
 	// BaselineScanID marks a fix-validation anchor scan and pins the baseline
 	// scan it diffs against. See validate_fix.go.
 	BaselineScanID *uint
-	SubPath        string
+	// RemediationAttemptID pins a re-attack to the exact gated patch selected
+	// at enqueue time. It is nil for every other skill.
+	RemediationAttemptID *uint
+	SubPath              string
 	// ScopeMode overrides the instance-default subproject staging mode
 	// ("hard"|"soft") for this scan. Empty inherits config.SubprojectScope.
 	// Carried on retry/resume so a run reproduces the mode it actually used,
@@ -3254,33 +3293,34 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 		kind = worker.JobExposure
 	}
 	scan := db.Scan{
-		RepositoryID:       repoID,
-		Kind:               kind,
-		Status:             db.ScanQueued,
-		StatusPriority:     db.StatusPriorityFor(db.ScanQueued),
-		Model:              opts.Model,
-		Effort:             opts.Effort,
-		SkillID:            &skillID,
-		SkillVersion:       sk.Version,
-		SkillSchemaVersion: skillSchemaVersion(sk),
-		SkillName:          sk.Name,
-		FindingID:          opts.FindingID,
-		DependentID:        opts.DependentID,
-		BaselineScanID:     opts.BaselineScanID,
-		SubPath:            opts.SubPath,
-		ScopeMode:          opts.ScopeMode,
-		ScanGroup:          opts.ScanGroup,
-		FocusArea:          opts.FocusArea,
-		Ref:                opts.Ref,
-		RescanMode:         opts.RescanMode,
-		DiffBaseScanID:     opts.DiffBaseScanID,
-		Profile:            opts.Profile,
-		SessionID:          opts.SessionID,
-		ResumedFromScanID:  opts.ResumedFromScanID,
-		ParentScanID:       opts.ParentScanID,
-		ImportPayload:      opts.ImportPayload,
-		SkillsRepoSHA:      s.SkillsRepoSHA,
-		APIToken:           NewAPIToken(),
+		RepositoryID:         repoID,
+		Kind:                 kind,
+		Status:               db.ScanQueued,
+		StatusPriority:       db.StatusPriorityFor(db.ScanQueued),
+		Model:                opts.Model,
+		Effort:               opts.Effort,
+		SkillID:              &skillID,
+		SkillVersion:         sk.Version,
+		SkillSchemaVersion:   skillSchemaVersion(sk),
+		SkillName:            sk.Name,
+		FindingID:            opts.FindingID,
+		DependentID:          opts.DependentID,
+		BaselineScanID:       opts.BaselineScanID,
+		RemediationAttemptID: opts.RemediationAttemptID,
+		SubPath:              opts.SubPath,
+		ScopeMode:            opts.ScopeMode,
+		ScanGroup:            opts.ScanGroup,
+		FocusArea:            opts.FocusArea,
+		Ref:                  opts.Ref,
+		RescanMode:           opts.RescanMode,
+		DiffBaseScanID:       opts.DiffBaseScanID,
+		Profile:              opts.Profile,
+		SessionID:            opts.SessionID,
+		ResumedFromScanID:    opts.ResumedFromScanID,
+		ParentScanID:         opts.ParentScanID,
+		ImportPayload:        opts.ImportPayload,
+		SkillsRepoSHA:        s.SkillsRepoSHA,
+		APIToken:             NewAPIToken(),
 	}
 	// The opt-out check at the top of this function ran before every field above
 	// was resolved, so re-check it inside the creating transaction: the row is

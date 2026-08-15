@@ -197,6 +197,14 @@ func TestBundledSchemas_compileAndAcceptSamples(t *testing.T) {
 			    "deterministic":{"verdict":"pass","method":"compare","evidence":"same site","counterevidence":"","proof_gap":"","confidence":"high"}}}`,
 		},
 		{
+			"../../skills/reattack/schema.json",
+			`{"outcome":"failed_to_bypass","variants":[
+			  {"name":"v1","input":"a","origin":"generated","valid":true,"outcome":"blocked","same_bug_class":true,"same_sink":true,"failure_class":"","sink":"parser.go:42","evidence":"blocked at guard"},
+			  {"name":"v2","input":"b","origin":"generated","valid":true,"outcome":"blocked","same_bug_class":true,"same_sink":true,"failure_class":"","sink":"parser.go:42","evidence":"blocked at guard"},
+			  {"name":"v3","input":"c","origin":"generated","valid":true,"outcome":"blocked","same_bug_class":true,"same_sink":true,"failure_class":"","sink":"parser.go:42","evidence":"blocked at guard"}],
+			  "benign_control":{"input":"ok","reached_sink":true,"crashed":false,"evidence":"returned expected result"},"notes":""}`,
+		},
+		{
 			"../../skills/security-deep-dive/schema.json",
 			`{"repository":"https://github.com/o/r","commit":"abc1234","spec_version":13,
 			  "model":"claude","date":"2026-07-16","languages":["C"],
@@ -445,6 +453,9 @@ func TestBundledSchemas_rejectBadShapes(t *testing.T) {
 			    "public_interface_to_first_party_sink":{"verdict":"pass","method":"trace","evidence":"x","counterevidence":"","proof_gap":"","confidence":"high"},
 			    "deterministic":{"verdict":"fail","method":"compare","evidence":"flaky","counterevidence":"","proof_gap":"","confidence":"high"}}}`,
 			"/attempts/2/outcome"},
+		{"../../skills/reattack/schema.json",
+			`{"outcome":"inconclusive","variants":[{"name":"v1","input":"a","valid":true,"outcome":"blocked","same_bug_class":true,"same_sink":true,"failure_class":"","sink":"parser.go:42","evidence":"blocked"}],"benign_control":{"input":"","reached_sink":false,"crashed":false,"evidence":"harness unavailable"},"notes":""}`,
+			"/variants/0"},
 		{"../../skills/security-deep-dive/schema.json",
 			`{"repository":"https://github.com/o/r","commit":"abc1234","spec_version":13,
 			  "model":"claude","date":"2026-07-16","languages":["C"],"boundaries":[],

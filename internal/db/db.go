@@ -228,8 +228,12 @@ type Scan struct {
 	// The pointer both marks the scan as a validation anchor — so the auto
 	// triage funnel skips it — and pins the baseline scan it diffs against.
 	// Nil on every ordinary scan.
-	BaselineScanID *uint  `gorm:"index"`
-	APIToken       string `gorm:"index"`
+	BaselineScanID *uint `gorm:"index"`
+	// RemediationAttemptID pins a re-attack scan to the immutable patch
+	// attempt it validates. Reading Finding.SuggestedFix when the worker starts
+	// would race with a newer patch run and could validate the wrong diff.
+	RemediationAttemptID *uint  `gorm:"index"`
+	APIToken             string `gorm:"index"`
 
 	// StatusPriority is a denormalised sort key so the scans index can use
 	// an index instead of evaluating a CASE on every row. 0 = running,
@@ -928,12 +932,14 @@ type Finding struct {
 	// Empty for findings from skills that do not emit it.
 	DupCheck string `gorm:"type:text"`
 
-	Labels         []FindingLabel         `gorm:"many2many:finding_labels_join"`
-	Notes          []FindingNote          `gorm:"constraint:OnDelete:CASCADE"`
-	Communications []FindingCommunication `gorm:"constraint:OnDelete:CASCADE"`
-	References     []FindingReference     `gorm:"constraint:OnDelete:CASCADE"`
-	History        []FindingHistory       `gorm:"constraint:OnDelete:CASCADE"`
-	Verifications  []FindingVerification  `gorm:"constraint:OnDelete:CASCADE"`
+	Labels                 []FindingLabel          `gorm:"many2many:finding_labels_join"`
+	Notes                  []FindingNote           `gorm:"constraint:OnDelete:CASCADE"`
+	Communications         []FindingCommunication  `gorm:"constraint:OnDelete:CASCADE"`
+	References             []FindingReference      `gorm:"constraint:OnDelete:CASCADE"`
+	History                []FindingHistory        `gorm:"constraint:OnDelete:CASCADE"`
+	Verifications          []FindingVerification   `gorm:"constraint:OnDelete:CASCADE"`
+	RemediationAttempts    []RemediationAttempt    `gorm:"constraint:OnDelete:CASCADE"`
+	RemediationValidations []RemediationValidation `gorm:"constraint:OnDelete:CASCADE"`
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -1204,6 +1210,45 @@ type FindingVerification struct {
 	CreatedAt time.Time
 }
 
+// RemediationAttempt is one immutable patch that passed the host-side
+// applicability gate. Attempt numbers are scoped to a finding; PatchScanID
+// makes parser retries idempotent. Finding.SuggestedFix remains the convenient
+// projection of the newest attempt, not the source of remediation history.
+type RemediationAttempt struct {
+	ID          uint   `gorm:"primarykey"`
+	FindingID   uint   `gorm:"index;not null;uniqueIndex:idx_remediation_attempt_number,priority:1"`
+	PatchScanID uint   `gorm:"not null;uniqueIndex"`
+	Attempt     int    `gorm:"not null;uniqueIndex:idx_remediation_attempt_number,priority:2"`
+	Patch       string `gorm:"type:text;not null"`
+	BaseCommit  string `gorm:"not null"`
+
+	CreatedAt time.Time
+}
+
+const (
+	ReattackFailedToBypass = "failed_to_bypass"
+	ReattackBypassedPatch  = "bypassed_patch"
+	ReattackInconclusive   = "inconclusive"
+)
+
+// RemediationValidation is one immutable re-attack result for a patch
+// attempt. Report carries every generated variant and the benign control;
+// promoted fields support fail-closed display and filtering without parsing
+// arbitrary JSON in hot paths.
+type RemediationValidation struct {
+	ID                   uint   `gorm:"primarykey"`
+	FindingID            uint   `gorm:"index;not null"`
+	RemediationAttemptID uint   `gorm:"index;not null;uniqueIndex:idx_remediation_validation_scan,priority:1"`
+	ScanID               uint   `gorm:"not null;uniqueIndex:idx_remediation_validation_scan,priority:2"`
+	RootCauseStatus      string `gorm:"index;not null"`
+	ValidVariants        int
+	BenignControlPassed  bool
+	BypassInput          string `gorm:"type:text"`
+	Report               string `gorm:"type:text;not null"`
+
+	CreatedAt time.Time
+}
+
 // Skill is one scan recipe expressed as a claude-code skill. It maps 1:1 to
 // the agentskills.io SKILL.md format: Body is the markdown that sits after
 // the frontmatter, the other fields are frontmatter. Metadata holds the raw
@@ -1418,7 +1463,8 @@ func Open(dsn string) (*gorm.DB, error) {
 	if err := gdb.AutoMigrate(
 		&Repository{}, &Scan{},
 		&Finding{}, &FindingLabel{}, &FindingNote{},
-		&FindingCommunication{}, &FindingReference{}, &FindingHistory{}, &FindingReview{}, &FindingVerification{}, &AuditEvent{},
+		&FindingCommunication{}, &FindingReference{}, &FindingHistory{}, &FindingReview{}, &FindingVerification{},
+		&RemediationAttempt{}, &RemediationValidation{}, &AuditEvent{},
 		&Dependency{}, &ExpectedFinding{}, &Package{}, &PackageAlternative{}, &Dependent{}, &FindingDependent{}, &Advisory{}, &AdvisoryAudit{},
 		&Maintainer{}, &Skill{}, &Subproject{},
 		&SBOMUpload{}, &SBOMPackage{}, &CNA{}, &Setting{},

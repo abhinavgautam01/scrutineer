@@ -557,11 +557,12 @@
   </details>
   {{end}}
 
-  {{if .Patch}}{{$p := .Patch}}{{$ps := .PatchScan}}
+  {{if .Patch}}{{$p := .Patch}}{{$ps := .PatchScan}}{{$rem := .CurrentRemediation}}
   <details open class="group border-b">
     <summary class="w-full outline-none rounded-md focus-visible:ring-ring/50 focus-visible:ring-[3px]">
       <h3 class="flex flex-1 items-center justify-between gap-4 py-4 text-sm font-medium hover:underline">
         Proposed patch
+        {{with $rem}}<span class="badge-outline ml-2">{{.Status}}</span>{{end}}
         <span class="text-muted-foreground ml-auto mr-2 text-xs">scan #{{$ps.ID}}</span>
         <i data-lucide="chevron-down" class="text-muted-foreground size-4 shrink-0 transition-transform duration-200 group-open:rotate-180"></i>
       </h3>
@@ -583,6 +584,19 @@
         <a class="btn-sm-outline" href="/scans/{{$ps.ID}}">
           <i data-lucide="arrow-up-right"></i> View scan
         </a>
+        {{if not $rem}}
+        <span class="text-xs text-muted-foreground" title="Legacy patches need a fresh gated patch attempt before re-attack">Re-run Propose patch to enable re-attack</span>
+        {{else if .ReattackInFlight}}
+        <button type="button" class="btn-sm-outline" disabled title="This patch attempt is already being re-attacked">
+          <i data-lucide="loader-circle" class="animate-spin"></i> Re-attack in progress
+        </button>
+        {{else}}
+        <form method="post" action="/findings/{{$f.ID}}/reattack" hx-post="/findings/{{$f.ID}}/reattack" hx-swap="none">
+          <button type="submit" class="btn-sm-outline">
+            <i data-lucide="shield-check"></i> Re-attack patch
+          </button>
+        </form>
+        {{end}}
         {{if $p.BaseCommit}}
           <span class="text-xs text-muted-foreground">base <code>{{short $p.BaseCommit}}</code></span>
         {{end}}
@@ -602,6 +616,31 @@ git commit -m "fix: {{$f.Title}}"</pre>
       </details>
       {{if $p.Notes}}
         <div class="text-xs text-muted-foreground border-l-2 pl-3 mt-1">{{$p.Notes}}</div>
+      {{end}}
+      {{if .RemediationAttempts}}
+      <details class="group">
+        <summary class="text-xs text-muted-foreground cursor-pointer hover:underline">
+          Patch attempt history ({{len .RemediationAttempts}})
+        </summary>
+        <div class="overflow-x-auto mt-2">
+          <table class="w-full text-xs">
+            <thead class="text-muted-foreground">
+              <tr><th class="text-left py-2">Attempt</th><th class="text-left">Patch scan</th><th class="text-left">Status</th><th class="text-left">Re-attack</th><th class="text-left">Evidence</th></tr>
+            </thead>
+            <tbody>
+              {{range .RemediationAttempts}}
+              <tr class="border-t align-top">
+                <td class="py-2">#{{.Attempt}} <code>@{{short .BaseCommit}}</code></td>
+                <td><a href="/scans/{{.PatchScanID}}" class="hover:underline">#{{.PatchScanID}}</a></td>
+                <td><span class="badge-outline">{{.Status}}</span></td>
+                <td>{{with .Validation}}<a href="/scans/{{.ScanID}}" class="hover:underline">#{{.ScanID}}</a>{{else}}-{{end}}</td>
+                <td>{{with .Validation}}{{.ValidVariants}} variants; benign {{if .BenignControlPassed}}passed{{else}}not proven{{end}}{{if .BypassInput}}; bypass captured{{end}}{{else}}not run{{end}}</td>
+              </tr>
+              {{end}}
+            </tbody>
+          </table>
+        </div>
+      </details>
       {{end}}
       {{if $f.BreakingChange}}
         <div class="mt-3 border rounded p-3 text-sm">

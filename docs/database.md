@@ -110,6 +110,7 @@ One row per skill execution or external import. `skill_name` / `skill_version` p
 | finding_id | integer FK | Set when the scan is finding-scoped (verify/patch/disclose/exposure). References `findings.id`. |
 | dependent_id | integer FK | Set on `exposure` scans only. References `dependents.id`; identifies which downstream consumer the skill is auditing for reachability of the upstream finding. |
 | baseline_scan_id | integer FK | Set on a fix-validation scan (`POST /repositories/{id}/validate-fix`). References the baseline `scans.id` the fix ref is diffed against. Marks the scan as a validation anchor (the auto triage funnel skips it) and, when it finalises, drives the fingerprint diff written back to `report`. Null on ordinary scans. |
+| remediation_attempt_id | integer FK | Set on a `reattack` scan and pinned at enqueue time to the exact immutable `remediation_attempts.id` under test. Prevents a newer patch run from changing what an already queued re-attack validates. Null on every other scan. |
 | api_token | text | Per-scan bearer token that the skill presents when calling `/api`. Only valid while the scan is running. |
 | ref | text | Git ref to checkout after cloning. Empty means the default branch. |
 | skills_repo_sha | text | Commit of `-skills-repo` resolved at startup and stamped on every skill scan. Empty when `-skills-repo` is unset or for `import` scans. |
@@ -175,7 +176,7 @@ One row per installed skill. Loaded from `skills/` directories on disk or the UI
 | body | text | Markdown body after the frontmatter. The prompt. |
 | schema_json | text | Optional schema.json contents. |
 | output_file | text | Relative path the skill writes to. Promoted from metadata. |
-| output_kind | text | Parser key: `findings`, `maintainers`, `packages`, `advisories`, `dependencies`, `finding_dedup`, `repo_metadata`, `repo_overview`, `subprojects`, `posture`, `verify`, `patch`, `threat_model`, `exposure`, `freeform`. Promoted from metadata. |
+| output_kind | text | Parser key: `findings`, `maintainers`, `packages`, `advisories`, `dependencies`, `finding_dedup`, `repo_metadata`, `repo_overview`, `subprojects`, `posture`, `verify`, `patch`, `reattack`, `threat_model`, `exposure`, `freeform`. Promoted from metadata. |
 | version | integer | Bumps on every save. |
 | active | boolean | |
 | requires_remote | boolean | When true, scrutineer refuses to enqueue this skill against a local-directory repository (file:// URL). Set via `scrutineer.requires_remote: true` in SKILL.md frontmatter. Use for skills that depend on a forge URL or remote-only data (advisories, exposure, fork, maintainers, metadata, packages, report-upstream). |
@@ -311,6 +312,37 @@ Append-only grading records produced by finding-scoped `verify` scans. The compl
 | status | text | `confirmed`, `fixed`, `inconclusive`, `deferred`, or `not_attempted`. |
 | score | real, nullable | Fraction of the five rubric criteria that passed, from `0.0` to `1.0`. Null for legacy pre-rubric reports and reports that remain internally inconsistent after repair. |
 | report | text | Complete structured JSON report, including three attempts and per-criterion method, evidence, counterevidence, proof gap, and confidence. |
+| created_at | datetime | |
+
+## remediation_attempts
+
+Append-only patch attempts produced when a finding-scoped `patch` report passes the host-side applicability gate. `findings.suggested_fix` and `suggested_fix_commit` are only convenient projections of the newest row; this table is the remediation history and is never overwritten by a later proposal.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | integer PK | |
+| finding_id | integer FK | References `findings.id`; cascade delete. Unique with `attempt`. |
+| patch_scan_id | integer | Scan whose gated report produced this diff. Unique, making parser retries idempotent. |
+| attempt | integer | Monotonic number scoped to the finding. |
+| patch | text | Exact unified diff that passed the applicability gate. |
+| base_commit | text | Exact Git commit against which the patch applies. |
+| created_at | datetime | |
+
+## remediation_validations
+
+Append-only root-cause re-attack results. A validation belongs to one immutable patch attempt and stores the complete variant/control report. The current patch status is derived from the newest validation for the newest attempt; only `failed_to_bypass` with at least three distinct valid generated variants and a passing benign control derives `verified_secure`.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | integer PK | |
+| finding_id | integer FK | References `findings.id`; cascade delete. |
+| remediation_attempt_id | integer FK | Exact `remediation_attempts.id` tested. Unique with `scan_id`. |
+| scan_id | integer | Re-attack scan that produced this record. Unique with `remediation_attempt_id`. |
+| root_cause_status | text | `failed_to_bypass`, `bypassed_patch`, or `inconclusive`. |
+| valid_variants | integer | Number of distinct, valid, newly generated root-cause variants exercised. Prior bypass inputs are replayed but do not satisfy the three-variant minimum. |
+| benign_control_passed | boolean | True only when a benign input reaches the original sink without crashing. |
+| bypass_input | text | Exact first same-class, same-sink bypass input, otherwise empty. Later patch runs receive prior bypasses as regression inputs. |
+| report | text | Complete structured JSON report containing every variant and the benign control. |
 | created_at | datetime | |
 
 ## finding_communications

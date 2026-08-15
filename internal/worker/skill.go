@@ -189,30 +189,9 @@ func (w *Worker) doSkill(ctx context.Context, scan *db.Scan, emit func(Event)) (
 		scan.Commit = cacheCommit
 		w.clearCloneError(scan)
 	}
-	// Hard scope: prune the workspace down to the sub-package so the agent, its
-	// build, and its findings can't reach into sibling packages. Kept out of
-	// PrepareSrc so it applies to both a real clone and a local-dir copy, and so
-	// the automatic soft fallback below can re-widen by re-staging the tree.
-	hardScope := w.scanScopeHard(scan, skill.OutputKind)
-	if hardScope {
-		if err := pruneToSubPath(filepath.Join(workRoot, "src"), scan.SubPath); err != nil {
-			return "", fmt.Errorf("hard-scope sub_path: %w", err)
-		}
-	}
-	if err := w.prepareDiffRescan(ctx, scan, workRoot, emit); err != nil {
-		return "", err
-	}
-	focusArea, err := scanFocusArea(scan)
+	hardScope, err := w.prepareSkillSource(ctx, workRoot, scan, &skill, emit)
 	if err != nil {
 		return "", err
-	}
-	if err := applyRepositoryPathFilters(workRoot, &skill, scan.Repository.ScanConfig, emit); err != nil {
-		return "", fmt.Errorf("apply path filters: %w", err)
-	}
-	if focusArea != nil {
-		if err := applyFocusAreaPathFilter(workRoot, *focusArea, emit); err != nil {
-			return "", fmt.Errorf("apply focus-area path filter: %w", err)
-		}
 	}
 
 	skillDir := w.Runner.SkillDir(workRoot, skill.Name)
@@ -461,6 +440,8 @@ func (w *Worker) parseSkillOutput(skill *db.Skill, scan *db.Scan, report string,
 		return w.parsePostureOutput(scan, report, emit)
 	case "patch":
 		return w.parsePatchOutput(scan, report, emit)
+	case "reattack":
+		return w.parseReattackOutput(scan, report, emit)
 	}
 	return nil
 }

@@ -2703,6 +2703,60 @@ func TestFindingPatchRunEnqueuesPatchSkill(t *testing.T) {
 	}
 }
 
+func TestFindingReattackRunPinsLatestRemediationAttempt(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://github.com/foo/bar", Name: "bar"}
+	s.DB.Create(&repo)
+	parent := db.Scan{RepositoryID: repo.ID, Kind: worker.JobSkill, Status: db.ScanDone, SkillName: "security-deep-dive"}
+	s.DB.Create(&parent)
+	finding := db.Finding{ScanID: parent.ID, RepositoryID: repo.ID, FindingID: "F1", Title: "x", Severity: "High", Status: db.FindingTriaged}
+	s.DB.Create(&finding)
+	patchScan := db.Scan{RepositoryID: repo.ID, Kind: worker.JobSkill, Status: db.ScanDone, SkillName: patchSkillName, FindingID: &finding.ID}
+	s.DB.Create(&patchScan)
+	attempt := db.RemediationAttempt{FindingID: finding.ID, PatchScanID: patchScan.ID, Attempt: 1, Patch: "diff", BaseCommit: "deadbeef"}
+	s.DB.Create(&attempt)
+	skill := db.Skill{Name: reattackSkillName, Body: "b", OutputFile: "report.json", OutputKind: "reattack", Version: 1, Active: true, Source: "ui"}
+	s.DB.Create(&skill)
+
+	req := httptest.NewRequest("POST", fmt.Sprintf("/findings/%d/reattack", finding.ID), nil)
+	req.Host = testHost
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	var scan db.Scan
+	if err := s.DB.Where("skill_id = ?", skill.ID).First(&scan).Error; err != nil {
+		t.Fatal(err)
+	}
+	if scan.RemediationAttemptID == nil || *scan.RemediationAttemptID != attempt.ID || scan.Ref != attempt.BaseCommit {
+		t.Errorf("reattack scan = %+v, want attempt %d at ref %q", scan, attempt.ID, attempt.BaseCommit)
+	}
+}
+
+func TestFindingReattackRunRequiresGatedPatch(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	repo := db.Repository{URL: "https://github.com/foo/bar", Name: "bar"}
+	s.DB.Create(&repo)
+	parent := db.Scan{RepositoryID: repo.ID, Kind: worker.JobSkill, Status: db.ScanDone}
+	s.DB.Create(&parent)
+	finding := db.Finding{ScanID: parent.ID, RepositoryID: repo.ID, Title: "x", Severity: "High"}
+	s.DB.Create(&finding)
+	s.DB.Create(&db.Skill{Name: reattackSkillName, Body: "b", OutputFile: "report.json", OutputKind: "reattack", Active: true})
+	req := httptest.NewRequest("POST", fmt.Sprintf("/findings/%d/reattack", finding.ID), nil)
+	req.Host = testHost
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusPreconditionFailed {
+		t.Fatalf("status = %d, want 412: %s", w.Code, w.Body)
+	}
+}
+
 func TestEnqueueSkillWith_modelPrecedence(t *testing.T) {
 	withTestModels(t, []Model{
 		{Name: "Test High", ID: "test-high"},
