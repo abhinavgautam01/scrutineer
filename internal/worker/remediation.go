@@ -141,15 +141,11 @@ func (w *Worker) priorBypasses(findingID uint) (priorBypassEnvelope, error) {
 	out := priorBypassEnvelope{Bypasses: make([]priorBypass, 0, min(len(rows), maxStagedPriorBypasses))}
 	seen := make(map[string]bool, len(rows))
 	for _, row := range rows {
-		trimmed := strings.TrimSpace(row.BypassInput)
 		input := boundedBypassInput(row.BypassInput)
 		if input == "" || seen[input] {
 			continue
 		}
 		seen[input] = true
-		if len(trimmed) > maxStagedBypassInputBytes {
-			out.Truncated = true
-		}
 		if len(out.Bypasses) == maxStagedPriorBypasses {
 			out.Truncated = true
 			break

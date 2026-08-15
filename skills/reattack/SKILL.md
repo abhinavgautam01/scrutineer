@@ -58,7 +58,31 @@ Example successful resistance report:
   "variants": [
     {
       "name": "encoded separator",
-      "input": "example input",
+      "input": "%2Fexample",
+      "origin": "generated",
+      "valid": true,
+      "outcome": "blocked",
+      "same_bug_class": true,
+      "same_sink": true,
+      "failure_class": "",
+      "sink": "src/parser.go:42",
+      "evidence": "The public parser reached the patched length check and returned ErrInvalidLength."
+    },
+    {
+      "name": "repeated separator",
+      "input": "//example",
+      "origin": "generated",
+      "valid": true,
+      "outcome": "blocked",
+      "same_bug_class": true,
+      "same_sink": true,
+      "failure_class": "",
+      "sink": "src/parser.go:42",
+      "evidence": "The public parser reached the patched length check and returned ErrInvalidLength."
+    },
+    {
+      "name": "separator after prefix",
+      "input": "safe/../example",
       "origin": "generated",
       "valid": true,
       "outcome": "blocked",
@@ -75,6 +99,6 @@ Example successful resistance report:
     "crashed": false,
     "evidence": "The public parser reached src/parser.go:42 and returned the expected value."
   },
-  "notes": "Two additional distinct valid variants are included in the real report."
+  "notes": "All three generated variants exercise the same original sink through distinct inputs."
 }
 ```

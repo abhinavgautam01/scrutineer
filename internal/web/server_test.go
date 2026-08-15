@@ -4377,9 +4377,10 @@ func TestRetry_maxTurnsDoneScanResumesSession(t *testing.T) {
 	}
 }
 
-func TestRetry_preservesImportPayload(t *testing.T) {
-	// An ingest scan's input is the uploaded payload, not ./src. Both
-	// retry paths must carry it or the rerun stages no import/report.
+func TestRetry_preservesPinnedInputs(t *testing.T) {
+	// An ingest scan's input is the uploaded payload, not ./src, while a
+	// reattack must retain its remediation attempt. Both retry paths must
+	// preserve these pins or the worker cannot reproduce the original run.
 	s, done := newTestServer(t)
 	defer done()
 
@@ -4388,10 +4389,11 @@ func TestRetry_preservesImportPayload(t *testing.T) {
 	skill := db.Skill{Name: "ingest", Description: "x", Body: "b", Active: true, Source: "ui", Version: 1}
 	s.DB.Create(&skill)
 	payload := []byte(`{"vendor":"weird","items":[1]}`)
+	attemptID := uint(42)
 	orig := db.Scan{
 		RepositoryID: repo.ID, Kind: "skill", Status: db.ScanFailed,
 		SkillID: &skill.ID, SkillName: "ingest",
-		ImportPayload: payload, FinishedAt: new(time.Now()),
+		ImportPayload: payload, RemediationAttemptID: &attemptID, FinishedAt: new(time.Now()),
 	}
 	s.DB.Create(&orig)
 
@@ -4408,6 +4410,9 @@ func TestRetry_preservesImportPayload(t *testing.T) {
 	s.DB.Where("id != ?", orig.ID).First(&fresh)
 	if string(fresh.ImportPayload) != string(payload) {
 		t.Errorf("single retry lost import payload: got %q", fresh.ImportPayload)
+	}
+	if fresh.RemediationAttemptID == nil || *fresh.RemediationAttemptID != attemptID {
+		t.Errorf("single retry remediation attempt = %v, want %d", fresh.RemediationAttemptID, attemptID)
 	}
 
 	// Bulk retry-failed path uses a column Select; it must include the
@@ -4426,6 +4431,9 @@ func TestRetry_preservesImportPayload(t *testing.T) {
 	s.DB.Where("id != ?", orig.ID).First(&bulk)
 	if string(bulk.ImportPayload) != string(payload) {
 		t.Errorf("bulk retry lost import payload: got %q", bulk.ImportPayload)
+	}
+	if bulk.RemediationAttemptID == nil || *bulk.RemediationAttemptID != attemptID {
+		t.Errorf("bulk retry remediation attempt = %v, want %d", bulk.RemediationAttemptID, attemptID)
 	}
 }
 

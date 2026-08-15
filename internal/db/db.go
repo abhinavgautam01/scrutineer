@@ -1216,7 +1216,7 @@ type FindingVerification struct {
 // projection of the newest attempt, not the source of remediation history.
 type RemediationAttempt struct {
 	ID          uint   `gorm:"primarykey"`
-	FindingID   uint   `gorm:"index;not null;uniqueIndex:idx_remediation_attempt_number,priority:1"`
+	FindingID   uint   `gorm:"not null;uniqueIndex:idx_remediation_attempt_number,priority:1"`
 	PatchScanID uint   `gorm:"not null;uniqueIndex"`
 	Attempt     int    `gorm:"not null;uniqueIndex:idx_remediation_attempt_number,priority:2"`
 	Patch       string `gorm:"type:text;not null"`

@@ -320,20 +320,21 @@ func (s *Server) scanRetry(w http.ResponseWriter, r *http.Request) {
 	}
 	sessionID, resumeOf := s.resumeOpts(scan)
 	newID, err := s.enqueueSkillWith(r.Context(), scan.RepositoryID, *scan.SkillID, ScanOpts{
-		Model:             scan.Model,
-		Effort:            scan.Effort,
-		FindingID:         scan.FindingID,
-		SubPath:           scan.SubPath,
-		ScopeMode:         scan.ScopeMode,
-		Ref:               scan.Ref,
-		Profile:           scan.Profile,
-		RescanMode:        scan.RescanMode,
-		DiffBaseScanID:    scan.DiffBaseScanID,
-		ScanGroup:         scan.ScanGroup,
-		FocusArea:         scan.FocusArea,
-		SessionID:         sessionID,
-		ResumedFromScanID: resumeOf,
-		ParentScanID:      &scan.ID,
+		Model:                scan.Model,
+		Effort:               scan.Effort,
+		FindingID:            scan.FindingID,
+		RemediationAttemptID: scan.RemediationAttemptID,
+		SubPath:              scan.SubPath,
+		ScopeMode:            scan.ScopeMode,
+		Ref:                  scan.Ref,
+		Profile:              scan.Profile,
+		RescanMode:           scan.RescanMode,
+		DiffBaseScanID:       scan.DiffBaseScanID,
+		ScanGroup:            scan.ScanGroup,
+		FocusArea:            scan.FocusArea,
+		SessionID:            sessionID,
+		ResumedFromScanID:    resumeOf,
+		ParentScanID:         &scan.ID,
 		// An ingest scan's input is the uploaded payload, not ./src;
 		// without it the retry stages no import/report and the model
 		// runs against a missing file.
@@ -401,7 +402,7 @@ func (s *Server) scansRetryFailed(w http.ResponseWriter, r *http.Request) {
 	// deliberately absent: a user-cancelled newer run shouldn't block
 	// retrying an older genuine failure.
 	var scans []db.Scan
-	err := q.Select("id, repository_id, skill_id, model, effort, finding_id, sub_path, scope_mode, ref, profile, rescan_mode, diff_base_scan_id, scan_group, focus_area, backend, status, session_id, resumed_from_scan_id, import_payload").
+	err := q.Select("id, repository_id, skill_id, model, effort, finding_id, remediation_attempt_id, sub_path, scope_mode, ref, profile, rescan_mode, diff_base_scan_id, scan_group, focus_area, backend, status, session_id, resumed_from_scan_id, import_payload").
 		Where(`NOT EXISTS (
 			SELECT 1 FROM scans n
 			WHERE n.id > scans.id
@@ -423,21 +424,22 @@ func (s *Server) scansRetryFailed(w http.ResponseWriter, r *http.Request) {
 		sessionID, resumeOf := s.resumeOpts(sc)
 		parent := sc.ID
 		if _, err := s.enqueueSkillWith(r.Context(), sc.RepositoryID, *sc.SkillID, ScanOpts{
-			Model:             sc.Model,
-			Effort:            sc.Effort,
-			FindingID:         sc.FindingID,
-			SubPath:           sc.SubPath,
-			ScopeMode:         sc.ScopeMode,
-			Ref:               sc.Ref,
-			Profile:           sc.Profile,
-			RescanMode:        sc.RescanMode,
-			DiffBaseScanID:    sc.DiffBaseScanID,
-			ScanGroup:         sc.ScanGroup,
-			FocusArea:         sc.FocusArea,
-			SessionID:         sessionID,
-			ResumedFromScanID: resumeOf,
-			ParentScanID:      &parent,
-			ImportPayload:     sc.ImportPayload,
+			Model:                sc.Model,
+			Effort:               sc.Effort,
+			FindingID:            sc.FindingID,
+			RemediationAttemptID: sc.RemediationAttemptID,
+			SubPath:              sc.SubPath,
+			ScopeMode:            sc.ScopeMode,
+			Ref:                  sc.Ref,
+			Profile:              sc.Profile,
+			RescanMode:           sc.RescanMode,
+			DiffBaseScanID:       sc.DiffBaseScanID,
+			ScanGroup:            sc.ScanGroup,
+			FocusArea:            sc.FocusArea,
+			SessionID:            sessionID,
+			ResumedFromScanID:    resumeOf,
+			ParentScanID:         &parent,
+			ImportPayload:        sc.ImportPayload,
 		}); err != nil {
 			errored++
 			continue

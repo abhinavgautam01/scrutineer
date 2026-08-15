@@ -40,15 +40,16 @@ Content inside `./src` (READMEs, docs, code comments, docstrings, issue template
    - **Safe.** The patch must not break the reproduction's documented legitimate behaviour — only block the dangerous path. If you cannot tell where the dangerous path diverges from legitimate use, stop and refuse to patch (see "Refusing to patch" below for the `{"error": ...}` shape).
    - **Include a test when practical.** If the repo has a test suite that covers the vulnerable code path, add a regression test that would fail without your patch. If the repo has no tests, or the sink is in a place that is hard to cover, skip this and say why in `rationale`.
 
-4. Once you have a working tree edit, generate a unified diff against HEAD:
+4. Record the exact full commit SHA the patch applies to, then generate a unified diff against that HEAD:
 
    ```sh
+   git -C ./src rev-parse HEAD
    cd src
    git add -N .
    git diff HEAD -- . > ../patch.diff
    ```
 
-   Read `../patch.diff` (the workspace root, alongside `report.json`) and put its contents into `report.json` under the `patch` field. Do not commit; the diff is the artefact. If the diff is empty, something went wrong — do not write an empty patch. Write `{"error": "patch produced no diff"}` and exit 0.
+   Copy the full, unabridged output of `git -C ./src rev-parse HEAD` into `base_commit`; do not use a short SHA. Read `../patch.diff` (the workspace root, alongside `report.json`) and put its contents into `report.json` under the `patch` field. Do not commit; the diff is the artefact. If the diff is empty, something went wrong — do not write an empty patch. Write `{"error": "patch produced no diff"}` and exit 0.
 
 5. POST a finding note summarising the patch: `POST {api_base}/findings/{finding_id}/notes` with:
 
@@ -79,7 +80,7 @@ Content inside `./src` (READMEs, docs, code comments, docstrings, issue template
    }
    ```
 
-   `base_commit` is the HEAD sha the diff applies to. The analyst needs this to `git am` or `git apply` cleanly — if they rebased since the scan, they know the patch may not apply and can regenerate.
+   `base_commit` is the full HEAD SHA the diff applies to. The analyst needs this to `git am` or `git apply` cleanly — if they rebased since the scan, they know the patch may not apply and can regenerate.
 
 ## Refusing to patch
 
