@@ -3,10 +3,12 @@ package web
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -47,7 +49,7 @@ func scheduleTestServer(t *testing.T, head string, syncErr error) (*Server, *[]s
 		}
 		return head, nil
 	}
-	s.syncUpstream = func(_ context.Context, repoURL, upstreamURL string) error {
+	s.syncUpstream = func(_ context.Context, repoURL, upstreamURL string, _ time.Duration) error {
 		synced = append(synced, repoURL+"<-"+upstreamURL)
 		return syncErr
 	}
@@ -56,7 +58,17 @@ func scheduleTestServer(t *testing.T, head string, syncErr error) (*Server, *[]s
 
 func scheduledRepo(t *testing.T, s *Server, schedule string, due time.Time) db.Repository {
 	t.Helper()
-	repo := db.Repository{URL: "https://example.com/r", Name: "r", ScanSchedule: schedule, NextScheduledScanAt: &due}
+	return scheduledNamedRepo(t, s, "r", schedule, due)
+}
+
+func scheduledNamedRepo(t *testing.T, s *Server, name, schedule string, due time.Time) db.Repository {
+	t.Helper()
+	repo := db.Repository{
+		URL:                 "https://example.com/" + name,
+		Name:                name,
+		ScanSchedule:        schedule,
+		NextScheduledScanAt: &due,
+	}
 	if err := s.DB.Create(&repo).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -177,6 +189,136 @@ func TestScheduleTick_invalidScheduleDoesNotFireOrStoreZero(t *testing.T) {
 	}
 	if scans != 0 {
 		t.Fatalf("invalid schedule created %d scan(s), want 0", scans)
+	}
+}
+
+func TestRunScheduledRepositories_boundsConcurrency(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	const maxConcurrent = 3
+	s.Queue.Reconfigure(maxConcurrent)
+	now := time.Now()
+	repos := make([]db.Repository, 0, maxConcurrent+2)
+	for i := range maxConcurrent + 2 {
+		repos = append(repos, scheduledNamedRepo(t, s, fmt.Sprintf("repo-%d", i), "daily", now.Add(-time.Minute)))
+	}
+
+	var active atomic.Int64
+	var peak atomic.Int64
+	started := make(chan struct{}, len(repos))
+	release := make(chan struct{})
+	s.resolveRemoteHead = func(ctx context.Context, _ db.Repository) (string, error) {
+		running := active.Add(1)
+		defer active.Add(-1)
+		for {
+			previous := peak.Load()
+			if running <= previous || peak.CompareAndSwap(previous, running) {
+				break
+			}
+		}
+		started <- struct{}{}
+		select {
+		case <-release:
+			return "", errors.New("released test remote")
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+
+	finished := make(chan struct{})
+	go func() {
+		s.runScheduledRepositories(
+			context.Background(), now, "", repos,
+			s.schedulerConcurrency(), 5*time.Second,
+		)
+		close(finished)
+	}()
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		<-finished
+	}()
+
+	for range maxConcurrent {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for the initial scheduler workers")
+		}
+	}
+	select {
+	case <-started:
+		t.Fatalf("more than %d repositories ran concurrently", maxConcurrent)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("scheduler did not wait for all repository work to finish")
+	}
+	if got := peak.Load(); got != maxConcurrent {
+		t.Fatalf("peak concurrency = %d, want %d", got, maxConcurrent)
+	}
+}
+
+func TestRunScheduledRepositories_timeoutReleasesSlotAndAdvancesSchedules(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	now := time.Now()
+	timedOut := scheduledNamedRepo(t, s, "timeout", "daily", now.Add(-time.Minute))
+	next := scheduledNamedRepo(t, s, "next", "daily", now.Add(-time.Minute))
+
+	var nextStarted atomic.Bool
+	s.resolveRemoteHead = func(ctx context.Context, repo db.Repository) (string, error) {
+		if repo.ID == timedOut.ID {
+			<-ctx.Done()
+			return "", ctx.Err()
+		}
+		nextStarted.Store(true)
+		return "", errors.New("next remote checked")
+	}
+
+	var scheduleUpdates atomic.Int64
+	const callback = "test:count_schedule_advances"
+	if err := s.DB.Callback().Update().Before("gorm:update").Register(callback, func(tx *gorm.DB) {
+		if tx.Statement.Table == "repositories" {
+			scheduleUpdates.Add(1)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := s.DB.Callback().Update().Remove(callback); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	s.runScheduledRepositories(
+		context.Background(), now, "", []db.Repository{timedOut, next},
+		1, 25*time.Millisecond,
+	)
+	if !nextStarted.Load() {
+		t.Fatal("repository after a timeout never acquired the released worker slot")
+	}
+	if got := scheduleUpdates.Load(); got != 2 {
+		t.Fatalf("schedule updates = %d, want exactly one for each repository", got)
+	}
+	for _, repo := range []db.Repository{timedOut, next} {
+		var got db.Repository
+		if err := s.DB.First(&got, repo.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if got.NextScheduledScanAt == nil || !got.NextScheduledScanAt.After(now) {
+			t.Fatalf("repo %s next scheduled scan = %v, want after %v", repo.Name, got.NextScheduledScanAt, now)
+		}
+	}
+	if skip := lastSkip(t, s, timedOut.ID); !strings.Contains(skip.Error, context.DeadlineExceeded.Error()) {
+		t.Fatalf("timeout skip reason = %q, want deadline exceeded", skip.Error)
 	}
 }
 
