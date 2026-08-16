@@ -540,21 +540,17 @@ func AddFindingReference(gdb *gorm.DB, findingID uint, url, tags, summary string
 	updates := map[string]any{}
 	if tags != "" && tags != r.Tags {
 		updates["tags"] = tags
+		r.Tags = tags
 	}
 	if summary != "" && summary != r.Summary {
 		updates["summary"] = summary
+		r.Summary = summary
 	}
 	if len(updates) == 0 {
 		return r, nil
 	}
 	if err := gdb.Model(r).Updates(updates).Error; err != nil {
 		return nil, err
-	}
-	if tags, ok := updates["tags"].(string); ok {
-		r.Tags = tags
-	}
-	if summary, ok := updates["summary"].(string); ok {
-		r.Summary = summary
 	}
 	return r, nil
 }
