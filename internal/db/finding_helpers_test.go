@@ -749,6 +749,25 @@ func TestAddFindingReference(t *testing.T) {
 	if ref.ID == 0 || ref.URL != "https://example.com/advisory" || ref.Tags != "advisory,upstream" {
 		t.Errorf("reference = %+v", ref)
 	}
+	if ref.Summary != "Upstream advisory" {
+		t.Errorf("reference summary = %q, want initial summary", ref.Summary)
+	}
+
+	unchanged, err := AddFindingReference(gdb, f.ID, ref.URL, "", "")
+	if err != nil {
+		t.Fatalf("AddFindingReference unchanged: %v", err)
+	}
+	if unchanged.ID != ref.ID || unchanged.Tags != ref.Tags || unchanged.Summary != ref.Summary {
+		t.Errorf("unchanged reference = %+v, want %+v", unchanged, ref)
+	}
+
+	updated, err := AddFindingReference(gdb, f.ID, ref.URL, "advisory,patch", "Patch proposal")
+	if err != nil {
+		t.Fatalf("AddFindingReference update: %v", err)
+	}
+	if updated.ID != ref.ID || updated.Tags != "advisory,patch" || updated.Summary != "Patch proposal" {
+		t.Errorf("updated reference = %+v", updated)
+	}
 
 	if _, err := AddFindingReference(gdb, f.ID, "   ", "", ""); err == nil {
 		t.Error("empty URL should error")
@@ -757,7 +776,7 @@ func TestAddFindingReference(t *testing.T) {
 	var n int64
 	gdb.Model(&FindingReference{}).Where("finding_id = ?", f.ID).Count(&n)
 	if n != 1 {
-		t.Errorf("reference count = %d, want 1 (empty rejected)", n)
+		t.Errorf("reference count = %d, want 1 (duplicates merged; empty rejected)", n)
 	}
 }
 

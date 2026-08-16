@@ -528,12 +528,30 @@ func AddFindingReference(gdb *gorm.DB, findingID uint, url, tags, summary string
 	r := &FindingReference{
 		FindingID: findingID,
 		URL:       url,
-		Tags:      tags,
-		Summary:   summary,
-		CreatedAt: time.Now(),
 	}
-	if err := gdb.Create(r).Error; err != nil {
+	if err := gdb.Where("finding_id = ? AND url = ?", findingID, url).
+		Attrs(FindingReference{Tags: tags, Summary: summary, CreatedAt: time.Now()}).
+		FirstOrCreate(r).Error; err != nil {
 		return nil, err
+	}
+	updates := map[string]any{}
+	if strings.TrimSpace(tags) != "" && tags != r.Tags {
+		updates["tags"] = tags
+	}
+	if strings.TrimSpace(summary) != "" && summary != r.Summary {
+		updates["summary"] = summary
+	}
+	if len(updates) == 0 {
+		return r, nil
+	}
+	if err := gdb.Model(r).Updates(updates).Error; err != nil {
+		return nil, err
+	}
+	if tags, ok := updates["tags"].(string); ok {
+		r.Tags = tags
+	}
+	if summary, ok := updates["summary"].(string); ok {
+		r.Summary = summary
 	}
 	return r, nil
 }
