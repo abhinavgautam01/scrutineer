@@ -2703,6 +2703,60 @@ func TestFindingPatchRunEnqueuesPatchSkill(t *testing.T) {
 	}
 }
 
+func TestFindingReattackRunPinsLatestRemediationAttempt(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://github.com/foo/bar", Name: "bar"}
+	s.DB.Create(&repo)
+	parent := db.Scan{RepositoryID: repo.ID, Kind: worker.JobSkill, Status: db.ScanDone, SkillName: "security-deep-dive"}
+	s.DB.Create(&parent)
+	finding := db.Finding{ScanID: parent.ID, RepositoryID: repo.ID, FindingID: "F1", Title: "x", Severity: "High", Status: db.FindingTriaged}
+	s.DB.Create(&finding)
+	patchScan := db.Scan{RepositoryID: repo.ID, Kind: worker.JobSkill, Status: db.ScanDone, SkillName: patchSkillName, FindingID: &finding.ID}
+	s.DB.Create(&patchScan)
+	attempt := db.RemediationAttempt{FindingID: finding.ID, PatchScanID: patchScan.ID, Attempt: 1, Patch: "diff", BaseCommit: "deadbeef"}
+	s.DB.Create(&attempt)
+	skill := db.Skill{Name: reattackSkillName, Body: "b", OutputFile: "report.json", OutputKind: "reattack", Version: 1, Active: true, Source: "ui"}
+	s.DB.Create(&skill)
+
+	req := httptest.NewRequest("POST", fmt.Sprintf("/findings/%d/reattack", finding.ID), nil)
+	req.Host = testHost
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	var scan db.Scan
+	if err := s.DB.Where("skill_id = ?", skill.ID).First(&scan).Error; err != nil {
+		t.Fatal(err)
+	}
+	if scan.RemediationAttemptID == nil || *scan.RemediationAttemptID != attempt.ID || scan.Ref != attempt.BaseCommit {
+		t.Errorf("reattack scan = %+v, want attempt %d at ref %q", scan, attempt.ID, attempt.BaseCommit)
+	}
+}
+
+func TestFindingReattackRunRequiresGatedPatch(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	repo := db.Repository{URL: "https://github.com/foo/bar", Name: "bar"}
+	s.DB.Create(&repo)
+	parent := db.Scan{RepositoryID: repo.ID, Kind: worker.JobSkill, Status: db.ScanDone}
+	s.DB.Create(&parent)
+	finding := db.Finding{ScanID: parent.ID, RepositoryID: repo.ID, Title: "x", Severity: "High"}
+	s.DB.Create(&finding)
+	s.DB.Create(&db.Skill{Name: reattackSkillName, Body: "b", OutputFile: "report.json", OutputKind: "reattack", Active: true})
+	req := httptest.NewRequest("POST", fmt.Sprintf("/findings/%d/reattack", finding.ID), nil)
+	req.Host = testHost
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusPreconditionFailed {
+		t.Fatalf("status = %d, want 412: %s", w.Code, w.Body)
+	}
+}
+
 func TestEnqueueSkillWith_modelPrecedence(t *testing.T) {
 	withTestModels(t, []Model{
 		{Name: "Test High", ID: "test-high"},
@@ -4323,9 +4377,10 @@ func TestRetry_maxTurnsDoneScanResumesSession(t *testing.T) {
 	}
 }
 
-func TestRetry_preservesImportPayload(t *testing.T) {
-	// An ingest scan's input is the uploaded payload, not ./src. Both
-	// retry paths must carry it or the rerun stages no import/report.
+func TestRetry_preservesPinnedInputs(t *testing.T) {
+	// An ingest scan's input is the uploaded payload, not ./src, while a
+	// reattack must retain its remediation attempt. Both retry paths must
+	// preserve these pins or the worker cannot reproduce the original run.
 	s, done := newTestServer(t)
 	defer done()
 
@@ -4334,10 +4389,11 @@ func TestRetry_preservesImportPayload(t *testing.T) {
 	skill := db.Skill{Name: "ingest", Description: "x", Body: "b", Active: true, Source: "ui", Version: 1}
 	s.DB.Create(&skill)
 	payload := []byte(`{"vendor":"weird","items":[1]}`)
+	attemptID := uint(42)
 	orig := db.Scan{
 		RepositoryID: repo.ID, Kind: "skill", Status: db.ScanFailed,
 		SkillID: &skill.ID, SkillName: "ingest",
-		ImportPayload: payload, FinishedAt: new(time.Now()),
+		ImportPayload: payload, RemediationAttemptID: &attemptID, FinishedAt: new(time.Now()),
 	}
 	s.DB.Create(&orig)
 
@@ -4354,6 +4410,9 @@ func TestRetry_preservesImportPayload(t *testing.T) {
 	s.DB.Where("id != ?", orig.ID).First(&fresh)
 	if string(fresh.ImportPayload) != string(payload) {
 		t.Errorf("single retry lost import payload: got %q", fresh.ImportPayload)
+	}
+	if fresh.RemediationAttemptID == nil || *fresh.RemediationAttemptID != attemptID {
+		t.Errorf("single retry remediation attempt = %v, want %d", fresh.RemediationAttemptID, attemptID)
 	}
 
 	// Bulk retry-failed path uses a column Select; it must include the
@@ -4372,6 +4431,9 @@ func TestRetry_preservesImportPayload(t *testing.T) {
 	s.DB.Where("id != ?", orig.ID).First(&bulk)
 	if string(bulk.ImportPayload) != string(payload) {
 		t.Errorf("bulk retry lost import payload: got %q", bulk.ImportPayload)
+	}
+	if bulk.RemediationAttemptID == nil || *bulk.RemediationAttemptID != attemptID {
+		t.Errorf("bulk retry remediation attempt = %v, want %d", bulk.RemediationAttemptID, attemptID)
 	}
 }
 

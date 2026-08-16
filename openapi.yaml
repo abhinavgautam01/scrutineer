@@ -483,7 +483,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
-
   /findings/{id}:
     parameters:
       - name: id
@@ -795,13 +794,16 @@ paths:
 
   /findings/{id}/skills/{name}/run:
     post:
-      summary: Enqueue a finding-scoped skill (verify, revalidate, patch, disclose)
+      summary: Enqueue a finding-scoped skill (verify, revalidate, patch, reattack, disclose)
       operationId: runFindingSkill
       description: |
         The authenticated scan's repository must own the finding. The scan
         that gets enqueued has FindingID set so its skill body can read
         `scrutineer.finding_id` from context.json and act on one finding
         specifically.
+        A `reattack` enqueue ignores a caller-supplied ref and pins the scan to
+        the newest immutable gated patch attempt and its base commit. It returns
+        412 when the finding has no gated patch.
       parameters:
         - name: id
           in: path
@@ -836,6 +838,11 @@ paths:
               schema: { $ref: '#/components/schemas/Error' }
         '409':
           description: 'The repository maintainer opted out of federated scanning, so no scan may be enqueued for it.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '412':
+          description: A re-attack was requested but the finding has no reproducible gated patch attempt.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -1413,6 +1420,11 @@ components:
         diff_stats:
           type: string
           description: JSON metadata for staged diff inputs, including changed files and size limits.
+        remediation_attempt_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: Immutable gated patch attempt pinned to a re-attack scan at enqueue time.
         coverage:
           type: string
           description: JSON coverage metadata, including diff fallback reasons and threat-model update decisions.
@@ -1609,6 +1621,10 @@ components:
               allOf:
                 - $ref: '#/components/schemas/FindingVerification'
               nullable: true
+            remediation:
+              allOf:
+                - $ref: '#/components/schemas/RemediationAttempt'
+              nullable: true
 
     FindingVerification:
       type: object
@@ -1620,6 +1636,32 @@ components:
         score:      { type: number, format: double, minimum: 0, maximum: 1, nullable: true, description: "Fraction of the five fixed verification criteria that passed. Null for legacy reports and reports that remain internally inconsistent after repair." }
         report:     { $ref: '#/components/schemas/VerificationReport' }
         created_at: { type: string, format: date-time }
+
+    RemediationAttempt:
+      type: object
+      required: [id, attempt, patch_scan_id, base_commit, status, created_at]
+      properties:
+        id:            { type: integer, format: int64 }
+        attempt:       { type: integer, minimum: 1 }
+        patch_scan_id: { type: integer, format: int64 }
+        base_commit:   { type: string }
+        status:        { type: string, enum: [verification_incomplete, bypassed_patch, verified_secure] }
+        created_at:    { type: string, format: date-time }
+        validation:
+          allOf:
+            - $ref: '#/components/schemas/RemediationValidation'
+          nullable: true
+
+    RemediationValidation:
+      type: object
+      required: [scan_id, outcome, valid_variants, benign_control_passed, bypass_input, created_at]
+      properties:
+        scan_id:               { type: integer, format: int64 }
+        outcome:               { type: string, enum: [failed_to_bypass, bypassed_patch, inconclusive] }
+        valid_variants:        { type: integer, minimum: 0 }
+        benign_control_passed: { type: boolean }
+        bypass_input:          { type: string }
+        created_at:            { type: string, format: date-time }
 
     VerificationReport:
       type: object

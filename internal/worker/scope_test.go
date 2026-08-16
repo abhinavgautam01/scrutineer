@@ -134,6 +134,7 @@ func TestRepoWideProjectionKinds_everyOutputKindClassified(t *testing.T) {
 		"disclose":        true, // finding-scoped
 		"release_watch":   true, // finding-scoped
 		"patch":           true, // finding-scoped
+		"reattack":        true, // finding-scoped
 	}
 	for kind := range skills.OutputKinds {
 		repoWide := repoWideProjectionKinds[kind]

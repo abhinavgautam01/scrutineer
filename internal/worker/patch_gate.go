@@ -11,6 +11,9 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
+
+	"gorm.io/gorm"
 
 	"scrutineer/internal/db"
 )
@@ -25,10 +28,9 @@ type patchReport struct {
 }
 
 // parsePatchOutput runs the applicability gate over a patch skill's diff and,
-// on pass, writes Finding.SuggestedFix and Finding.SuggestedFixCommit via
-// WriteFindingField so the change is recorded in FindingHistory. A gate
-// failure is not a scan error: the scan completed and the diff is in
-// Scan.Report; we just decline to promote it onto the finding.
+// on pass, appends an immutable RemediationAttempt and updates the
+// Finding.SuggestedFix projection through WriteFindingField. A gate failure is
+// not a scan error: the scan completed and the diff remains in Scan.Report.
 func (w *Worker) parsePatchOutput(scan *db.Scan, report string, emit func(Event)) error {
 	var rep patchReport
 	if err := json.Unmarshal([]byte(report), &rep); err != nil {
@@ -46,6 +48,10 @@ func (w *Worker) parsePatchOutput(scan *db.Scan, report string, emit func(Event)
 		emit(Event{Kind: KindText, Text: "patch: scan is not finding-scoped, leaving suggested_fix unset"})
 		return nil
 	}
+	if strings.TrimSpace(rep.BaseCommit) == "" {
+		emit(Event{Kind: KindText, Text: "patch: gate rejected: base_commit is required for reproducible re-attack"})
+		return nil
+	}
 
 	var f db.Finding
 	if err := w.DB.First(&f, *scan.FindingID).Error; err != nil {
@@ -57,15 +63,63 @@ func (w *Worker) parsePatchOutput(scan *db.Scan, report string, emit func(Event)
 		emit(Event{Kind: KindText, Text: "patch: gate rejected: " + reason})
 		return nil
 	}
+	if head := gitHead(srcDir); head == "" || strings.TrimSpace(rep.BaseCommit) != head {
+		emit(Event{Kind: KindText, Text: fmt.Sprintf(
+			"patch: gate rejected: base_commit %q does not match staged HEAD %q", rep.BaseCommit, head)})
+		return nil
+	}
 
-	if err := db.WriteFindingField(w.DB, f.ID, "suggested_fix", rep.Patch, db.SourceModel, "patch"); err != nil {
-		return fmt.Errorf("write suggested_fix: %w", err)
+	attempt, err := w.recordRemediationAttempt(scan, f.ID, rep)
+	if err != nil {
+		return err
 	}
-	if err := db.WriteFindingField(w.DB, f.ID, "suggested_fix_commit", rep.BaseCommit, db.SourceModel, "patch"); err != nil {
-		return fmt.Errorf("write suggested_fix_commit: %w", err)
-	}
-	emit(Event{Kind: KindText, Text: fmt.Sprintf("patch: gate passed, wrote suggested_fix on finding %d", f.ID)})
+	emit(Event{Kind: KindText, Text: fmt.Sprintf(
+		"patch: gate passed, recorded remediation attempt %d for finding %d", attempt.Attempt, f.ID)})
 	return nil
+}
+
+func (w *Worker) recordRemediationAttempt(scan *db.Scan, findingID uint, rep patchReport) (db.RemediationAttempt, error) {
+	var attempt db.RemediationAttempt
+	err := w.DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Where("patch_scan_id = ?", scan.ID).Limit(1).Find(&attempt)
+		if result.Error != nil {
+			return fmt.Errorf("check existing remediation attempt: %w", result.Error)
+		}
+		if result.RowsAffected > 0 {
+			return nil
+		}
+
+		// Acquire the finding's write lock before allocating its next number so
+		// concurrent patch scans cannot both claim the same attempt.
+		if err := tx.Model(&db.Finding{}).Where("id = ?", findingID).
+			UpdateColumn("updated_at", time.Now()).Error; err != nil {
+			return fmt.Errorf("lock finding for remediation attempt: %w", err)
+		}
+		var latest int
+		if err := tx.Model(&db.RemediationAttempt{}).Where("finding_id = ?", findingID).
+			Select("COALESCE(MAX(attempt), 0)").Scan(&latest).Error; err != nil {
+			return fmt.Errorf("allocate remediation attempt: %w", err)
+		}
+		attempt = db.RemediationAttempt{
+			FindingID:   findingID,
+			PatchScanID: scan.ID,
+			Attempt:     latest + 1,
+			Patch:       rep.Patch,
+			BaseCommit:  rep.BaseCommit,
+			CreatedAt:   time.Now(),
+		}
+		if err := tx.Create(&attempt).Error; err != nil {
+			return fmt.Errorf("record remediation attempt: %w", err)
+		}
+		if err := db.WriteFindingField(tx, findingID, "suggested_fix", rep.Patch, db.SourceModel, "patch"); err != nil {
+			return fmt.Errorf("write suggested_fix: %w", err)
+		}
+		if err := db.WriteFindingField(tx, findingID, "suggested_fix_commit", rep.BaseCommit, db.SourceModel, "patch"); err != nil {
+			return fmt.Errorf("write suggested_fix_commit: %w", err)
+		}
+		return nil
+	})
+	return attempt, err
 }
 
 // gatePatch returns "" when the diff is acceptable, otherwise a one-line

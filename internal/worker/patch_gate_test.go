@@ -259,7 +259,8 @@ func TestParsePatchOutput_passWritesColumnsAndHistory(t *testing.T) {
 	}
 	src := filepath.Join(w.workRoot(sc.ID), "src")
 	_, diff := gateRepo(t, src)
-	report := fmt.Sprintf(`{"patch":%q,"base_commit":"abc123"}`, diff)
+	head := gitHead(src)
+	report := fmt.Sprintf(`{"patch":%q,"base_commit":%q}`, diff, head)
 
 	var events []string
 	if err := w.parsePatchOutput(&sc, report, func(e Event) { events = append(events, e.Text) }); err != nil {
@@ -270,8 +271,8 @@ func TestParsePatchOutput_passWritesColumnsAndHistory(t *testing.T) {
 	if f.SuggestedFix != diff {
 		t.Errorf("SuggestedFix not written; got %q", f.SuggestedFix)
 	}
-	if f.SuggestedFixCommit != "abc123" {
-		t.Errorf("SuggestedFixCommit = %q, want abc123", f.SuggestedFixCommit)
+	if f.SuggestedFixCommit != head {
+		t.Errorf("SuggestedFixCommit = %q, want %s", f.SuggestedFixCommit, head)
 	}
 	var hist []db.FindingHistory
 	w.DB.Where("finding_id = ? AND field = ?", finding.ID, "suggested_fix").Find(&hist)
@@ -280,6 +281,39 @@ func TestParsePatchOutput_passWritesColumnsAndHistory(t *testing.T) {
 	}
 	if !containsSubstr(events, "gate passed") {
 		t.Errorf("events = %v, want gate-passed message", events)
+	}
+	var attempts []db.RemediationAttempt
+	w.DB.Where("finding_id = ?", finding.ID).Find(&attempts)
+	if len(attempts) != 1 || attempts[0].Attempt != 1 || attempts[0].PatchScanID != sc.ID || attempts[0].Patch != diff {
+		t.Errorf("remediation attempts = %+v, want immutable attempt 1 for scan %d", attempts, sc.ID)
+	}
+	if err := w.parsePatchOutput(&sc, report, func(Event) {}); err != nil {
+		t.Fatal(err)
+	}
+	w.DB.Where("finding_id = ?", finding.ID).Find(&attempts)
+	if len(attempts) != 1 {
+		t.Fatalf("parser retry created %d attempts, want 1", len(attempts))
+	}
+}
+
+func TestParsePatchOutput_newScanCreatesNextImmutableAttempt(t *testing.T) {
+	w, finding := newPatchOutputFixture(t)
+	for want := 1; want <= 2; want++ {
+		scan := db.Scan{RepositoryID: finding.RepositoryID, Kind: JobSkill, Status: db.ScanRunning, FindingID: &finding.ID}
+		if err := w.DB.Create(&scan).Error; err != nil {
+			t.Fatal(err)
+		}
+		src := filepath.Join(w.workRoot(scan.ID), "src")
+		_, diff := gateRepo(t, src)
+		report := fmt.Sprintf(`{"patch":%q,"base_commit":%q}`, diff, gitHead(src))
+		if err := w.parsePatchOutput(&scan, report, func(Event) {}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var attempts []db.RemediationAttempt
+	w.DB.Where("finding_id = ?", finding.ID).Order("attempt").Find(&attempts)
+	if len(attempts) != 2 || attempts[0].Attempt != 1 || attempts[1].Attempt != 2 || attempts[0].BaseCommit == "" {
+		t.Fatalf("attempts = %+v", attempts)
 	}
 }
 
@@ -306,7 +340,7 @@ func TestParsePatchOutput_resumedScanUsesLineageWorkspace(t *testing.T) {
 		t.Fatalf("test precondition broken: lineage workspace %q equals retry workspace", got)
 	}
 	_, diff := gateRepo(t, src)
-	report := fmt.Sprintf(`{"patch":%q,"base_commit":"abc123"}`, diff)
+	report := fmt.Sprintf(`{"patch":%q,"base_commit":%q}`, diff, gitHead(src))
 
 	var events []string
 	if err := w.parsePatchOutput(&resumed, report, func(e Event) { events = append(events, e.Text) }); err != nil {
@@ -343,6 +377,11 @@ func TestParsePatchOutput_gateRejectLeavesColumnsEmpty(t *testing.T) {
 	}
 	if !containsSubstr(events, "gate rejected") {
 		t.Errorf("events = %v, want gate-rejected message", events)
+	}
+	var count int64
+	w.DB.Model(&db.RemediationAttempt{}).Where("finding_id = ?", finding.ID).Count(&count)
+	if count != 0 {
+		t.Errorf("gate rejection recorded %d remediation attempts", count)
 	}
 }
 

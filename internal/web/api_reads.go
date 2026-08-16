@@ -382,6 +382,19 @@ func (s *Server) apiGetFinding(w http.ResponseWriter, r *http.Request) {
 	if verification != nil {
 		summary["verification"] = findingVerificationResponse(verification)
 	}
+	attempt, err := db.LatestRemediationAttempt(s.DB, f.ID)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "load remediation attempt")
+		return
+	}
+	if attempt != nil {
+		validation, err := db.LatestRemediationValidation(s.DB, attempt.ID)
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "load remediation validation")
+			return
+		}
+		summary["remediation"] = remediationAttemptResponse(attempt, validation)
+	}
 	writeJSON(w, http.StatusOK, summary)
 }
 

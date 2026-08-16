@@ -18,7 +18,7 @@
 | `internal/worker/container.go` | ContainerRunner (ephemeral container per scan; docker or podman) |
 | `internal/worker/clone.go` | git clone/fetch helpers, URL validation |
 | `internal/worker/skill.go` | doSkill: stage skill + context, invoke claude, dispatch output to the right parser |
-| `internal/worker/skill_parsers.go` | one parser per output_kind: findings, maintainers, packages, advisories, dependencies, finding_dedup, repo_metadata, verify, revalidate, breaking_change, mitigation, release_watch, subprojects, repo_overview, posture, patch (plus `exposure` handled by `exposure.go`, and `threat_model` stored as-is for the threat-model tab) |
+| `internal/worker/skill_parsers.go` | one parser per output_kind: findings, maintainers, packages, advisories, dependencies, finding_dedup, repo_metadata, verify, revalidate, breaking_change, mitigation, release_watch, subprojects, repo_overview, posture, patch (plus `exposure` handled by `exposure.go`, `reattack` by `remediation.go`, and `threat_model` stored as-is for the threat-model tab) |
 | `internal/worker/stream.go` | claude stream-json line parser |
 | `internal/worker/findings.go` | structured report parser used by `output_kind=findings` |
 | `internal/worker/ecosystems.go` | ecosyste.ms cache refresh and dependent-package persistence |
@@ -31,7 +31,8 @@
 | `internal/web/api_reads.go` | typed read endpoints (maintainers, packages, advisories, dependents, dependencies, findings) |
 | `internal/web/api_finding_writes.go` | PATCH/POST/PUT for finding notes, communications, references, labels, field updates, history |
 | `internal/web/finding_forms.go` | browser-form analogues of the api finding writes |
-| `internal/web/finding_patch.go` | patch scan lookup and diff download |
+| `internal/web/finding_patch.go` | patch scan lookup, exact remediation-attempt enqueue selection, and diff download |
+| `internal/web/finding_remediation.go` | immutable patch-attempt and re-attack views plus API projection |
 | `internal/web/skills_handlers.go` | `/skills` UI routes |
 | `internal/web/repo_report.go` | markdown report export per repository |
 | `internal/web/org_report.go` | markdown report export per organisation |

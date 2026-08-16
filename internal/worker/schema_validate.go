@@ -56,6 +56,11 @@ func ValidateReportSemantics(skillName, report string) string {
 			return "verify rubric: " + err.Error()
 		}
 		return ""
+	case reattackSkillName:
+		if _, _, _, err := decodeReattackReport(report); err != nil {
+			return "reattack report: " + err.Error()
+		}
+		return ""
 	default:
 		return ""
 	}

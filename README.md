@@ -168,6 +168,7 @@ Adding a repo enqueues the `triage` skill, whose SKILL.md lists the further skil
 | `release-watch` | After a finding reaches `fixed`, watches the upstream for a release containing the fix commit; records release tag, URL, and timestamp on the finding |
 | `disclose` | Drafts a GHSA-shaped advisory (title, description, CVSS, CWEs, references) for one finding |
 | `patch` | Proposes a unified diff fixing one finding; a diff that passes the applicability gate is stored on the finding as its suggested fix |
+| `reattack` | Applies one immutable gated patch to a fresh checkout and independently exercises three root-cause variants plus a benign control; records a bypass, verified resistance, or incomplete verification without overwriting prior attempts |
 | `report-upstream` | Files one finding on the upstream repository via GitHub PVR with the proposed patch attached; the action that moves a finding to `reported` |
 | `public-issue` | Files a low-severity finding as an ordinary public GitHub issue after analyst confirmation |
 | `reachability` | Traces dependency sinks through application code to determine which are reachable from trust boundaries |
@@ -229,7 +230,7 @@ The repository page carries a Federation opt-out control: recording one cancels 
 
 The Chat tab on a repository or a finding opens a read-only conversation with the agent about that code: it works from a copy of the clone plus a snapshot of the findings, and is restricted to reading and searching, so it can explain and cross-check but never modify anything. Each conversation keeps its own working copy on disk, so delete the ones you are done with from the conversation page to reclaim the space.
 
-A `patch` run whose diff survives the applicability gate (the diff parses, targets files that exist, touches the flagged file, and passes `git apply --check`) is stored on the finding as `suggested_fix` with its base commit, downloadable from the finding page as a `.patch` file and included in markdown report exports. To revise a fix, push your edits to a branch, scan that branch (the Branch field, or a `/tree/<branch>` URL suffix), and run `patch` against the new scan: the diff is proposed against that ref's tree, so each round of edit, push, and rescan gets a fresh proposal on top of your work.
+A `patch` run whose diff survives the applicability gate (the diff parses, targets files that exist, touches the flagged file, and passes `git apply --check`) creates an immutable numbered remediation attempt and updates the finding's `suggested_fix` projection. The current diff is downloadable from the finding page as a `.patch` file and included in markdown report exports. To iterate on your own edits, push them to a branch, scan that branch, then run `patch` against the new scan. `Re-attack patch` checks out an attempt's exact base commit, applies its exact diff, and independently exercises at least three distinct root-cause variants plus a benign control. Only a complete `failed_to_bypass` result derives `verified_secure`; a same-class, same-sink bypass is retained as evidence and staged for later patch attempts, while missing or inconsistent evidence remains `verification_incomplete`. Earlier attempts and bypass evidence remain immutable.
 
 ## Exploring dependencies
 
