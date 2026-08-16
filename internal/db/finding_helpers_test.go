@@ -753,7 +753,7 @@ func TestAddFindingReference(t *testing.T) {
 		t.Errorf("reference summary = %q, want initial summary", ref.Summary)
 	}
 
-	unchanged, err := AddFindingReference(gdb, f.ID, ref.URL, "", "")
+	unchanged, err := AddFindingReference(gdb, f.ID, "  "+ref.URL+"  ", "   ", "   ")
 	if err != nil {
 		t.Fatalf("AddFindingReference unchanged: %v", err)
 	}
@@ -761,7 +761,7 @@ func TestAddFindingReference(t *testing.T) {
 		t.Errorf("unchanged reference = %+v, want %+v", unchanged, ref)
 	}
 
-	updated, err := AddFindingReference(gdb, f.ID, ref.URL, "advisory,patch", "Patch proposal")
+	updated, err := AddFindingReference(gdb, f.ID, ref.URL, " advisory,patch ", " Patch proposal ")
 	if err != nil {
 		t.Fatalf("AddFindingReference update: %v", err)
 	}
