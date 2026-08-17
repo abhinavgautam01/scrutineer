@@ -522,17 +522,34 @@ func AddFindingCommunication(gdb *gorm.DB, findingID uint, channel, direction, a
 
 // AddFindingReference records an external URL related to the finding.
 func AddFindingReference(gdb *gorm.DB, findingID uint, url, tags, summary string) (*FindingReference, error) {
-	if strings.TrimSpace(url) == "" {
+	url = strings.TrimSpace(url)
+	tags = strings.TrimSpace(tags)
+	summary = strings.TrimSpace(summary)
+	if url == "" {
 		return nil, fmt.Errorf("reference url is empty")
 	}
 	r := &FindingReference{
 		FindingID: findingID,
 		URL:       url,
-		Tags:      tags,
-		Summary:   summary,
-		CreatedAt: time.Now(),
 	}
-	if err := gdb.Create(r).Error; err != nil {
+	if err := gdb.Where("finding_id = ? AND url = ?", findingID, url).
+		Attrs(FindingReference{Tags: tags, Summary: summary, CreatedAt: time.Now()}).
+		FirstOrCreate(r).Error; err != nil {
+		return nil, err
+	}
+	updates := map[string]any{}
+	if tags != "" && tags != r.Tags {
+		updates["tags"] = tags
+		r.Tags = tags
+	}
+	if summary != "" && summary != r.Summary {
+		updates["summary"] = summary
+		r.Summary = summary
+	}
+	if len(updates) == 0 {
+		return r, nil
+	}
+	if err := gdb.Model(r).Updates(updates).Error; err != nil {
 		return nil, err
 	}
 	return r, nil
