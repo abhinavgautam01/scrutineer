@@ -363,13 +363,15 @@ External interactions about a finding: emails, GHSA submissions, issue replies, 
 
 ## finding_references
 
-External URLs related to a finding.
+External URLs related to a finding. One URL is one row per finding: the unique index `idx_finding_ref_url` on `(finding_id, url)` prevents duplicates, and `AddFindingReference` reuses the existing row for a URL, filling in tags or a summary a later write supplies and leaving values that are already set alone. Whitespace is trimmed off all three fields before the lookup, so the same URL written with stray padding finds the row it already has.
+
+Databases written before the index existed are repaired on the next start: `preMigrate` collapses each `(finding_id, url)` group onto its lowest id, moves any tags and summary that only the removed rows carried onto the survivor, and trims stored whitespace, so `AutoMigrate` can then create the index. The pass is skipped once the index is present.
 
 | Column | Type | Notes |
 |--------|------|-------|
 | id | integer PK | |
-| finding_id | integer FK | Cascade delete. |
-| url | text | |
+| finding_id | integer FK | Cascade delete. Part of the unique index. |
+| url | text | Part of the unique index. Stored trimmed. |
 | tags | text | Comma-joined: `issue`, `pr`, `cve`, `ghsa`, `patch`, `advisory`, `discussion`, `article`. |
 | summary | text | |
 | created_at | datetime | |

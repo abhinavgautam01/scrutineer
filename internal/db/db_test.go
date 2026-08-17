@@ -7,6 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"gorm.io/gorm"
 )
 
 func TestRetireDependentsSkill(t *testing.T) {
@@ -317,6 +320,223 @@ func TestPreMigrate_renamesSBOMPackageRepositoryID(t *testing.T) {
 	// Idempotent: a second Open on the already-migrated file must not fail.
 	if _, err := Open(path); err != nil {
 		t.Fatalf("second open: %v", err)
+	}
+}
+
+// legacyFindingReferenceDB writes a database file in the pre-index shape and
+// returns its path. It builds the current schema, drops idx_finding_ref_url to
+// get back to what an install written before #868 holds, then lets seed fill
+// finding_references with the duplicates such an install could accumulate.
+// Reopening the file is what puts preMigrate to work.
+func legacyFindingReferenceDB(t *testing.T, seed func(gdb *gorm.DB, findingA, findingB uint)) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "old.db")
+	gdb, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := Repository{URL: "https://example.com/x", Name: "x"}
+	if err := gdb.Create(&repo).Error; err != nil {
+		t.Fatal(err)
+	}
+	scan := Scan{RepositoryID: repo.ID, Kind: "skill", Status: ScanDone}
+	if err := gdb.Create(&scan).Error; err != nil {
+		t.Fatal(err)
+	}
+	findings := []Finding{
+		{ScanID: scan.ID, RepositoryID: repo.ID, FindingID: "F1", Title: "a", Severity: "High", Status: FindingNew},
+		{ScanID: scan.ID, RepositoryID: repo.ID, FindingID: "F2", Title: "b", Severity: "Low", Status: FindingNew},
+	}
+	if err := gdb.Create(&findings).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := gdb.Migrator().DropIndex(&FindingReference{}, findingRefURLIndex); err != nil {
+		t.Fatalf("drop %s: %v", findingRefURLIndex, err)
+	}
+	seed(gdb, findings[0].ID, findings[1].ID)
+	sqlDB, err := gdb.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// seedFindingReferences inserts reference rows verbatim, ids included, into a
+// database whose unique index has been dropped.
+func seedFindingReferences(t *testing.T, gdb *gorm.DB, rows []FindingReference) {
+	t.Helper()
+	for i := range rows {
+		rows[i].CreatedAt = time.Now().UTC()
+		if err := gdb.Create(&rows[i]).Error; err != nil {
+			t.Fatalf("seed reference %d: %v", rows[i].ID, err)
+		}
+	}
+}
+
+func findingReferencesFor(t *testing.T, gdb *gorm.DB, findingID uint) []FindingReference {
+	t.Helper()
+	var refs []FindingReference
+	if err := gdb.Where("finding_id = ?", findingID).Order("id").Find(&refs).Error; err != nil {
+		t.Fatalf("load references: %v", err)
+	}
+	return refs
+}
+
+func TestPreMigrate_mergesDuplicateFindingReferences(t *testing.T) {
+	var findingA uint
+	// One finding carries the same advisory URL three times. The first row has
+	// no metadata, the second a summary, the third tags: the merge has to end
+	// with one row holding all of it. The fourth row is a different URL on the
+	// same finding and must survive untouched.
+	path := legacyFindingReferenceDB(t, func(gdb *gorm.DB, a, _ uint) {
+		findingA = a
+		seedFindingReferences(t, gdb, []FindingReference{
+			{ID: 1, FindingID: a, URL: "https://example.com/advisory"},
+			{ID: 2, FindingID: a, URL: "https://example.com/advisory", Summary: "Upstream advisory"},
+			{ID: 3, FindingID: a, URL: "https://example.com/advisory", Tags: "advisory,upstream", Summary: "Later summary"},
+			{ID: 4, FindingID: a, URL: "https://example.com/pull/42", Tags: "pr", Summary: "The fix"},
+		})
+	})
+
+	gdb, err := Open(path)
+	if err != nil {
+		t.Fatalf("open with duplicate references: %v", err)
+	}
+	if !gdb.Migrator().HasIndex(&FindingReference{}, findingRefURLIndex) {
+		t.Fatalf("%s was not created", findingRefURLIndex)
+	}
+
+	refs := findingReferencesFor(t, gdb, findingA)
+	if len(refs) != 2 {
+		t.Fatalf("kept %d references, want 2: %+v", len(refs), refs)
+	}
+	// The lowest id survives, so a link somebody already followed keeps working.
+	if refs[0].ID != 1 {
+		t.Errorf("surviving id = %d, want 1", refs[0].ID)
+	}
+	// Metadata is absorbed oldest first, so the summary comes from id 2 rather
+	// than the later one on id 3, while the tags can only come from id 3.
+	if refs[0].Summary != "Upstream advisory" {
+		t.Errorf("Summary = %q, want %q", refs[0].Summary, "Upstream advisory")
+	}
+	if refs[0].Tags != "advisory,upstream" {
+		t.Errorf("Tags = %q, want %q", refs[0].Tags, "advisory,upstream")
+	}
+	if refs[1].ID != 4 || refs[1].URL != "https://example.com/pull/42" || refs[1].Tags != "pr" {
+		t.Errorf("distinct URL was disturbed: %+v", refs[1])
+	}
+
+	// Idempotent: a second Open on the already-migrated file must not fail.
+	if _, err := Open(path); err != nil {
+		t.Fatalf("second open: %v", err)
+	}
+}
+
+func TestPreMigrate_findingReferenceMergeIsPerFinding(t *testing.T) {
+	var findingA, findingB uint
+	// The same URL on two findings is two references, not a duplicate.
+	path := legacyFindingReferenceDB(t, func(gdb *gorm.DB, a, b uint) {
+		findingA, findingB = a, b
+		seedFindingReferences(t, gdb, []FindingReference{
+			{ID: 1, FindingID: a, URL: "https://example.com/cve", Tags: "cve"},
+			{ID: 2, FindingID: b, URL: "https://example.com/cve", Summary: "NVD"},
+			{ID: 3, FindingID: b, URL: "https://example.com/cve", Tags: "cve"},
+		})
+	})
+
+	gdb, err := Open(path)
+	if err != nil {
+		t.Fatalf("open with duplicate references: %v", err)
+	}
+	first, second := findingReferencesFor(t, gdb, findingA), findingReferencesFor(t, gdb, findingB)
+	if len(first) != 1 || first[0].ID != 1 || first[0].Tags != "cve" {
+		t.Errorf("first finding's references = %+v, want the untouched id 1", first)
+	}
+	if len(second) != 1 || second[0].ID != 2 {
+		t.Fatalf("second finding's references = %+v, want one row at id 2", second)
+	}
+	if second[0].Summary != "NVD" || second[0].Tags != "cve" {
+		t.Errorf("merged row = %+v, want summary NVD and tags cve", second[0])
+	}
+}
+
+func TestPreMigrate_findingReferenceMergeNormalisesWhitespace(t *testing.T) {
+	var findingA, findingB uint
+	// AddFindingReference trims before it looks a row up, so a stored URL with
+	// stray whitespace can never be matched again and the index would keep both
+	// spellings. The merge trims, which also collapses these two into one.
+	path := legacyFindingReferenceDB(t, func(gdb *gorm.DB, a, b uint) {
+		findingA, findingB = a, b
+		seedFindingReferences(t, gdb, []FindingReference{
+			{ID: 1, FindingID: a, URL: "  https://example.com/advisory\n", Tags: " advisory ", Summary: "  "},
+			{ID: 2, FindingID: a, URL: "https://example.com/advisory", Summary: " Upstream advisory "},
+			{ID: 3, FindingID: b, URL: "\thttps://example.com/only "},
+		})
+	})
+
+	gdb, err := Open(path)
+	if err != nil {
+		t.Fatalf("open with untrimmed references: %v", err)
+	}
+	refs := findingReferencesFor(t, gdb, findingA)
+	if len(refs) != 1 {
+		t.Fatalf("kept %d references, want 1: %+v", len(refs), refs)
+	}
+	want := FindingReference{ID: 1, URL: "https://example.com/advisory", Tags: "advisory", Summary: "Upstream advisory"}
+	if refs[0].ID != want.ID || refs[0].URL != want.URL || refs[0].Tags != want.Tags || refs[0].Summary != want.Summary {
+		t.Errorf("merged row = %+v, want %+v", refs[0], want)
+	}
+	// A lone reference has no duplicate to merge with but is still normalised,
+	// so the next write of the same URL finds it instead of inserting again.
+	lone := findingReferencesFor(t, gdb, findingB)
+	if len(lone) != 1 || lone[0].URL != "https://example.com/only" {
+		t.Errorf("lone reference = %+v, want a trimmed URL", lone)
+	}
+}
+
+func TestFindingReference_uniqueIndexRejectsDuplicateURL(t *testing.T) {
+	gdb, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := seedFinding(t, gdb)
+	if err := gdb.Create(&FindingReference{FindingID: f.ID, URL: "https://example.com/a"}).Error; err != nil {
+		t.Fatalf("first reference: %v", err)
+	}
+	// The backstop AddFindingReference cannot provide on its own: two writers
+	// that both miss the lookup cannot both insert.
+	err = gdb.Create(&FindingReference{FindingID: f.ID, URL: "https://example.com/a", Tags: "cve"}).Error
+	if err == nil {
+		t.Fatal("second reference with the same URL was accepted, want a unique-index violation")
+	}
+	// The same URL on another finding, and another URL on this one, are fine.
+	other := Finding{ScanID: f.ScanID, RepositoryID: f.RepositoryID, FindingID: "F2", Title: "t2", Severity: "Low", Status: FindingNew}
+	if err := gdb.Create(&other).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := gdb.Create(&FindingReference{FindingID: other.ID, URL: "https://example.com/a"}).Error; err != nil {
+		t.Errorf("same URL on a different finding: %v", err)
+	}
+	if err := gdb.Create(&FindingReference{FindingID: f.ID, URL: "https://example.com/b"}).Error; err != nil {
+		t.Errorf("different URL on the same finding: %v", err)
+	}
+}
+
+func TestPlanFindingReferenceMerge_leavesCleanRowsAlone(t *testing.T) {
+	rows := []FindingReference{
+		{ID: 1, FindingID: 7, URL: "https://example.com/a", Tags: "cve"},
+		{ID: 2, FindingID: 7, URL: "https://example.com/b"},
+		{ID: 3, FindingID: 8, URL: "https://example.com/a", Summary: "s"},
+	}
+	survivors, drop := planFindingReferenceMerge(rows)
+	if len(survivors) != 0 {
+		t.Errorf("survivors = %+v, want no rewrites for an already-clean table", survivors)
+	}
+	if len(drop) != 0 {
+		t.Errorf("drop = %v, want nothing deleted", drop)
 	}
 }
 

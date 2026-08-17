@@ -1037,10 +1037,16 @@ type FindingCommunication struct {
 
 // FindingReference is an external URL related to a finding: the upstream
 // issue/PR, a CVE or GHSA record, a fix commit, a blog post.
+//
+// (FindingID, URL) is unique: one URL is one reference on one finding, and a
+// repeat write enriches that row rather than adding a second. AddFindingReference
+// keeps sequential writers idempotent, but its lookup-then-insert cannot make
+// two concurrent writers atomic on its own, so the index is the backstop. Rows
+// written before it existed are merged by mergeDuplicateFindingReferences.
 type FindingReference struct {
-	ID        uint `gorm:"primarykey"`
-	FindingID uint `gorm:"index;not null"`
-	URL       string
+	ID        uint   `gorm:"primarykey"`
+	FindingID uint   `gorm:"index;not null;uniqueIndex:idx_finding_ref_url,priority:1"`
+	URL       string `gorm:"uniqueIndex:idx_finding_ref_url,priority:2"`
 	// Tags is comma-joined: issue, pr, cve, ghsa, patch, advisory, discussion, article.
 	Tags    string
 	Summary string
@@ -1501,11 +1507,13 @@ func Open(dsn string) (*gorm.DB, error) {
 }
 
 // preMigrate applies structural changes AutoMigrate cannot express, chiefly
-// column renames. It must run before AutoMigrate so a renamed column is not
-// re-added under its new name alongside the old one. Each step is guarded so
-// a fresh database and an already-migrated database are both no-ops. A failed
-// rename is fatal: proceeding to AutoMigrate would add the new column
-// alongside the old one and strand its data.
+// column renames and the data cleanups a new constraint needs before it can be
+// added. It must run before AutoMigrate so a renamed column is not re-added
+// under its new name alongside the old one, and so AutoMigrate never tries to
+// build a unique index over data that violates it. Each step is guarded so a
+// fresh database and an already-migrated database are both no-ops. A failure is
+// fatal: proceeding would add a new column alongside the old one and strand its
+// data, or leave AutoMigrate to fail on the index it cannot build.
 func preMigrate(gdb *gorm.DB) error {
 	m := gdb.Migrator()
 	// SBOMPackage.RepositoryID became SourceRepositoryID when SBOMUpload
@@ -1517,7 +1525,150 @@ func preMigrate(gdb *gorm.DB) error {
 			return fmt.Errorf("rename sbom_packages.repository_id: %w", err)
 		}
 	}
+	// FindingReference gained a unique (finding_id, url) index. Databases
+	// written before AddFindingReference deduplicated (#519, #865) can hold
+	// several rows for one URL, and AutoMigrate cannot build the index over
+	// them, so collapse them first. Gated on the index's absence so this is a
+	// true one-shot migration: once it exists there can be no duplicates left
+	// to find, and rescanning the table on every boot would be wasted work.
+	if m.HasTable(&FindingReference{}) && !m.HasIndex(&FindingReference{}, findingRefURLIndex) {
+		if err := mergeDuplicateFindingReferences(gdb); err != nil {
+			return fmt.Errorf("merge duplicate finding references: %w", err)
+		}
+	}
 	return nil
+}
+
+// findingRefURLIndex is the unique (finding_id, url) index declared on
+// FindingReference, named here so preMigrate can ask whether it exists yet.
+const findingRefURLIndex = "idx_finding_ref_url"
+
+// findingRefMergeBatch bounds how many findings one merge pass holds in memory
+// and how many ids one delete binds. The work is keyed by finding, so paging on
+// finding_id never splits a group across batches.
+const findingRefMergeBatch = 500
+
+// mergeDuplicateFindingReferences collapses every (finding_id, url) group in
+// finding_references down to one row, so the unique index can be created over
+// the result.
+//
+// The lowest id in a group survives, which keeps the reference a finding page
+// has always shown and makes the merge deterministic: the same database always
+// produces the same rows, whatever order the duplicates were written in. The
+// survivor absorbs any tags and summary it is missing from the rows being
+// removed, oldest first, so metadata a later duplicate carried is not lost with
+// the row that carried it. Values already on the survivor always win; the merge
+// never overwrites one reference's metadata with another's.
+//
+// URLs are trimmed as they are grouped, because AddFindingReference trims
+// before it looks a row up: a stored " https://x " would never match a write of
+// "https://x" and the index would happily keep both, leaving exactly the
+// duplicate this migration exists to remove. Tags and summary are trimmed on
+// the survivor for the same reason, to leave every row in the shape the helper
+// writes today.
+//
+// The whole merge runs in one transaction, so a failure leaves the table as it
+// was rather than half-collapsed.
+func mergeDuplicateFindingReferences(gdb *gorm.DB) error {
+	return gdb.Transaction(func(tx *gorm.DB) error {
+		var after uint
+		for {
+			var findingIDs []uint
+			err := tx.Model(&FindingReference{}).
+				Where("finding_id > ?", after).
+				Distinct().Order("finding_id").Limit(findingRefMergeBatch).
+				Pluck("finding_id", &findingIDs).Error
+			if err != nil {
+				return fmt.Errorf("page finding ids: %w", err)
+			}
+			if len(findingIDs) == 0 {
+				return nil
+			}
+			if err := mergeFindingReferencePage(tx, findingIDs); err != nil {
+				return err
+			}
+			after = findingIDs[len(findingIDs)-1]
+		}
+	})
+}
+
+// mergeFindingReferencePage merges the references of one page of findings.
+func mergeFindingReferencePage(tx *gorm.DB, findingIDs []uint) error {
+	var rows []FindingReference
+	err := tx.Select("id", "finding_id", "url", "tags", "summary").
+		Where("finding_id IN ?", findingIDs).
+		Order("finding_id, id").Find(&rows).Error
+	if err != nil {
+		return fmt.Errorf("load references: %w", err)
+	}
+	survivors, drop := planFindingReferenceMerge(rows)
+	for _, s := range survivors {
+		update := map[string]any{"url": s.URL, "tags": s.Tags, "summary": s.Summary}
+		if err := tx.Model(&FindingReference{}).Where("id = ?", s.ID).Updates(update).Error; err != nil {
+			return fmt.Errorf("update reference %d: %w", s.ID, err)
+		}
+	}
+	for chunk := range slices.Chunk(drop, findingRefMergeBatch) {
+		if err := tx.Where("id IN ?", chunk).Delete(&FindingReference{}).Error; err != nil {
+			return fmt.Errorf("delete duplicate references: %w", err)
+		}
+	}
+	return nil
+}
+
+// planFindingReferenceMerge decides what one page of references collapses to.
+// It returns the surviving rows whose stored values need rewriting, in their
+// merged form, plus the ids to delete. A row already in its final shape appears
+// in neither, so an install with nothing to fix issues no writes.
+//
+// rows must be ordered by (finding_id, id) so the lowest id in each group is
+// seen first and the metadata backfill runs oldest to newest.
+func planFindingReferenceMerge(rows []FindingReference) (survivors []FindingReference, drop []uint) {
+	type groupKey struct {
+		findingID uint
+		url       string
+	}
+	type group struct {
+		merged  FindingReference
+		changed bool
+	}
+	groups := make([]*group, 0, len(rows))
+	index := make(map[groupKey]*group, len(rows))
+	for _, row := range rows {
+		key := groupKey{findingID: row.FindingID, url: strings.TrimSpace(row.URL)}
+		g, seen := index[key]
+		if !seen {
+			merged := FindingReference{
+				ID:        row.ID,
+				FindingID: row.FindingID,
+				URL:       key.url,
+				Tags:      strings.TrimSpace(row.Tags),
+				Summary:   strings.TrimSpace(row.Summary),
+			}
+			g = &group{
+				merged:  merged,
+				changed: merged.URL != row.URL || merged.Tags != row.Tags || merged.Summary != row.Summary,
+			}
+			groups = append(groups, g)
+			index[key] = g
+			continue
+		}
+		drop = append(drop, row.ID)
+		if tags := strings.TrimSpace(row.Tags); g.merged.Tags == "" && tags != "" {
+			g.merged.Tags = tags
+			g.changed = true
+		}
+		if summary := strings.TrimSpace(row.Summary); g.merged.Summary == "" && summary != "" {
+			g.merged.Summary = summary
+			g.changed = true
+		}
+	}
+	for _, g := range groups {
+		if g.changed {
+			survivors = append(survivors, g.merged)
+		}
+	}
+	return survivors, drop
 }
 
 // Snapshot writes a consistent copy of the SQLite database at src to dest

@@ -137,6 +137,38 @@ func TestToFindings_carriesReferences(t *testing.T) {
 	}
 }
 
+func TestToFindings_dedupesReferencesByURL(t *testing.T) {
+	// (finding_id, url) is unique, so a report naming one URL twice describes
+	// one reference. Passing both through would fail the insert that creates
+	// the finding, taking the whole scan's findings with it.
+	raw := []byte(`{
+	  "findings": [{
+	    "id": "F1", "title": "artipacked", "severity": "Medium",
+	    "location": ".github/workflows/x.yml:18",
+	    "references": [
+	      {"url": "https://example.com/advisory", "tags": "advisory"},
+	      {"url": " https://example.com/advisory ", "tags": "cve", "summary": "same link"},
+	      {"url": "https://example.com/pull/42", "tags": "pr"}
+	    ]
+	  }]
+	}`)
+	rep, err := parseReport(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := rep.toFindings(1, 1, "abc", "")[0].References
+	if len(refs) != 2 {
+		t.Fatalf("references = %d, want 2: %+v", len(refs), refs)
+	}
+	// First mention wins, so the metadata is not rewritten by a later repeat.
+	if refs[0].Tags != "advisory" || refs[0].Summary != "" {
+		t.Errorf("first reference = %+v, want the first mention kept", refs[0])
+	}
+	if refs[1].URL != "https://example.com/pull/42" {
+		t.Errorf("second reference = %+v, want the distinct URL", refs[1])
+	}
+}
+
 func TestParseReport_toleratesNonStringTopLevelFields(t *testing.T) {
 	// #172: models sometimes copy context.json's repository object (and invent
 	// an artefact object) into report.json. Only findings[] is consumed, so
