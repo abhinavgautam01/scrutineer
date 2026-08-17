@@ -490,7 +490,7 @@ func dedupBy[T any](incoming, existing []T, key func(T) string) []T {
 	return out
 }
 
-// noteKey/commKey/refKey identify a child record by its content for idempotent
+// noteKey/commKey identify a child record by its content for idempotent
 // re-import. Timestamps are part of the key: scrutineer's own bundle preserves
 // them across the round-trip, so the same note keys identically on re-import.
 func noteKey(n db.FindingNote) string {

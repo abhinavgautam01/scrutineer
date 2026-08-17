@@ -1639,10 +1639,6 @@ func planFindingReferenceMerge(rows []FindingReference) (survivors []FindingRefe
 	for _, row := range rows {
 		url := strings.TrimSpace(row.URL)
 		if url == "" {
-			// A reference with no URL points nowhere, and every writer rejects
-			// one today. Carrying it past the index would leave a blank link on
-			// the finding page and in every export, so it goes with the
-			// duplicates rather than being rewritten as an empty string.
 			drop = append(drop, row.ID)
 			continue
 		}
