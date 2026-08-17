@@ -162,7 +162,7 @@ Adding a repo enqueues the `triage` skill, whose SKILL.md lists the further skil
 | `security-deep-dive` | The model-backed audit producing structured findings |
 | `advisory-deep-dive` | Re-audits every past advisory against its fix commit for a fix bypass, an incomplete fix, or the same bug class in sibling code the patch never touched; the deep-dive scoped to the advisory space |
 | `finding-dedup` | Compares open findings and marks overlapping reports as duplicates |
-| `verify` | Re-checks one finding against current HEAD three times; stores an append-only five-criterion grading record and derived score |
+| `verify` | Re-checks one finding against current HEAD, records an evidenced attack tree, runs three isolated attempts, and stores an append-only five-criterion grading record with a derived score |
 | `revalidate` | Cheap read-only classifier (prose + `git log`, no PoC execution) that emits true / false positive / already-fixed / uncertain; auto-enqueued for High/Critical from `security-deep-dive` and for every imported finding. A `true_positive` on a High/Critical finding chains automatically to `verify` |
 | `breaking-change` | Static breaking-change check on the suggested-fix diff; records `breaking`/`non_breaking`/`unknown` with rationale and the affected dependents |
 | `release-watch` | After a finding reaches `fixed`, watches the upstream for a release containing the fix commit; records release tag, URL, and timestamp on the finding |

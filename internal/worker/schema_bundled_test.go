@@ -185,6 +185,10 @@ func TestBundledSchemas_compileAndAcceptSamples(t *testing.T) {
 		{
 			"../../skills/verify/schema.json",
 			`{"status":"confirmed","preflight":{"classification":"local-safe","justification":"local file input"},
+			  "attack_tree":{"goal":"Trigger parser panic","root_id":"AT1","verdict":"reachable","nodes":[
+			    {"id":"AT1","parent_id":null,"kind":"goal","description":"Trigger parser panic","status":"satisfied","evidence":"attempts 1-3 panic"},
+			    {"id":"AT2","parent_id":"AT1","kind":"entry_point","description":"Call public Parse","status":"satisfied","evidence":"api.go:18"},
+			    {"id":"AT3","parent_id":"AT2","kind":"sink","description":"Reach parser sink","status":"satisfied","evidence":"parser.go:42"}],"blockers":[]},
 			  "attempts":[
 			    {"number":1,"outcome":"reproduced","evidence":"boom","failure_class":"panic","crash_site":"parser.go:42"},
 			    {"number":2,"outcome":"reproduced","evidence":"boom","failure_class":"panic","crash_site":"parser.go:42"},
@@ -195,6 +199,38 @@ func TestBundledSchemas_compileAndAcceptSamples(t *testing.T) {
 			    "claimed_failure_class":{"verdict":"pass","method":"trace","evidence":"panic","counterevidence":"","proof_gap":"","confidence":"high"},
 			    "public_interface_to_first_party_sink":{"verdict":"pass","method":"stack","evidence":"public API to parser.go","counterevidence":"","proof_gap":"","confidence":"high"},
 			    "deterministic":{"verdict":"pass","method":"compare","evidence":"same site","counterevidence":"","proof_gap":"","confidence":"high"}}}`,
+		},
+		{
+			"../../skills/verify/schema.json",
+			`{"status":"fixed","attack_tree":{"goal":"Trigger parser panic","root_id":"AT1","verdict":"blocked","nodes":[
+			  {"id":"AT1","parent_id":null,"kind":"goal","description":"Trigger parser panic","status":"blocked","evidence":"length guard rejects input"},
+			  {"id":"AT2","parent_id":"AT1","kind":"precondition","description":"Bypass length guard","status":"blocked","evidence":"parser.go:31 returns before the sink"}],"blockers":["parser.go:31 rejects oversized input"]},
+			  "attempts":[
+			    {"number":1,"outcome":"not_reproduced","evidence":"guard returned error","failure_class":"","crash_site":""},
+			    {"number":2,"outcome":"not_reproduced","evidence":"guard returned error","failure_class":"","crash_site":""},
+			    {"number":3,"outcome":"not_reproduced","evidence":"guard returned error","failure_class":"","crash_site":""}],
+			  "criteria":{
+			    "poc_well_formed":{"verdict":"pass","method":"run","evidence":"parsed","counterevidence":"","proof_gap":"","confidence":"high"},
+			    "reproduces_three_of_three":{"verdict":"fail","method":"run three times","evidence":"0/3","counterevidence":"","proof_gap":"","confidence":"high"},
+			    "claimed_failure_class":{"verdict":"fail","method":"trace","evidence":"no failure","counterevidence":"","proof_gap":"","confidence":"high"},
+			    "public_interface_to_first_party_sink":{"verdict":"pass","method":"stack","evidence":"public API reached guard","counterevidence":"","proof_gap":"","confidence":"high"},
+			    "deterministic":{"verdict":"pass","method":"compare","evidence":"same guard in 3/3","counterevidence":"","proof_gap":"","confidence":"high"}}}`,
+		},
+		{
+			"../../skills/verify/schema.json",
+			`{"status":"deferred","preflight":{"classification":"external-reach","justification":"curl https://example.com/callback"},
+			  "attack_tree":{"goal":"Reach callback","root_id":"AT1","verdict":"not_attempted","nodes":[
+			    {"id":"AT1","parent_id":null,"kind":"goal","description":"Reach callback","status":"not_attempted","evidence":"preflight requires external reach"}],"blockers":[]},
+			  "attempts":[
+			    {"number":1,"outcome":"not_attempted","evidence":"external reach prohibited","failure_class":"","crash_site":""},
+			    {"number":2,"outcome":"not_attempted","evidence":"external reach prohibited","failure_class":"","crash_site":""},
+			    {"number":3,"outcome":"not_attempted","evidence":"external reach prohibited","failure_class":"","crash_site":""}],
+			  "criteria":{
+			    "poc_well_formed":{"verdict":"not_attempted","method":"preflight","evidence":"external reach","counterevidence":"","proof_gap":"execution","confidence":"high"},
+			    "reproduces_three_of_three":{"verdict":"not_attempted","method":"preflight","evidence":"external reach","counterevidence":"","proof_gap":"execution","confidence":"high"},
+			    "claimed_failure_class":{"verdict":"not_attempted","method":"preflight","evidence":"external reach","counterevidence":"","proof_gap":"execution","confidence":"high"},
+			    "public_interface_to_first_party_sink":{"verdict":"not_attempted","method":"preflight","evidence":"external reach","counterevidence":"","proof_gap":"execution","confidence":"high"},
+			    "deterministic":{"verdict":"not_attempted","method":"preflight","evidence":"external reach","counterevidence":"","proof_gap":"execution","confidence":"high"}}}`,
 		},
 		{
 			"../../skills/reattack/schema.json",
@@ -442,7 +478,10 @@ func TestBundledSchemas_rejectBadShapes(t *testing.T) {
 			  "fixes":[]}`,
 			"validation failed"},
 		{"../../skills/verify/schema.json",
-			`{"status":"confirmed","attempts":[
+			`{"status":"confirmed","attack_tree":{"goal":"Trigger panic","root_id":"AT1","verdict":"reachable","nodes":[
+			  {"id":"AT1","parent_id":null,"kind":"goal","description":"Trigger panic","status":"satisfied","evidence":"attempts 1-3"},
+			  {"id":"AT2","parent_id":"AT1","kind":"entry_point","description":"Call public API","status":"satisfied","evidence":"api.go:1"},
+			  {"id":"AT3","parent_id":"AT2","kind":"sink","description":"Reach sink","status":"satisfied","evidence":"x.go:1"}],"blockers":[]},"attempts":[
 			  {"number":1,"outcome":"reproduced","evidence":"x","failure_class":"panic","crash_site":"x.go:1"},
 			  {"number":2,"outcome":"reproduced","evidence":"x","failure_class":"panic","crash_site":"x.go:1"},
 			  {"number":3,"outcome":"not_reproduced","evidence":"clean","failure_class":"","crash_site":""}],
@@ -453,6 +492,20 @@ func TestBundledSchemas_rejectBadShapes(t *testing.T) {
 			    "public_interface_to_first_party_sink":{"verdict":"pass","method":"trace","evidence":"x","counterevidence":"","proof_gap":"","confidence":"high"},
 			    "deterministic":{"verdict":"fail","method":"compare","evidence":"flaky","counterevidence":"","proof_gap":"","confidence":"high"}}}`,
 			"/attempts/2/outcome"},
+		{"../../skills/verify/schema.json",
+			`{"status":"not_attempted","attack_tree":{"goal":"Trigger panic","root_id":"AT1","verdict":"not_attempted","nodes":[
+			  {"id":"AT1","parent_id":null,"kind":"goal","description":"Trigger panic","status":"satisfied","evidence":"setup failed"}],"blockers":[]},
+			  "attempts":[
+			  {"number":1,"outcome":"not_attempted","evidence":"setup failed","failure_class":"","crash_site":""},
+			  {"number":2,"outcome":"not_attempted","evidence":"setup failed","failure_class":"","crash_site":""},
+			  {"number":3,"outcome":"not_attempted","evidence":"setup failed","failure_class":"","crash_site":""}],
+			  "criteria":{
+			    "poc_well_formed":{"verdict":"not_attempted","method":"setup","evidence":"failed","counterevidence":"","proof_gap":"runtime","confidence":"low"},
+			    "reproduces_three_of_three":{"verdict":"not_attempted","method":"setup","evidence":"failed","counterevidence":"","proof_gap":"runtime","confidence":"low"},
+			    "claimed_failure_class":{"verdict":"not_attempted","method":"setup","evidence":"failed","counterevidence":"","proof_gap":"runtime","confidence":"low"},
+			    "public_interface_to_first_party_sink":{"verdict":"not_attempted","method":"setup","evidence":"failed","counterevidence":"","proof_gap":"runtime","confidence":"low"},
+			    "deterministic":{"verdict":"not_attempted","method":"setup","evidence":"failed","counterevidence":"","proof_gap":"runtime","confidence":"low"}}}`,
+			"/attack_tree/nodes/0/status"},
 		{"../../skills/reattack/schema.json",
 			`{"outcome":"inconclusive","variants":[{"name":"v1","input":"a","valid":true,"outcome":"blocked","same_bug_class":true,"same_sink":true,"failure_class":"","sink":"parser.go:42","evidence":"blocked"}],"benign_control":{"input":"","reached_sink":false,"crashed":false,"evidence":"harness unavailable"},"notes":""}`,
 			"/variants/0"},
@@ -675,5 +728,100 @@ func TestBundledSchemas_rejectBadShapes(t *testing.T) {
 		if !strings.Contains(got, tc.want) {
 			t.Errorf("%s: error %q does not mention %q", tc.schema, got, tc.want)
 		}
+	}
+}
+
+func TestVerifySchema_rejectsAttackTreeVerdictContradictions(t *testing.T) {
+	criterion := func(verdict string) map[string]any {
+		return map[string]any{
+			"verdict": verdict, "method": "run", "evidence": "observed",
+			"counterevidence": "", "proof_gap": "", "confidence": "high",
+		}
+	}
+	base := map[string]any{
+		"status": "confirmed",
+		"attack_tree": map[string]any{
+			"goal": "Trigger parser panic", "root_id": "AT1", "verdict": "reachable",
+			"nodes": []any{
+				map[string]any{"id": "AT1", "parent_id": nil, "kind": "goal", "description": "Trigger parser panic", "status": "satisfied", "evidence": "attempts 1-3 panic"},
+				map[string]any{"id": "AT2", "parent_id": "AT1", "kind": "entry_point", "description": "Call public Parse", "status": "satisfied", "evidence": "api.go:18"},
+				map[string]any{"id": "AT3", "parent_id": "AT2", "kind": "sink", "description": "Reach parser sink", "status": "satisfied", "evidence": "parser.go:42"},
+			},
+			"blockers": []any{},
+		},
+		"attempts": []any{
+			map[string]any{"number": 1, "outcome": "reproduced", "evidence": "boom", "failure_class": "panic", "crash_site": "parser.go:42"},
+			map[string]any{"number": 2, "outcome": "reproduced", "evidence": "boom", "failure_class": "panic", "crash_site": "parser.go:42"},
+			map[string]any{"number": 3, "outcome": "reproduced", "evidence": "boom", "failure_class": "panic", "crash_site": "parser.go:42"},
+		},
+		"criteria": map[string]any{
+			"poc_well_formed":                      criterion("pass"),
+			"reproduces_three_of_three":            criterion("pass"),
+			"claimed_failure_class":                criterion("pass"),
+			"public_interface_to_first_party_sink": criterion("pass"),
+			"deterministic":                        criterion("pass"),
+		},
+	}
+	tests := []struct {
+		name    string
+		mutate  func(map[string]any)
+		wantErr string
+	}{
+		{
+			name: "reachable tree with blocker",
+			mutate: func(report map[string]any) {
+				report["attack_tree"].(map[string]any)["blockers"] = []any{"length guard"}
+			},
+			wantErr: "/attack_tree",
+		},
+		{
+			name: "blocked tree without blocker",
+			mutate: func(report map[string]any) {
+				report["status"] = "inconclusive"
+				tree := report["attack_tree"].(map[string]any)
+				tree["verdict"] = "blocked"
+				tree["nodes"].([]any)[0].(map[string]any)["status"] = "blocked"
+			},
+			wantErr: "/attack_tree",
+		},
+		{
+			name: "blocked tree without blocked node",
+			mutate: func(report map[string]any) {
+				report["status"] = "inconclusive"
+				tree := report["attack_tree"].(map[string]any)
+				tree["verdict"] = "blocked"
+				tree["blockers"] = []any{"length guard"}
+			},
+			wantErr: "/attack_tree",
+		},
+	}
+
+	schema := loadBundledSchema(t, "../../skills/verify/schema.json")
+	rawBase, err := json.Marshal(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ValidateReportSchema(schema, string(rawBase)); got != "" {
+		t.Fatalf("base report rejected: %s\nreport: %s", got, rawBase)
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := json.Marshal(base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var report map[string]any
+			if err := json.Unmarshal(raw, &report); err != nil {
+				t.Fatal(err)
+			}
+			tc.mutate(report)
+			raw, err = json.Marshal(report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := ValidateReportSchema(schema, string(raw)); !strings.Contains(got, tc.wantErr) {
+				t.Fatalf("error = %q, want substring %q", got, tc.wantErr)
+			}
+		})
 	}
 }

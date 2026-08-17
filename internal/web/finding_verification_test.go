@@ -75,8 +75,21 @@ func completeVerificationReport() verification.Report {
 		Evidence:   "observed",
 		Confidence: "high",
 	}
+	root := "AT1"
+	entryPoint := "AT2"
 	return verification.Report{
 		Status: "confirmed",
+		AttackTree: &verification.AttackTree{
+			Goal:    "Trigger parser panic",
+			RootID:  root,
+			Verdict: "reachable",
+			Nodes: []verification.AttackTreeNode{
+				{ID: root, Kind: "goal", Description: "Trigger parser panic", Status: "satisfied", Evidence: "3/3 attempts panic"},
+				{ID: entryPoint, ParentID: &root, Kind: "entry_point", Description: "Call public Parse", Status: "satisfied", Evidence: "api.go:18"},
+				{ID: "AT3", ParentID: &entryPoint, Kind: "sink", Description: "Reach parser sink", Status: "satisfied", Evidence: "parser.go:42"},
+			},
+			Blockers: []string{},
+		},
 		Attempts: []verification.Attempt{
 			{Number: 1, Outcome: "reproduced", Evidence: "same panic", FailureClass: "panic", CrashSite: "parser.go:42"},
 			{Number: 2, Outcome: "reproduced", Evidence: "same panic", FailureClass: "panic", CrashSite: "parser.go:42"},

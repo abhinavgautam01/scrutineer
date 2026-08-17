@@ -784,12 +784,28 @@ func findingNotes(gdb *gorm.DB, findingID uint) []db.FindingNote {
 }
 
 func confirmedVerificationReport(t *testing.T) string {
+	return verificationReport(t, "confirmed", nil)
+}
+
+func verificationReport(t *testing.T, status string, edit func(*verification.Report)) string {
 	t.Helper()
 	criterion := verification.Criterion{
 		Verdict: "pass", Method: "executed supplied PoC", Evidence: "observed expected behavior", Confidence: "high",
 	}
+	root := "AT1"
 	report := verification.Report{
 		Status: "confirmed",
+		AttackTree: &verification.AttackTree{
+			Goal:    "Trigger the parser panic through the public API",
+			RootID:  root,
+			Verdict: "reachable",
+			Nodes: []verification.AttackTreeNode{
+				{ID: root, Kind: "goal", Description: "Trigger parser panic", Status: "satisfied", Evidence: "attempts 1-3 panic at parser.go:42"},
+				{ID: "AT2", ParentID: &root, Kind: "entry_point", Description: "Supply input through Parse", Status: "satisfied", Evidence: "api.go:18 calls parser"},
+				{ID: "AT3", ParentID: verificationStringPtr("AT2"), Kind: "sink", Description: "Reach parser panic", Status: "satisfied", Evidence: "parser.go:42 panics"},
+			},
+			Blockers: []string{},
+		},
 		Attempts: []verification.Attempt{
 			{Number: 1, Outcome: "reproduced", Evidence: "boom", FailureClass: "panic", CrashSite: "parser.go:42"},
 			{Number: 2, Outcome: "reproduced", Evidence: "boom", FailureClass: "panic", CrashSite: "parser.go:42"},
@@ -805,11 +821,57 @@ func confirmedVerificationReport(t *testing.T) string {
 		Reproducer: "go run ./poc.go",
 		Evidence:   "3/3 attempts reached parser.go:42",
 	}
+	switch status {
+	case "fixed":
+		report.Status = status
+		report.AttackTree.Verdict = "blocked"
+		report.AttackTree.Nodes[0].Status = "blocked"
+		report.AttackTree.Nodes[2].Status = "blocked"
+		report.AttackTree.Blockers = []string{"guard rejects the crafted input"}
+		for i := range report.Attempts {
+			report.Attempts[i].Outcome = "not_reproduced"
+			report.Attempts[i].FailureClass = ""
+			report.Attempts[i].CrashSite = ""
+		}
+		report.Criteria.ReproducesThreeOfThree.Verdict = "fail"
+	case "inconclusive":
+		report.Status = status
+		report.AttackTree.Verdict = "unproven"
+		report.AttackTree.Nodes[0].Status = "unproven"
+		report.AttackTree.Nodes[2].Status = "unproven"
+	case "deferred", "not_attempted":
+		report.Status = status
+		report.AttackTree.Verdict = "not_attempted"
+		for i := range report.AttackTree.Nodes {
+			report.AttackTree.Nodes[i].Status = "not_attempted"
+		}
+		for i := range report.Attempts {
+			report.Attempts[i].Outcome = "not_attempted"
+			report.Attempts[i].FailureClass = ""
+			report.Attempts[i].CrashSite = ""
+		}
+		notAttempted := criterion
+		notAttempted.Verdict = "not_attempted"
+		report.Criteria = &verification.Criteria{
+			PoCWellFormed:                   notAttempted,
+			ReproducesThreeOfThree:          notAttempted,
+			ClaimedFailureClass:             notAttempted,
+			PublicInterfaceToFirstPartySink: notAttempted,
+			Deterministic:                   notAttempted,
+		}
+	}
+	if edit != nil {
+		edit(&report)
+	}
 	raw, err := json.Marshal(report)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return string(raw)
+}
+
+func verificationStringPtr(value string) *string {
+	return &value
 }
 
 func TestParseVerify_recordsStructuredRubric(t *testing.T) {
@@ -826,6 +888,9 @@ func TestParseVerify_recordsStructuredRubric(t *testing.T) {
 	}
 	if !strings.Contains(findingNotes(gdb, f.ID)[0].Body, "score: 1.00") {
 		t.Error("verify note should include the derived score")
+	}
+	if !strings.Contains(findingNotes(gdb, f.ID)[0].Body, "attack tree: reachable") {
+		t.Error("verify note should include the attack-tree verdict")
 	}
 }
 
@@ -880,19 +945,69 @@ func TestParseVerify_invalidRubricIsStoredUngraded(t *testing.T) {
 	}
 }
 
-func TestParseVerify_legacyReportGetsUnscoredRecord(t *testing.T) {
-	f, gdb := runSkillWithFinding(t, "verify", `{"status":"inconclusive","notes":"old queued scan"}`, db.FindingNew)
-	var row db.FindingVerification
-	if err := gdb.Where("finding_id = ?", f.ID).First(&row).Error; err != nil {
+func TestParseVerify_rejectsPriorRubricWithoutAttackTree(t *testing.T) {
+	var report verification.Report
+	if err := json.Unmarshal([]byte(confirmedVerificationReport(t)), &report); err != nil {
 		t.Fatal(err)
 	}
-	if row.Score != nil {
-		t.Fatalf("legacy score = %v, want nil", *row.Score)
+	report.AttackTree = nil
+	assertRejectedVerifyReport(t, report, "requires attack_tree")
+}
+
+func TestParseVerify_rejectsAttackTreeWithoutCriteria(t *testing.T) {
+	var report verification.Report
+	if err := json.Unmarshal([]byte(confirmedVerificationReport(t)), &report); err != nil {
+		t.Fatal(err)
+	}
+	report.Criteria = nil
+	assertRejectedVerifyReport(t, report, "no grading rubric")
+}
+
+func assertRejectedVerifyReport(t *testing.T, report verification.Report, wantError string) {
+	t.Helper()
+
+	raw, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f, gdb := runSkillWithFinding(t, "verify", string(raw), db.FindingNew)
+	if f.Status != db.FindingNew {
+		t.Fatalf("status = %s, want new: a rejected live report must not change lifecycle", f.Status)
+	}
+	var verificationCount int64
+	if err := gdb.Model(&db.FindingVerification{}).Where("finding_id = ?", f.ID).Count(&verificationCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if verificationCount != 0 {
+		t.Fatalf("verification rows = %d, want 0 for a rejected live report", verificationCount)
+	}
+	var scan db.Scan
+	if err := gdb.Where("finding_id = ? AND skill_name = ?", f.ID, "verify").First(&scan).Error; err != nil {
+		t.Fatal(err)
+	}
+	if scan.Status != db.ScanFailed || !strings.Contains(scan.Error, wantError) {
+		t.Fatalf("scan status/error = %s/%q, want failed error containing %q", scan.Status, scan.Error, wantError)
+	}
+}
+
+func TestParseVerify_rejectsLegacyLiveReportWithoutAttackTree(t *testing.T) {
+	f, gdb := runSkillWithFinding(t, "verify", `{"status":"inconclusive","notes":"old queued scan"}`, db.FindingNew)
+	var verificationCount int64
+	if err := gdb.Model(&db.FindingVerification{}).Where("finding_id = ?", f.ID).Count(&verificationCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if verificationCount != 0 {
+		t.Fatalf("verification rows = %d, want 0 for legacy live output", verificationCount)
 	}
 }
 
 func TestParseVerify_confirmedMovesNewToEnriched(t *testing.T) {
-	report := `{"status":"confirmed","reproducer":"ruby -e 'load %q(./src/x.rb); X.call(%q(../etc))'","evidence":"got the same error","notes":"no code change"}`
+	report := verificationReport(t, "confirmed", func(report *verification.Report) {
+		report.Reproducer = "ruby -e 'load %q(./src/x.rb); X.call(%q(../etc))'"
+		report.Evidence = "got the same error"
+		report.Notes = "no code change"
+	})
 	f, gdb := runSkillWithFinding(t, "verify", report, db.FindingNew)
 	if f.Status != db.FindingEnriched {
 		t.Errorf("status = %s, want enriched", f.Status)
@@ -913,7 +1028,10 @@ func TestParseVerify_confirmedMovesNewToEnriched(t *testing.T) {
 }
 
 func TestParseVerify_fixedJumpsToFixed(t *testing.T) {
-	report := `{"status":"fixed","evidence":"repro no longer reproduces","notes":"commit abc added guard"}`
+	report := verificationReport(t, "fixed", func(report *verification.Report) {
+		report.Evidence = "repro no longer reproduces"
+		report.Notes = "commit abc added guard"
+	})
 	f, _ := runSkillWithFinding(t, "verify", report, db.FindingTriaged)
 	if f.Status != db.FindingFixed {
 		t.Errorf("status = %s, want fixed", f.Status)
@@ -938,7 +1056,9 @@ func TestParseVerify_fixedAgainstRefDoesNotFlipStatus(t *testing.T) {
 	gdb.Create(&scan)
 
 	w := &Worker{DB: gdb, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	report := `{"status":"fixed","evidence":"no longer reproduces on the PR branch"}`
+	report := verificationReport(t, "fixed", func(report *verification.Report) {
+		report.Evidence = "no longer reproduces on the PR branch"
+	})
 	if err := w.parseVerifyOutput(&scan, report, func(Event) {}); err != nil {
 		t.Fatal(err)
 	}
@@ -955,7 +1075,9 @@ func TestParseVerify_fixedAgainstRefDoesNotFlipStatus(t *testing.T) {
 }
 
 func TestParseVerify_inconclusiveLeavesStatus(t *testing.T) {
-	report := `{"status":"inconclusive","notes":"tooling missing"}`
+	report := verificationReport(t, "inconclusive", func(report *verification.Report) {
+		report.Notes = "tooling missing"
+	})
 	f, gdb := runSkillWithFinding(t, "verify", report, db.FindingNew)
 	if f.Status != db.FindingNew {
 		t.Errorf("status = %s, want new (unchanged)", f.Status)
@@ -967,7 +1089,13 @@ func TestParseVerify_inconclusiveLeavesStatus(t *testing.T) {
 }
 
 func TestParseVerify_deferredLeavesStatusAndRecordsPreflight(t *testing.T) {
-	report := `{"status":"deferred","preflight":{"classification":"external-reach","justification":"requests.get('http://169.254.169.254/latest/')"},"notes":"SSRF repro dials link-local metadata; needs a callback listener"}`
+	report := verificationReport(t, "deferred", func(report *verification.Report) {
+		report.Preflight = &verification.Preflight{
+			Classification: "external-reach",
+			Justification:  "requests.get('http://169.254.169.254/latest/')",
+		}
+		report.Notes = "SSRF repro dials link-local metadata; needs a callback listener"
+	})
 	f, gdb := runSkillWithFinding(t, "verify", report, db.FindingNew)
 	if f.Status != db.FindingNew {
 		t.Errorf("status = %s, want new (unchanged): deferred means the repro was not run, not that the finding is dead", f.Status)
@@ -996,9 +1124,15 @@ func TestParseVerify_deferredRequiresPreflight(t *testing.T) {
 	w := &Worker{DB: gdb, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 
 	for name, report := range map[string]string{
-		"missing preflight":   `{"status":"deferred","notes":"x"}`,
-		"empty class":         `{"status":"deferred","preflight":{"classification":"","justification":"x"}}`,
-		"empty justification": `{"status":"deferred","preflight":{"classification":"external-reach","justification":"  "}}`,
+		"missing preflight": verificationReport(t, "deferred", func(report *verification.Report) {
+			report.Preflight = nil
+		}),
+		"empty class": verificationReport(t, "deferred", func(report *verification.Report) {
+			report.Preflight = &verification.Preflight{Justification: "x"}
+		}),
+		"empty justification": verificationReport(t, "deferred", func(report *verification.Report) {
+			report.Preflight = &verification.Preflight{Classification: "external-reach", Justification: "  "}
+		}),
 	} {
 		if err := w.parseVerifyOutput(scan, report, func(Event) {}); err == nil || !strings.Contains(err.Error(), "requires preflight") {
 			t.Errorf("%s: want deferred-requires-preflight error, got %v", name, err)
@@ -1006,13 +1140,20 @@ func TestParseVerify_deferredRequiresPreflight(t *testing.T) {
 	}
 	// deferred WITH preflight is fine (covered in the main deferred test),
 	// and inconclusive without preflight is also fine (early-exit cases).
-	if err := w.parseVerifyOutput(scan, `{"status":"inconclusive","notes":"no finding_id"}`, func(Event) {}); err != nil {
+	inconclusive := verificationReport(t, "inconclusive", func(report *verification.Report) {
+		report.Notes = "no finding_id"
+	})
+	if err := w.parseVerifyOutput(scan, inconclusive, func(Event) {}); err != nil {
 		t.Errorf("inconclusive without preflight should be accepted: %v", err)
 	}
 }
 
 func TestParseVerify_preflightRecordedOnConfirmed(t *testing.T) {
-	report := `{"status":"confirmed","preflight":{"classification":"local-safe","justification":"stdin only"},"reproducer":"echo x | ./bin","evidence":"boom"}`
+	report := verificationReport(t, "confirmed", func(report *verification.Report) {
+		report.Preflight = &verification.Preflight{Classification: "local-safe", Justification: "stdin only"}
+		report.Reproducer = "echo x | ./bin"
+		report.Evidence = "boom"
+	})
 	f, gdb := runSkillWithFinding(t, "verify", report, db.FindingNew)
 	if f.Status != db.FindingEnriched {
 		t.Errorf("status = %s, want enriched", f.Status)
@@ -1040,7 +1181,10 @@ func TestParseVerify_rejectsUnknownStatus(t *testing.T) {
 	gdb.Create(&finding)
 	scan := db.Scan{RepositoryID: repo.ID, FindingID: new(finding.ID)}
 	w := &Worker{DB: gdb, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	err := w.parseVerifyOutput(&scan, `{"status":"maybe"}`, func(Event) {})
+	report := verificationReport(t, "confirmed", func(report *verification.Report) {
+		report.Status = "maybe"
+	})
+	err := w.parseVerifyOutput(&scan, report, func(Event) {})
 	if err == nil || !strings.Contains(err.Error(), "confirmed|fixed|inconclusive|deferred") {
 		t.Errorf("want unknown-status error listing all four values, got %v", err)
 	}

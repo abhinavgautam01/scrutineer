@@ -1,6 +1,6 @@
 ---
 name: verify
-description: Re-run a finding's reproduction against current HEAD and grade its evidence with a deterministic five-part rubric.
+description: Re-run a finding's reproduction against current HEAD, test its attack tree, and grade its evidence with a deterministic five-part rubric.
 license: MIT
 compatibility: Needs network access to the scrutineer API (http://host:port/api). Expects the finding's reproduction instructions to be runnable against ./src with commonly available tooling.
 metadata:
@@ -11,7 +11,7 @@ metadata:
 
 # verify
 
-Take an existing finding produced by a prior audit skill and independently grade whether its reproduction still demonstrates the claimed vulnerability against current HEAD. Do not merely decide whether a command exited non-zero: record how each conclusion was reached, contrary evidence, and anything that remains unproved.
+Take an existing finding produced by a prior audit skill and independently grade whether its reproduction still demonstrates the claimed vulnerability against current HEAD. Build an attack tree for the supplied claim, then test its preconditions and path with the supplied reproduction. Do not merely decide whether a command exited non-zero: record how each conclusion was reached, contrary evidence, and anything that remains unproved.
 
 ## Workspace and provenance
 
@@ -28,7 +28,7 @@ The only reproduction material inherited from the original scan is the finding's
 
 Read `./context.json`, then fetch `GET {api_base}/findings/{finding_id}` with `Authorization: Bearer {token}`. The response includes the finding's title, CWE, locations, trace, boundary, validation, and reachability narrative.
 
-If `finding_id` is missing or the fetch fails, emit `status: not_attempted`. Create three `attempts` entries with `outcome: not_attempted`, and set all five criterion verdicts to `not_attempted`. In each evidence field state the concrete reason the target could not be loaded. A broken harness is not a negative result.
+If `finding_id` is missing or the fetch fails, emit `status: not_attempted`. Create an `attack_tree` with one `goal` root whose verdict and node status are `not_attempted`, create three `attempts` entries with `outcome: not_attempted`, and set all five criterion verdicts to `not_attempted`. In each evidence field state the concrete reason the target could not be loaded. A broken harness is not a negative result.
 
 ## Preflight
 
@@ -37,13 +37,35 @@ Before execution, inspect every command, script, and input named by `validation`
 - `local-safe`: uses stdin or file input, or connects only to loopback, a Unix socket, or a server the reproduction starts on loopback; writes only below the workspace or OS temp.
 - `external-reach`: resolves or connects to any other host; reads credential files or credential environment variables; or writes outside the workspace and OS temp.
 
-Record the classification and quote the exact lines from the reproduction that decided it in `preflight.justification`. For `external-reach`, do not execute the PoC. Emit `status: deferred`, three `not_attempted` attempts, and five `not_attempted` criteria. The evidence must name the prohibited operation; do not score an egress-policy block as a failed reproduction.
+Record the classification and quote the exact lines from the reproduction that decided it in `preflight.justification`. For `external-reach`, do not execute the PoC. Emit `status: deferred`, an attack tree whose verdict and every node status are `not_attempted`, three `not_attempted` attempts, and five `not_attempted` criteria. The evidence must name the prohibited operation; do not score an egress-policy block as a failed reproduction.
 
 ## Establish the entry point and sink
 
 Before running the PoC, identify the public interface it invokes and the expected first-party sink. A direct call to a private/internal helper, test-only driver, vendored dependency, or dependency API does not establish a reachable vulnerability. The `public_interface_to_first_party_sink` criterion passes only when evidence shows the supplied input enters through a shipped public interface and reaches first-party target code.
 
 If the supplied PoC only calls an internal helper directly, do not rewrite it into a new attack. Record the limitation as counterevidence or a proof gap and do not confirm the finding.
+
+## Build and test the attack tree
+
+Before executing the PoC, turn the supplied claim into a small attack tree. The root `goal` is the claimed attacker-visible security effect. Its descendants are the conditions that must hold for that goal: attacker capability, shipped public entry point, relevant transformations or guards, trust-boundary crossing, first-party sink, and final effect. Use stable ids `AT1`, `AT2`, and so on. Only the root has `parent_id: null`; every other node names an existing parent.
+
+For each node record exactly one status:
+
+- `satisfied`: source inspection or runtime evidence proves the condition for the supplied path.
+- `blocked`: a concrete guard or unmet precondition prevents the supplied path. Name that condition in `blockers`.
+- `unproven`: the available evidence cannot establish or refute the condition.
+- `not_attempted`: loading, preflight, build, runtime, or harness setup prevented evaluation.
+
+Node evidence must cite a repository `path:line`, relevant command output, or a numbered attempt. Repository documentation and the original finding narrative are hypotheses, not proof. Walk the supplied path from attacker input through the public entry point and every material guard or transformation to the first-party sink and claimed effect. A sanitisation gate is a blocker only if it runs before the sink, checks the actual tainted value, and the checked value is what reaches the sink.
+
+Do not invent a different exploit or broaden the finding to make the tree reachable. Do not use an SMT solver: this step is an evidence graph over the supplied reproduction and current code, not symbolic path solving. Update node statuses after each runtime attempt.
+
+Choose the attack-tree verdict as follows:
+
+- `reachable`: every node is `satisfied`, no blocker remains, and all three attempts demonstrate the claimed effect through the supplied path.
+- `blocked`: at least one evidenced `blocked` node dominates the supplied path, and `blockers` names the concrete guard or unmet precondition.
+- `unproven`: one or more material nodes remain `unproven`, evidence conflicts, or the result is flaky.
+- `not_attempted`: no meaningful evaluation reached the path; every node must be `not_attempted`.
 
 ## Run three independent attempts
 
@@ -83,11 +105,11 @@ Every criterion records `verdict`, `method`, `evidence`, `counterevidence`, `pro
 
 ## Choose the overall status
 
-- `confirmed`: all three attempts reproduced and all five criteria passed.
-- `fixed`: all three attempts reached the relevant current code without reproducing, and source evidence identifies the guard, sanitiser, or refactor that stopped the original behavior. Cite it in `notes`.
+- `confirmed`: all three attempts reproduced, all five criteria passed, and the attack-tree verdict is `reachable`.
+- `fixed`: all three attempts reached the relevant current code without reproducing, source evidence identifies the guard, sanitiser, or refactor that stopped the original behavior, and the attack-tree verdict is `blocked`. Cite the blocker in both `attack_tree.blockers` and `notes`.
 - `inconclusive`: execution occurred but was flaky, produced a different class, did not establish a public path/first-party sink, or left conflicting evidence.
-- `not_attempted`: no meaningful attempt reached the target because setup, build, runtime, or harness preparation failed. Prefix environment failures in `notes` with `env-blocked:`.
-- `deferred`: preflight found external reach or credential access, so execution was intentionally skipped.
+- `not_attempted`: no meaningful attempt reached the target because setup, build, runtime, or harness preparation failed. The attack-tree verdict is `not_attempted`. Prefix environment failures in `notes` with `env-blocked:`.
+- `deferred`: preflight found external reach or credential access, so execution was intentionally skipped and the attack-tree verdict is `not_attempted`.
 
 For resource-exhaustion findings, a timeout or memory limit is confirmation only when that is the claimed class and the evidence ties it to the expected first-party path. An unrelated setup hang, compiler OOM, or test-runner timeout is not confirmation.
 
@@ -131,6 +153,18 @@ Write `./report.json` matching `./schema.json`. Example:
   "preflight": {
     "classification": "local-safe",
     "justification": "python ./poc.py ./src reads only the supplied local file"
+  },
+  "attack_tree": {
+    "goal": "Attacker document triggers a heap-buffer-overflow in the public parser",
+    "root_id": "AT1",
+    "verdict": "reachable",
+    "nodes": [
+      {"id": "AT1", "parent_id": null, "kind": "goal", "description": "Trigger first-party heap-buffer-overflow", "status": "satisfied", "evidence": "attempts 1-3 report heap-buffer-overflow at src/parser.c:418"},
+      {"id": "AT2", "parent_id": "AT1", "kind": "entry_point", "description": "Supply attacker document to public parse_document", "status": "satisfied", "evidence": "include/parser.h:31 exports parse_document; attempt stack enters it"},
+      {"id": "AT3", "parent_id": "AT2", "kind": "trust_boundary", "description": "Document length reaches parser without a rejecting guard", "status": "satisfied", "evidence": "src/document.c:74 passes the supplied length to parser_parse"},
+      {"id": "AT4", "parent_id": "AT3", "kind": "sink", "description": "Parser copies beyond the destination allocation", "status": "satisfied", "evidence": "ASan traces from attempts 1-3 reach src/parser.c:418"}
+    ],
+    "blockers": []
   },
   "attempts": [
     {"number": 1, "outcome": "reproduced", "evidence": "exit 1; stack trace reaches parser.c:418", "failure_class": "heap-buffer-overflow", "crash_site": "src/parser.c:418"},

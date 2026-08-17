@@ -27,8 +27,9 @@ const (
 )
 
 type verifyOutput struct {
-	Status    string `json:"status"`
-	Preflight struct {
+	Status     string                   `json:"status"`
+	AttackTree *verification.AttackTree `json:"attack_tree"`
+	Preflight  struct {
 		Classification string `json:"classification"`
 		Justification  string `json:"justification"`
 	} `json:"preflight"`
@@ -915,9 +916,12 @@ func decodeVerifyOutput(report string) (verifyOutput, *verification.Report, *flo
 	if err := json.Unmarshal([]byte(report), &result); err != nil {
 		return verifyOutput{}, nil, nil, "", fmt.Errorf("parse verify report: %w", err)
 	}
+	if result.AttackTree == nil {
+		return verifyOutput{}, nil, nil, "", errors.New("verify report requires attack_tree")
+	}
 	rubric, err := verification.Parse(report)
 	if errors.Is(err, verification.ErrMissingRubric) {
-		return result, nil, nil, "", nil
+		return verifyOutput{}, nil, nil, "", err
 	}
 	if err != nil {
 		return result, nil, nil, err.Error(), nil
@@ -970,6 +974,12 @@ func verifyNote(result verifyOutput, rubric *verification.Report, score *float64
 	}
 	if rubric != nil && score != nil {
 		fmt.Fprintf(&b, "score: %.2f\n", *score)
+		if rubric.AttackTree != nil {
+			fmt.Fprintf(&b, "attack tree: %s\n", rubric.AttackTree.Verdict)
+			for _, blocker := range rubric.AttackTree.Blockers {
+				fmt.Fprintf(&b, "attack blocker: %s\n", blocker)
+			}
+		}
 		for _, named := range rubric.Criteria.List() {
 			fmt.Fprintf(&b, "criterion: %s = %s\n", named.Name, named.Criterion.Verdict)
 		}

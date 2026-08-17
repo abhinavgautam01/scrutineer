@@ -780,6 +780,33 @@ git commit -m "fix: {{$f.Title}}"</pre>
           <span class="text-xs text-muted-foreground">{{.CreatedAt.Format "2006-01-02 15:04"}}</span>
         </div>
         {{if .HasRubric}}
+        {{with .AttackTree}}
+        <div class="mb-4">
+          <div class="flex flex-wrap items-center gap-2 text-sm mb-2">
+            <span class="font-medium">Attack path</span>
+            <span class="badge-outline">{{.Verdict}}</span>
+            <span class="text-muted-foreground">{{.Goal}}</span>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead><tr class="border-b"><th class="text-left py-2">Node</th><th class="text-left">Parent</th><th class="text-left">Kind</th><th class="text-left">Status</th><th class="text-left">Condition</th><th class="text-left">Evidence</th></tr></thead>
+              <tbody>
+              {{range .Nodes}}
+                <tr class="border-b align-top">
+                  <td class="py-2 pr-3 font-medium">{{.ID}}</td>
+                  <td class="py-2 pr-3">{{if .ParentID}}{{.ParentID}}{{else}}-{{end}}</td>
+                  <td class="py-2 pr-3">{{.Kind}}</td>
+                  <td class="py-2 pr-3">{{.Status}}</td>
+                  <td class="py-2 pr-3">{{.Description}}</td>
+                  <td class="py-2">{{.Evidence}}</td>
+                </tr>
+              {{end}}
+              </tbody>
+            </table>
+          </div>
+          {{if .Blockers}}<div class="text-sm mt-2"><span class="font-medium">Blockers:</span> {{range $i, $blocker := .Blockers}}{{if $i}}; {{end}}{{$blocker}}{{end}}</div>{{end}}
+        </div>
+        {{end}}
         <div class="overflow-x-auto">
           <table class="w-full text-sm">
             <thead><tr class="border-b"><th class="text-left py-2">Criterion</th><th class="text-left">Verdict</th><th class="text-left">Evidence</th><th class="text-left">Proof gap</th></tr></thead>
