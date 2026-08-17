@@ -1,6 +1,10 @@
 package web
 
-import "scrutineer/internal/ingest"
+import (
+	"cmp"
+
+	"scrutineer/internal/ingest"
+)
 
 // An externally-produced scanner report is unbounded. One over-eager CodeQL or
 // Semgrep rule can carry thousands of hits against a single repository, and the
@@ -12,10 +16,9 @@ import "scrutineer/internal/ingest"
 // report, and the CSV/markdown exports an analyst assembled are all somebody's
 // considered list of findings, not raw rule output, so they import whole.
 const (
-	// importPerRuleCap is the most findings one (tool, rule) pair may
-	// contribute to a single imported result. Five hits are enough to show
-	// what a rule is flagging; the rest are noise until somebody has triaged
-	// those five.
+	// importPerRuleCap is the most findings one rule may contribute to a
+	// single imported result. Five hits are enough to show what a rule is
+	// flagging; the rest are noise until somebody has triaged those five.
 	importPerRuleCap = 5
 	// importResultCap is the most findings one imported result may contribute
 	// in total, whatever the spread of rules. It backstops the per-rule cap
@@ -64,7 +67,12 @@ func capScannerResult(res ingest.Result) (ingest.Result, importCapStats) {
 	accepted := make([]ingest.Finding, 0, min(len(res.Findings), importResultCap))
 	perRule := make(map[string]int, len(res.Findings))
 	for _, f := range res.Findings {
-		key := importRuleKey(res.Tool, f)
+		// SARIF does not require a result to name its ruleId. The title stands
+		// in when one is missing: it is derived from the rule whenever the
+		// parser resolved one, and where it is not, grouping by it is still
+		// closer to per-rule than lumping every anonymous hit into a single
+		// bucket that the fifth finding would close.
+		key := cmp.Or(f.RuleID, f.Title)
 		switch {
 		case perRule[key] >= importPerRuleCap:
 			stats.DroppedPerRule++
@@ -78,21 +86,4 @@ func capScannerResult(res ingest.Result) (ingest.Result, importCapStats) {
 	stats.Accepted = len(accepted)
 	res.Findings = accepted
 	return res, stats
-}
-
-// importRuleKey identifies the rule a finding fired from. One result carries
-// one tool, so the tool is constant across a single call, but it rides in the
-// key so the cap stays per (tool, rule) should a format ever group several
-// tools into one result.
-//
-// SARIF does not require a result to name its ruleId. The title stands in when
-// one is missing: it is derived from the rule whenever the parser resolved one,
-// and where it is not, grouping by it is still closer to per-rule than lumping
-// every anonymous hit into a single bucket that the fifth finding would close.
-func importRuleKey(tool string, f ingest.Finding) string {
-	rule := f.RuleID
-	if rule == "" {
-		rule = f.Title
-	}
-	return tool + "\x00" + rule
 }

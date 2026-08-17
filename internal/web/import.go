@@ -200,9 +200,6 @@ func (s *Server) importResults(results []ingest.Result, format ingest.Format, re
 	imported := make([]importedResult, 0, len(results))
 	err := s.DB.Transaction(func(tx *gorm.DB) error {
 		for _, res := range results {
-			// Raw scanner output is bounded before anything is written, so a
-			// noisy rule cannot flood the findings table or the revalidate
-			// queue. Curated formats pass through whole. See import_cap.go.
 			bounded, caps := res, uncappedImportStats(res)
 			if format == ingest.FormatSARIF {
 				bounded, caps = capScannerResult(res)
@@ -241,8 +238,6 @@ func (s *Server) importResults(results []ingest.Result, format ingest.Format, re
 		s.Log.Info("import",
 			"repo", result.repo.URL, "tool", result.tool, "scan", result.scan.ID,
 			"created", len(result.created), "observed", result.observed)
-		// One line per bounded result, never one per dropped finding: the whole
-		// point of the caps is to keep a noisy report cheap.
 		if result.caps.truncated() {
 			s.Log.Warn("import: scanner result truncated by import caps",
 				"repo", result.repo.URL, "tool", result.tool, "scan", result.scan.ID,

@@ -103,9 +103,10 @@ func TestCapScannerResult_totalCapBoundsDistinctRules(t *testing.T) {
 	if caps != want {
 		t.Errorf("caps = %+v, want %+v", caps, want)
 	}
-	if bounded.Findings[0].RuleID != "rule-00" || bounded.Findings[importResultCap-1].RuleID != "rule-49" {
-		t.Errorf("kept %q..%q, want the first %d rules in input order",
-			bounded.Findings[0].RuleID, bounded.Findings[importResultCap-1].RuleID, importResultCap)
+	first, last := fmt.Sprintf("rule-%02d", 0), fmt.Sprintf("rule-%02d", importResultCap-1)
+	if bounded.Findings[0].RuleID != first || bounded.Findings[importResultCap-1].RuleID != last {
+		t.Errorf("kept %q..%q, want %q..%q, the first %d rules in input order",
+			bounded.Findings[0].RuleID, bounded.Findings[importResultCap-1].RuleID, first, last, importResultCap)
 	}
 }
 

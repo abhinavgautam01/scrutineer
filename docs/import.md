@@ -49,7 +49,7 @@ A SARIF report is raw scanner output, and raw scanner output is unbounded. One o
 
 | Cap | Value | Meaning |
 |---|---|---|
-| Per rule | 5 | The most findings one `(tool, rule_id)` pair may contribute to one result. |
+| Per rule | 5 | The most findings one `rule_id` may contribute to one result. |
 | Per result | 50 | The most findings one result may contribute in total, whatever the spread of rules. |
 
 The caps apply only to SARIF. Every other format is somebody's considered list of findings rather than raw rule output: a hand-written minimal-JSON report, a CSV or markdown export an analyst assembled, and scrutineer's own [sharing bundle](encrypted-sharing.md) all import whole. The `ingest` skill fallback for unrecognised payloads is likewise uncapped, since its output is a model-normalised report rather than a rule dump.
