@@ -1565,7 +1565,8 @@ const findingRefMergeBatch = 500
 // "https://x" and the index would happily keep both, leaving exactly the
 // duplicate this migration exists to remove. Tags and summary are trimmed on
 // the survivor for the same reason, to leave every row in the shape the helper
-// writes today.
+// writes today. A row whose URL is blank once trimmed is deleted rather than
+// kept, since it points nowhere and no writer can produce one any more.
 //
 // The whole merge runs in one transaction, so a failure leaves the table as it
 // was rather than half-collapsed.
@@ -1618,8 +1619,9 @@ func mergeFindingReferencePage(tx *gorm.DB, findingIDs []uint) error {
 
 // planFindingReferenceMerge decides what one page of references collapses to.
 // It returns the surviving rows whose stored values need rewriting, in their
-// merged form, plus the ids to delete. A row already in its final shape appears
-// in neither, so an install with nothing to fix issues no writes.
+// merged form, plus the ids to delete: the duplicates of a URL, plus any row
+// left with no URL at all. A row already in its final shape appears in neither,
+// so an install with nothing to fix issues no writes.
 //
 // rows must be ordered by (finding_id, id) so the lowest id in each group is
 // seen first and the metadata backfill runs oldest to newest.
@@ -1635,13 +1637,22 @@ func planFindingReferenceMerge(rows []FindingReference) (survivors []FindingRefe
 	groups := make([]*group, 0, len(rows))
 	index := make(map[groupKey]*group, len(rows))
 	for _, row := range rows {
-		key := groupKey{findingID: row.FindingID, url: strings.TrimSpace(row.URL)}
+		url := strings.TrimSpace(row.URL)
+		if url == "" {
+			// A reference with no URL points nowhere, and every writer rejects
+			// one today. Carrying it past the index would leave a blank link on
+			// the finding page and in every export, so it goes with the
+			// duplicates rather than being rewritten as an empty string.
+			drop = append(drop, row.ID)
+			continue
+		}
+		key := groupKey{findingID: row.FindingID, url: url}
 		g, seen := index[key]
 		if !seen {
 			merged := FindingReference{
 				ID:        row.ID,
 				FindingID: row.FindingID,
-				URL:       key.url,
+				URL:       url,
 				Tags:      strings.TrimSpace(row.Tags),
 				Summary:   strings.TrimSpace(row.Summary),
 			}

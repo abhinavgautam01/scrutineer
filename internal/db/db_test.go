@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -522,6 +523,57 @@ func TestFindingReference_uniqueIndexRejectsDuplicateURL(t *testing.T) {
 	}
 	if err := gdb.Create(&FindingReference{FindingID: f.ID, URL: "https://example.com/b"}).Error; err != nil {
 		t.Errorf("different URL on the same finding: %v", err)
+	}
+}
+
+func TestPreMigrate_findingReferenceMergeDropsBlankURLs(t *testing.T) {
+	var findingA, findingB uint
+	// A reference with no URL points nowhere. Rewriting it as an empty string
+	// would leave a blank link on the finding page and in every export, so the
+	// merge removes it, the same way every writer already refuses to make one.
+	path := legacyFindingReferenceDB(t, func(gdb *gorm.DB, a, b uint) {
+		findingA, findingB = a, b
+		seedFindingReferences(t, gdb, []FindingReference{
+			{ID: 1, FindingID: a, URL: "   ", Tags: "junk"},
+			{ID: 2, FindingID: a, URL: "", Summary: "also junk"},
+			{ID: 3, FindingID: a, URL: "https://example.com/real", Tags: "advisory"},
+			{ID: 4, FindingID: b, URL: "\t\n"},
+		})
+	})
+
+	gdb, err := Open(path)
+	if err != nil {
+		t.Fatalf("open with blank references: %v", err)
+	}
+	refs := findingReferencesFor(t, gdb, findingA)
+	if len(refs) != 1 {
+		t.Fatalf("kept %d references, want only the real one: %+v", len(refs), refs)
+	}
+	if refs[0].ID != 3 || refs[0].URL != "https://example.com/real" || refs[0].Tags != "advisory" {
+		t.Errorf("surviving reference = %+v, want id 3 untouched", refs[0])
+	}
+	// A finding whose only reference was blank is left with none, not with an
+	// empty-URL row that the index would then treat as a real reference.
+	if left := findingReferencesFor(t, gdb, findingB); len(left) != 0 {
+		t.Errorf("blank-only finding kept %+v, want no references", left)
+	}
+}
+
+func TestPlanFindingReferenceMerge_dropsBlankURLsWithoutGroupingThem(t *testing.T) {
+	// Two blank rows on one finding are two pieces of junk, not a URL group:
+	// each is dropped on its own rather than one surviving as the other's
+	// canonical row.
+	rows := []FindingReference{
+		{ID: 1, FindingID: 7, URL: " ", Tags: "a"},
+		{ID: 2, FindingID: 7, URL: "", Tags: "b"},
+		{ID: 3, FindingID: 7, URL: "https://example.com/a"},
+	}
+	survivors, drop := planFindingReferenceMerge(rows)
+	if len(survivors) != 0 {
+		t.Errorf("survivors = %+v, want no rewrites", survivors)
+	}
+	if !slices.Equal(drop, []uint{1, 2}) {
+		t.Errorf("drop = %v, want both blank rows", drop)
 	}
 }
 
