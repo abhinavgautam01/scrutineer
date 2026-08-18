@@ -1,6 +1,6 @@
 ---
 name: packages
-description: Look up every package this repository publishes across all registries via packages.ecosyste.ms, with downloads, dependent counts, latest version, and registry URL.
+description: Look up every package this repository publishes across all registries via packages.ecosyste.ms, with downloads, dependent counts, latest version, registry URL and supply-chain risk flags.
 license: MIT
 compatibility: Prefers the scrutineer API's cached ecosyste.ms payload; needs network access to packages.ecosyste.ms only when nothing is cached.
 metadata:
@@ -39,7 +39,26 @@ One repository can ship multiple packages across multiple ecosystems. Ask packag
    - `latest_release_at` from upstream `latest_release_published_at` (RFC3339)
    - `dependent_packages_url` from upstream `dependent_packages_url`
    - `metadata` — the whole upstream object for this package, verbatim
+   - `risk_flags`, see "Risk flags" below
 
 If upstream answered and this repository genuinely publishes no packages (the lookup returns `[]`), write `{"packages": []}`. That is a valid result, not an error.
 
 Only write that empty array when a source actually answered. If neither source is reachable — the cached endpoint returned 404 *and* the direct fetch failed, which is what `--hardened` looks like on an uncached repository — do not write `./report.json` at all. Exit non-zero instead. The parser replaces the whole package set for the repository, deleting every existing row before inserting what you produced, so an empty array reported as success wipes packages a previous scan recorded rather than leaving them untouched.
+
+## Risk flags
+
+Each entry in `risk_flags` is `{"id": ..., "evidence": ...}`. `id` is one of the five ids listed below. `evidence` is one sentence naming what you actually saw (the file, the field, the date), not a restatement of the flag name.
+
+The five flags and how to check each:
+
+- `single_maintainer`: the registry lists one owner or publisher for this package. Read it from the upstream payload's maintainers/owners field.
+- `no_security_policy`: no `SECURITY.md` (or `.github/SECURITY.md`, `docs/SECURITY.md`) in `./src`.
+- `native_extension`: the package ships compiled code, so installing it runs a toolchain. Examples worth naming: a `binding.gyp` or `node-gyp` dependency, `ext/` with an `extconf.rb`, `setup.py` declaring `ext_modules`, a `build.rs`, cgo directives.
+- `stale_release`: the latest release is more than eighteen months older than today. Compute it from the upstream `latest_release_published_at`.
+- `maintainer_domain_expired`: a maintainer contact's email domain no longer resolves.
+
+Omit a flag you could not check. An absent flag means "not checked or not found", never "checked and clean". Guessing is worse than silence here, because these ids feed the repository's health classification.
+
+`./src` is the repository checkout, available to this skill, so the source-derived checks read from there. Under `--hardened` the DNS check for `maintainer_domain_expired` is unavailable, so that flag is simply omitted rather than guessed.
+
+Write `risk_flags` as an empty array or omit it entirely when nothing applies; both are valid.

@@ -97,6 +97,9 @@ type packageResponse struct {
 	// repo-level package. Lets an API consumer group a monorepo's packages by
 	// sub-package without a second lookup.
 	SubPath string `json:"sub_path,omitempty"`
+	// RiskFlags are the packages skill's supply-chain hygiene warnings for
+	// this package. The evidence for each stays in the scan report.
+	RiskFlags []string `json:"risk_flags,omitempty"`
 }
 
 func (s *Server) apiListPackages(w http.ResponseWriter, r *http.Request) {
@@ -127,6 +130,7 @@ func (s *Server) apiListPackages(w http.ResponseWriter, r *http.Request) {
 			DependentRepos:    p.DependentRepos,
 			RegistryURL:       p.RegistryURL,
 			LatestReleaseAt:   p.LatestReleaseAt,
+			RiskFlags:         db.PackageRiskFlags(p.RiskFlags),
 		}
 		if p.SubprojectID != nil {
 			resp.SubPath = subPaths[*p.SubprojectID]

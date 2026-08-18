@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -33,6 +34,11 @@ type RepositoryHealthAssessment struct {
 	DependentRepos    int
 	ActiveMaintainers int
 	KnownMaintainers  int
+	// RiskFlags are the supply-chain hygiene warnings the packages skill
+	// reported, unioned across every package the repository publishes and
+	// canonically ordered. They are evidence carried alongside the
+	// classification; only stale_release actually moves it.
+	RiskFlags []string
 }
 
 // AssessRepositoryHealth classifies a repository from persisted evidence.
@@ -42,11 +48,17 @@ type RepositoryHealthAssessment struct {
 // as abandoned.
 func AssessRepositoryHealth(repo Repository, packages []Package, maintainers []Maintainer, now time.Time) RepositoryHealthAssessment {
 	assessment := RepositoryHealthAssessment{}
+	var flags []string
 	for _, pkg := range packages {
 		// Published packages can share downstream repositories. The package
 		// feed cannot prove those sets are disjoint, so max is conservative.
 		assessment.DependentRepos = max(assessment.DependentRepos, pkg.DependentRepos)
+		flags = append(flags, PackageRiskFlags(pkg.RiskFlags)...)
 	}
+	// The dropped return is discarded: values in the RiskFlags column were
+	// already validated when the packages skill's row was written, so
+	// nothing here should be unknown.
+	assessment.RiskFlags, _ = NormalisePackageRiskFlags(flags)
 	for _, maintainer := range maintainers {
 		switch maintainer.Status {
 		case MaintainerActive:
@@ -79,7 +91,13 @@ func repositoryHealth(archived, hasPush bool, age time.Duration, assessment Repo
 		}
 		return RepositoryHealthAbandoned
 	}
-	if hasPush && age <= healthActiveWindow && assessment.ActiveMaintainers > 0 {
+	// A package that has not shipped a release in eighteen months is not
+	// reaching its consumers however busy the repository looks, so the flag
+	// holds the classification at stale even when commits are recent. It
+	// deliberately does not push the repository towards abandoned, which
+	// still requires archival or maintainer evidence.
+	staleRelease := slices.Contains(assessment.RiskFlags, string(PackageRiskStaleRelease))
+	if hasPush && age <= healthActiveWindow && assessment.ActiveMaintainers > 0 && !staleRelease {
 		return RepositoryHealthActive
 	}
 	return RepositoryHealthStale
@@ -105,6 +123,9 @@ func healthSummary(archived bool, pushedAt *time.Time, age time.Duration, assess
 	}
 	if assessment.DependentRepos > 0 {
 		parts = append(parts, fmt.Sprintf("up to %d dependent repos", assessment.DependentRepos))
+	}
+	if len(assessment.RiskFlags) > 0 {
+		parts = append(parts, "risk flags: "+strings.Join(assessment.RiskFlags, ", "))
 	}
 	return strings.Join(parts, "; ")
 }

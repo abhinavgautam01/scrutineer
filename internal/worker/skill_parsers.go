@@ -135,6 +135,13 @@ func (w *Worker) parsePackagesOutput(scan *db.Scan, report string, emit func(Eve
 			LatestReleaseAt      string `json:"latest_release_at"`
 			DependentPackagesURL string `json:"dependent_packages_url"`
 			Metadata             any    `json:"metadata"`
+			RiskFlags            []struct {
+				ID string `json:"id"`
+				// Evidence is not stored on the row; it stays in scan.Report
+				// so the analyst sees why a flag was raised without a second
+				// JSON column to keep in sync.
+				Evidence string `json:"evidence"`
+			} `json:"risk_flags"`
 		} `json:"packages"`
 	}
 	if err := json.Unmarshal([]byte(report), &result); err != nil {
@@ -164,6 +171,11 @@ func (w *Worker) parsePackagesOutput(scan *db.Scan, report string, emit func(Eve
 				row.Metadata = string(b)
 			}
 		}
+		flagIDs := make([]string, 0, len(p.RiskFlags))
+		for _, f := range p.RiskFlags {
+			flagIDs = append(flagIDs, f.ID)
+		}
+		row.RiskFlags = packageRiskFlags(emit, p.Name, flagIDs)
 		rows = append(rows, row)
 	}
 	// Replace the prior row set atomically: a failed insert after the
@@ -185,6 +197,19 @@ func (w *Worker) parsePackagesOutput(scan *db.Scan, report string, emit func(Eve
 	emit(Event{Kind: KindText, Text: fmt.Sprintf("saved %d package(s)", len(rows))})
 	w.reconcileSubprojectLinksIfEnabled(scan.RepositoryID)
 	return nil
+}
+
+// packageRiskFlags validates the risk-flag ids the skill reported for one
+// package and returns them in the comma-joined form Package.RiskFlags stores.
+// An unknown id is dropped with a warning rather than failing the scan: the
+// rest of the package row is still accurate, while a model inventing a
+// sixth flag name should not cost the repository its whole package set.
+func packageRiskFlags(emit func(Event), packageName string, ids []string) string {
+	kept, dropped := db.NormalisePackageRiskFlags(ids)
+	if len(dropped) > 0 {
+		emit(Event{Kind: KindText, Text: fmt.Sprintf("packages: dropping unknown risk flag(s) %s for %s", strings.Join(dropped, ", "), packageName)})
+	}
+	return strings.Join(kept, ",")
 }
 
 // parseAdvisoriesOutput replaces Advisory rows for the scan's repository.

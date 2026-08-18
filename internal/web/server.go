@@ -343,10 +343,11 @@ func New(gdb *gorm.DB, q *queue.Queue, log *slog.Logger, broker *Broker, w *work
 			}
 			return m
 		},
-		"list":     func(xs ...string) []string { return xs },
-		"contains": slices.Contains[[]string, string],
-		"len64":    tmplLen64,
-		"sortkey":  sortKey,
+		"list":      func(xs ...string) []string { return xs },
+		"contains":  slices.Contains[[]string, string],
+		"len64":     tmplLen64,
+		"sortkey":   sortKey,
+		"riskflags": db.PackageRiskFlags,
 		"cwename": func(id string) string {
 			if _, c, ok := LookupCWE(id); ok {
 				return c.Name
