@@ -1532,7 +1532,7 @@ func preMigrate(gdb *gorm.DB) error {
 	// true one-shot migration: once it exists there can be no duplicates left
 	// to find, and rescanning the table on every boot would be wasted work.
 	if m.HasTable(&FindingReference{}) && !m.HasIndex(&FindingReference{}, findingRefURLIndex) {
-		if err := mergeDuplicateFindingReferences(gdb); err != nil {
+		if err := mergeDuplicateFindingReferences(gdb, findingRefMergeBatch); err != nil {
 			return fmt.Errorf("merge duplicate finding references: %w", err)
 		}
 	}
@@ -1545,7 +1545,9 @@ const findingRefURLIndex = "idx_finding_ref_url"
 
 // findingRefMergeBatch bounds how many findings one merge pass holds in memory
 // and how many ids one delete binds. The work is keyed by finding, so paging on
-// finding_id never splits a group across batches.
+// finding_id never splits a group across batches. It is passed in rather than
+// read from here so a test can force the paging a production-sized batch would
+// never reach.
 const findingRefMergeBatch = 500
 
 // mergeDuplicateFindingReferences collapses every (finding_id, url) group in
@@ -1570,14 +1572,14 @@ const findingRefMergeBatch = 500
 //
 // The whole merge runs in one transaction, so a failure leaves the table as it
 // was rather than half-collapsed.
-func mergeDuplicateFindingReferences(gdb *gorm.DB) error {
+func mergeDuplicateFindingReferences(gdb *gorm.DB, batch int) error {
 	return gdb.Transaction(func(tx *gorm.DB) error {
 		var after uint
 		for {
 			var findingIDs []uint
 			err := tx.Model(&FindingReference{}).
 				Where("finding_id > ?", after).
-				Distinct().Order("finding_id").Limit(findingRefMergeBatch).
+				Distinct().Order("finding_id").Limit(batch).
 				Pluck("finding_id", &findingIDs).Error
 			if err != nil {
 				return fmt.Errorf("page finding ids: %w", err)
@@ -1585,7 +1587,7 @@ func mergeDuplicateFindingReferences(gdb *gorm.DB) error {
 			if len(findingIDs) == 0 {
 				return nil
 			}
-			if err := mergeFindingReferencePage(tx, findingIDs); err != nil {
+			if err := mergeFindingReferencePage(tx, findingIDs, batch); err != nil {
 				return err
 			}
 			after = findingIDs[len(findingIDs)-1]
@@ -1594,7 +1596,7 @@ func mergeDuplicateFindingReferences(gdb *gorm.DB) error {
 }
 
 // mergeFindingReferencePage merges the references of one page of findings.
-func mergeFindingReferencePage(tx *gorm.DB, findingIDs []uint) error {
+func mergeFindingReferencePage(tx *gorm.DB, findingIDs []uint, batch int) error {
 	var rows []FindingReference
 	err := tx.Select("id", "finding_id", "url", "tags", "summary").
 		Where("finding_id IN ?", findingIDs).
@@ -1609,7 +1611,7 @@ func mergeFindingReferencePage(tx *gorm.DB, findingIDs []uint) error {
 			return fmt.Errorf("update reference %d: %w", s.ID, err)
 		}
 	}
-	for chunk := range slices.Chunk(drop, findingRefMergeBatch) {
+	for chunk := range slices.Chunk(drop, batch) {
 		if err := tx.Where("id IN ?", chunk).Delete(&FindingReference{}).Error; err != nil {
 			return fmt.Errorf("delete duplicate references: %w", err)
 		}

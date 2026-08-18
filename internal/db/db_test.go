@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -329,9 +330,11 @@ func TestPreMigrate_renamesSBOMPackageRepositoryID(t *testing.T) {
 // get back to what an install written before #868 holds, then lets seed fill
 // finding_references with the duplicates such an install could accumulate.
 // Reopening the file is what puts preMigrate to work.
-func legacyFindingReferenceDB(t *testing.T, seed func(gdb *gorm.DB, findingA, findingB uint)) string {
+// newFindingReferenceDB opens a database at path, seeds a repository, a scan
+// and n findings, then drops the unique index so the caller can write the
+// duplicate rows a pre-#868 install could hold. The returned handle stays open.
+func newFindingReferenceDB(t *testing.T, path string, n int) (*gorm.DB, []uint) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "old.db")
 	gdb, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -344,9 +347,13 @@ func legacyFindingReferenceDB(t *testing.T, seed func(gdb *gorm.DB, findingA, fi
 	if err := gdb.Create(&scan).Error; err != nil {
 		t.Fatal(err)
 	}
-	findings := []Finding{
-		{ScanID: scan.ID, RepositoryID: repo.ID, FindingID: "F1", Title: "a", Severity: "High", Status: FindingNew},
-		{ScanID: scan.ID, RepositoryID: repo.ID, FindingID: "F2", Title: "b", Severity: "Low", Status: FindingNew},
+	findings := make([]Finding, 0, n)
+	for i := range n {
+		findings = append(findings, Finding{
+			ScanID: scan.ID, RepositoryID: repo.ID,
+			FindingID: fmt.Sprintf("F%d", i+1), Title: fmt.Sprintf("f%d", i+1),
+			Severity: "High", Status: FindingNew,
+		})
 	}
 	if err := gdb.Create(&findings).Error; err != nil {
 		t.Fatal(err)
@@ -354,7 +361,18 @@ func legacyFindingReferenceDB(t *testing.T, seed func(gdb *gorm.DB, findingA, fi
 	if err := gdb.Migrator().DropIndex(&FindingReference{}, findingRefURLIndex); err != nil {
 		t.Fatalf("drop %s: %v", findingRefURLIndex, err)
 	}
-	seed(gdb, findings[0].ID, findings[1].ID)
+	ids := make([]uint, 0, n)
+	for _, f := range findings {
+		ids = append(ids, f.ID)
+	}
+	return gdb, ids
+}
+
+func legacyFindingReferenceDB(t *testing.T, seed func(gdb *gorm.DB, findingA, findingB uint)) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "old.db")
+	gdb, ids := newFindingReferenceDB(t, path, 2)
+	seed(gdb, ids[0], ids[1])
 	sqlDB, err := gdb.DB()
 	if err != nil {
 		t.Fatal(err)
@@ -384,6 +402,49 @@ func findingReferencesFor(t *testing.T, gdb *gorm.DB, findingID uint) []FindingR
 		t.Fatalf("load references: %v", err)
 	}
 	return refs
+}
+
+// The merge pages by finding id, so a database holding more findings than one
+// batch must still collapse every group. No other fixture here comes close to
+// the production batch of 500, which would leave the `finding_id > ?` advance
+// and the claim that paging never splits a group untested: a regression in
+// either loops forever or leaves duplicates behind for AutoMigrate to trip on.
+func TestMergeDuplicateFindingReferences_pagesAcrossBatches(t *testing.T) {
+	const (
+		findings = 5
+		batch    = 2
+	)
+	gdb, ids := newFindingReferenceDB(t, filepath.Join(t.TempDir(), "old.db"), findings)
+	rows := make([]FindingReference, 0, 2*findings)
+	for i, id := range ids {
+		url := fmt.Sprintf("https://example.com/advisory/%d", i)
+		// Two rows per finding for one URL, each carrying half the metadata,
+		// so a page that merged the wrong group is visible in the result.
+		rows = append(rows,
+			FindingReference{ID: uint(2*i + 1), FindingID: id, URL: url, Tags: "cve"},
+			FindingReference{ID: uint(2*i + 2), FindingID: id, URL: url, Summary: fmt.Sprintf("summary %d", i)},
+		)
+	}
+	seedFindingReferences(t, gdb, rows)
+
+	if err := mergeDuplicateFindingReferences(gdb, batch); err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+
+	for i, id := range ids {
+		got := findingReferencesFor(t, gdb, id)
+		if len(got) != 1 {
+			t.Fatalf("finding %d kept %d references, want 1", id, len(got))
+		}
+		wantURL := fmt.Sprintf("https://example.com/advisory/%d", i)
+		wantSummary := fmt.Sprintf("summary %d", i)
+		if got[0].ID != uint(2*i+1) || got[0].URL != wantURL {
+			t.Errorf("finding %d survivor = %+v, want the lowest id holding %s", id, got[0], wantURL)
+		}
+		if got[0].Tags != "cve" || got[0].Summary != wantSummary {
+			t.Errorf("finding %d metadata = tags %q summary %q, want cve / %q", id, got[0].Tags, got[0].Summary, wantSummary)
+		}
+	}
 }
 
 func TestPreMigrate_mergesDuplicateFindingReferences(t *testing.T) {

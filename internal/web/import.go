@@ -504,9 +504,16 @@ func commKey(c db.FindingCommunication) string {
 // refKey is the URL alone, unlike its siblings. A reference is identified by
 // where it points: (finding_id, url) is unique in the schema, so a re-import
 // carrying the same URL under different tags is the same row, and keying on the
-// metadata too would let it through to an insert the database then rejects. The
-// first spelling of a URL wins; a bundle cannot rewrite a reference's metadata
-// by re-importing it.
+// metadata too would let it through to an insert the database then rejects.
+//
+// The first spelling of a URL wins, so a bundle cannot rewrite a reference's
+// metadata by re-importing it. That is deliberately the opposite of
+// db.AddFindingReference, where the last non-empty write wins. A bundle is a
+// snapshot of another instance at one moment rather than an enrichment source,
+// and import treats every child record the same way: notes and communications
+// dedupe on their content too, without updating what is already stored. Routing
+// references alone through the helper would make them the one child record an
+// import can rewrite, which is a sharper inconsistency than the one it fixes.
 func refKey(r db.FindingReference) string {
 	return r.URL
 }
