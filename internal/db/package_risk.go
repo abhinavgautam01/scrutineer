@@ -50,20 +50,6 @@ func PackageRiskFlagLabel(id string) string {
 	return id
 }
 
-// PackageRiskFlagLabels maps a list of risk-flag ids to their display
-// labels. Returns nil for empty input, consistent with the other helpers in
-// this file.
-func PackageRiskFlagLabels(ids []string) []string {
-	if len(ids) == 0 {
-		return nil
-	}
-	labels := make([]string, len(ids))
-	for i, id := range ids {
-		labels[i] = PackageRiskFlagLabel(id)
-	}
-	return labels
-}
-
 // NormalisePackageRiskFlags validates and canonically orders the risk-flag
 // ids the packages skill reported for one package. kept holds the known ids
 // in packageRiskFlagOrder, deduped, ready to be comma-joined (no space) into

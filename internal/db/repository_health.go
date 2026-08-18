@@ -146,7 +146,11 @@ func healthSummary(archived bool, pushedAt *time.Time, age, releaseAge time.Dura
 		parts = append(parts, fmt.Sprintf("last release %s ago", healthAge(releaseAge)))
 	}
 	if len(assessment.RiskFlags) > 0 {
-		parts = append(parts, "risk flags: "+strings.Join(PackageRiskFlagLabels(assessment.RiskFlags), ", "))
+		labels := make([]string, len(assessment.RiskFlags))
+		for i, id := range assessment.RiskFlags {
+			labels[i] = PackageRiskFlagLabel(id)
+		}
+		parts = append(parts, "risk flags: "+strings.Join(labels, ", "))
 	}
 	return strings.Join(parts, "; ")
 }

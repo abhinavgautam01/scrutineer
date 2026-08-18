@@ -77,16 +77,6 @@ func TestPackageRiskFlagLabel(t *testing.T) {
 			}
 		})
 	}
-
-	gotList := PackageRiskFlagLabels([]string{"single_maintainer", "unknown_id"})
-	wantList := []string{"single maintainer", "unknown_id"}
-	if !reflect.DeepEqual(gotList, wantList) {
-		t.Errorf("PackageRiskFlagLabels = %#v, want %#v", gotList, wantList)
-	}
-
-	if got := PackageRiskFlagLabels(nil); got != nil {
-		t.Errorf("PackageRiskFlagLabels(nil) = %#v, want nil", got)
-	}
 }
 
 func TestPackageRiskFlags(t *testing.T) {
