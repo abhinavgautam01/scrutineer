@@ -158,6 +158,49 @@ func TestCapScannerResult_missingRuleIDGroupsByTitle(t *testing.T) {
 	}
 }
 
+// A code-scanning CSV export puts the per-alert Finding URL in RuleID, so every
+// row carries a distinct id for the same underlying rule. Keying on it straight
+// would leave the per-rule cap inert for that whole format.
+func TestCapScannerResult_perAlertURLRuleIDGroupsByTitle(t *testing.T) {
+	var findings []ingest.Finding
+	for i := range importPerRuleCap + 3 {
+		findings = append(findings, ingest.Finding{
+			RuleID:   fmt.Sprintf("https://github.com/example/widget/security/code-scanning/%d", i),
+			Title:    "Hardcoded credential",
+			Location: fmt.Sprintf("src/f%d.go:1", i),
+		})
+	}
+	bounded, caps := capScannerResult(ingest.Result{Tool: "github.com", Findings: findings})
+	if len(bounded.Findings) != importPerRuleCap {
+		t.Fatalf("kept %d findings, want %d", len(bounded.Findings), importPerRuleCap)
+	}
+	if caps.DroppedPerRule != 3 {
+		t.Errorf("DroppedPerRule = %d, want 3", caps.DroppedPerRule)
+	}
+}
+
+// A rule id that is not a URL still wins over the title, so two rules sharing a
+// title keep their own budgets.
+func TestCapScannerResult_ruleIDWinsOverSharedTitle(t *testing.T) {
+	var findings []ingest.Finding
+	for _, rule := range []string{"js/xss", "py/xss"} {
+		for i := range importPerRuleCap {
+			findings = append(findings, ingest.Finding{
+				RuleID:   rule,
+				Title:    "Cross-site scripting",
+				Location: fmt.Sprintf("src/%s-%d.go:1", rule, i),
+			})
+		}
+	}
+	bounded, caps := capScannerResult(ingest.Result{Tool: "codeql", Findings: findings})
+	if len(bounded.Findings) != 2*importPerRuleCap {
+		t.Fatalf("kept %d findings, want %d", len(bounded.Findings), 2*importPerRuleCap)
+	}
+	if caps.DroppedPerRule != 0 {
+		t.Errorf("DroppedPerRule = %d, want 0", caps.DroppedPerRule)
+	}
+}
+
 // sarifHit is one synthetic SARIF result: which rule fired and where.
 type sarifHit struct {
 	rule     string
@@ -165,11 +208,10 @@ type sarifHit struct {
 	line     int
 }
 
-// sarifBody renders hits as a one-run SARIF 2.1.0 document, declaring a rule
-// for every distinct rule id so the parser resolves titles the way a real
-// scanner report does.
-func sarifBody(t *testing.T, repoURL string, hits []sarifHit) string {
-	t.Helper()
+// sarifRun renders hits as one SARIF run object, declaring a rule for every
+// distinct rule id so the parser resolves titles the way a real scanner
+// report does.
+func sarifRun(repoURL string, hits []sarifHit) map[string]any {
 	declared := map[string]bool{}
 	rules := []any{}
 	results := []any{}
@@ -198,21 +240,41 @@ func sarifBody(t *testing.T, repoURL string, hits []sarifHit) string {
 			}},
 		})
 	}
+	return map[string]any{
+		"tool": map[string]any{"driver": map[string]any{"name": "NoisyScanner", "rules": rules}},
+		"versionControlProvenance": []any{map[string]any{
+			"repositoryUri": repoURL, "revisionId": "abc123",
+		}},
+		"results": results,
+	}
+}
+
+// sarifBodyRuns renders one SARIF 2.1.0 document with one run per element of
+// runs, so a caller can build a multi-run document without duplicating the
+// per-run JSON shape.
+func sarifBodyRuns(t *testing.T, repoURL string, runs [][]sarifHit) string {
+	t.Helper()
+	runObjs := make([]any, 0, len(runs))
+	for _, hits := range runs {
+		runObjs = append(runObjs, sarifRun(repoURL, hits))
+	}
 	body, err := json.Marshal(map[string]any{
 		"$schema": "https://json.schemastore.org/sarif-2.1.0.json",
 		"version": "2.1.0",
-		"runs": []any{map[string]any{
-			"tool": map[string]any{"driver": map[string]any{"name": "NoisyScanner", "rules": rules}},
-			"versionControlProvenance": []any{map[string]any{
-				"repositoryUri": repoURL, "revisionId": "abc123",
-			}},
-			"results": results,
-		}},
+		"runs":    runObjs,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return string(body)
+}
+
+// sarifBody renders hits as a one-run SARIF 2.1.0 document, declaring a rule
+// for every distinct rule id so the parser resolves titles the way a real
+// scanner report does.
+func sarifBody(t *testing.T, repoURL string, hits []sarifHit) string {
+	t.Helper()
+	return sarifBodyRuns(t, repoURL, [][]sarifHit{hits})
 }
 
 // noisySARIF is one rule firing n times at distinct locations.
@@ -297,6 +359,47 @@ func TestHandleImportSARIF_capsOneNoisyRule(t *testing.T) {
 	s.DB.First(&scan, got.ScanID)
 	if scan.FindingsCount != importPerRuleCap {
 		t.Errorf("scan.FindingsCount = %d, want %d", scan.FindingsCount, importPerRuleCap)
+	}
+}
+
+// TestHandleImportSARIF_capsEachRunSeparately proves the per-rule budget
+// resets for every SARIF run rather than being shared across the upload. If
+// the cap were tracked once for the whole upload instead of once per parsed
+// result, the second run would keep nothing since the first run would already
+// have exhausted the budget: this test is what pins the per-result decision.
+func TestHandleImportSARIF_capsEachRunSeparately(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	const fired = importPerRuleCap + 4
+	runA := make([]sarifHit, 0, fired)
+	runB := make([]sarifHit, 0, fired)
+	for i := range fired {
+		// Distinct locations per run so the second run's findings do not
+		// fingerprint-dedupe against the first run's, which would confuse the
+		// created counts.
+		runA = append(runA, sarifHit{rule: "js/xss", location: fmt.Sprintf("src/a%d.go", i), line: i + 1})
+		runB = append(runB, sarifHit{rule: "js/xss", location: fmt.Sprintf("src/b%d.go", i), line: i + 1})
+	}
+	body := sarifBodyRuns(t, "https://github.com/example/widget", [][]sarifHit{runA, runB})
+	w := postImport(t, s, "/api/v1/import?revalidate=false", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var resp importCapResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Results) != 2 {
+		t.Fatalf("results = %d, want 2", len(resp.Results))
+	}
+	for i, got := range resp.Results {
+		if got.Created != importPerRuleCap || got.Accepted != importPerRuleCap {
+			t.Errorf("run %d: created=%d accepted=%d, want %d/%d", i, got.Created, got.Accepted, importPerRuleCap, importPerRuleCap)
+		}
+		if got.DroppedPerRule != 4 {
+			t.Errorf("run %d: dropped_per_rule = %d, want 4", i, got.DroppedPerRule)
+		}
 	}
 }
 
@@ -394,8 +497,9 @@ func TestHandleImportMinimalJSON_isNotCapped(t *testing.T) {
 }
 
 func TestImportResults_capsAreChosenByFormat(t *testing.T) {
-	// The same parsed result, imported once as raw scanner output and once as
-	// a curated report: only the format decides whether the caps bite.
+	// The same parsed result, imported once per raw-scanner-output format
+	// (SARIF, CSV, markdown) and once as a curated report (minimal JSON): only
+	// the format decides whether the caps bite.
 	res := ingest.Result{
 		RepoURL:  "https://example.com/r",
 		Tool:     "NoisyScanner",
@@ -407,6 +511,8 @@ func TestImportResults_capsAreChosenByFormat(t *testing.T) {
 		wantDropped int
 	}{
 		{ingest.FormatSARIF, importPerRuleCap, 4},
+		{ingest.FormatCSV, importPerRuleCap, 4},
+		{ingest.FormatMarkdown, importPerRuleCap, 4},
 		{ingest.FormatMinimal, importPerRuleCap + 4, 0},
 	}
 	for _, tc := range cases {

@@ -1,20 +1,29 @@
 package web
 
 import (
-	"cmp"
+	"strings"
 
 	"scrutineer/internal/ingest"
 )
 
 // An externally-produced scanner report is unbounded. One over-eager CodeQL or
-// Semgrep rule can carry thousands of hits against a single repository, and the
-// import path turns every one of them into a Finding row plus a revalidate job
-// that chains into verify. The caps below bound that blast radius at the door.
+// Semgrep rule can carry thousands of hits against a single repository, so the
+// import path would turn each one into a Finding row plus a revalidate job
+// that chains into verify. The caps below bound that.
 //
-// They apply only to deterministic scanner output (SARIF today), never to
-// curated input: scrutineer's own sharing bundle, a hand-written minimal-JSON
-// report, and the CSV/markdown exports an analyst assembled are all somebody's
-// considered list of findings, not raw rule output, so they import whole.
+// The caps are per parsed result, which is one repository's findings from one
+// tool: a multi-run SARIF file is bounded per run while a multi-repo CSV is
+// bounded per repository, so one upload's ceiling is importResultCap times the
+// number of results it parses to. The budget is not shared across the upload
+// on purpose: one repository's noise would otherwise starve another
+// repository's findings out of the same file, which is worse than importing
+// both bounded.
+//
+// They apply to the formats carrying raw scanner output: SARIF, the
+// code-scanning CSV export and the hosted-scanner markdown export. Curated
+// input imports whole because it is somebody's considered list rather than a
+// rule dump: scrutineer's own sharing bundle, a hand-written minimal-JSON
+// report plus the ingest skill's fallback for unrecognised payloads.
 const (
 	// importPerRuleCap is the most findings one rule may contribute to a
 	// single imported result. Five hits are enough to show what a rule is
@@ -25,6 +34,18 @@ const (
 	// for reports that spray a thousand distinct rules.
 	importResultCap = 50
 )
+
+// capsApplyTo reports whether a parsed format carries raw scanner output and
+// therefore gets bounded. The rationale above says which formats are excluded
+// and why.
+func capsApplyTo(format ingest.Format) bool {
+	switch format {
+	case ingest.FormatSARIF, ingest.FormatCSV, ingest.FormatMarkdown:
+		return true
+	default:
+		return false
+	}
+}
 
 // importCapStats records what the caps did to one result so the import
 // response and the server log can tell a clean scan from a bounded one.
@@ -67,12 +88,7 @@ func capScannerResult(res ingest.Result) (ingest.Result, importCapStats) {
 	accepted := make([]ingest.Finding, 0, min(len(res.Findings), importResultCap))
 	perRule := make(map[string]int, len(res.Findings))
 	for _, f := range res.Findings {
-		// SARIF does not require a result to name its ruleId. The title stands
-		// in when one is missing: it is derived from the rule whenever the
-		// parser resolved one, and where it is not, grouping by it is still
-		// closer to per-rule than lumping every anonymous hit into a single
-		// bucket that the fifth finding would close.
-		key := cmp.Or(f.RuleID, f.Title)
+		key := capKey(f)
 		switch {
 		case perRule[key] >= importPerRuleCap:
 			stats.DroppedPerRule++
@@ -86,4 +102,25 @@ func capScannerResult(res ingest.Result) (ingest.Result, importCapStats) {
 	stats.Accepted = len(accepted)
 	res.Findings = accepted
 	return res, stats
+}
+
+// capKey picks the most rule-like identifier a finding offers, since the
+// per-rule cap is only worth anything when its key repeats across a rule's
+// hits.
+//
+// Two producers fail to supply one. SARIF does not require a result to name
+// its ruleId, while the CSV parser fills RuleID with the per-alert Finding URL
+// (see internal/ingest/csv.go), which is unique per row, so keying on it
+// straight would put every CSV hit in its own bucket and leave the per-rule
+// cap inert for that whole format. Both fall back to the title: in SARIF it is
+// the rule's short description whenever the parser resolved a rule, in a
+// code-scanning CSV it is the alert's Name or Category column, so in each case
+// it is the nearest thing to a rule name the input carries. Where it is not,
+// grouping by it still beats lumping every anonymous hit into one bucket that
+// the fifth finding would close.
+func capKey(f ingest.Finding) string {
+	if f.RuleID != "" && !strings.Contains(f.RuleID, "://") {
+		return f.RuleID
+	}
+	return f.Title
 }

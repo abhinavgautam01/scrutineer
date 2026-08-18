@@ -1209,10 +1209,11 @@ paths:
         field, the CSV `Repository` column, the markdown location link);
         when absent the caller must pass `?repo=`. Re-importing the same
         report dedupes by fingerprint and bumps `seen_count` rather than
-        inserting duplicates. SARIF is raw scanner output and is bounded on
-        the way in: at most 5 findings per rule and 50 per result are
-        imported, in input order, with the drop counts reported in the
-        response. Every other format is curated input and imports whole.
+        inserting duplicates. The scanner exports (SARIF, CSV, markdown)
+        are raw rule output and are bounded on the way in: at most 5
+        findings per rule and 50 per result are imported, in input order,
+        with the drop counts reported in the response. Curated input
+        imports whole.
         A body matching no supported format is
         routed to the `ingest` skill instead when `?repo=` is supplied:
         the raw payload is staged into the skill workspace and a scan is
@@ -1826,8 +1827,9 @@ components:
                 type: integer
                 description: |
                   Findings that survived the scanner caps and were imported.
-                  Equal to `received` for every format except SARIF, which is
-                  capped at 5 findings per rule and 50 per result.
+                  Equal to `received` for the curated formats. A scanner
+                  export (SARIF, CSV, markdown) is capped at 5 findings per
+                  rule and 50 per result.
               dropped_per_rule:
                 type: integer
                 description: Findings rejected by the per-rule cap.

@@ -201,7 +201,7 @@ func (s *Server) importResults(results []ingest.Result, format ingest.Format, re
 	err := s.DB.Transaction(func(tx *gorm.DB) error {
 		for _, res := range results {
 			bounded, caps := res, uncappedImportStats(res)
-			if format == ingest.FormatSARIF {
+			if capsApplyTo(format) {
 				bounded, caps = capScannerResult(res)
 			}
 			outcome, err := s.importResultWith(tx, bounded, repoOverride)

@@ -31,7 +31,7 @@ The request body is the report itself, up to 16 MiB. The response is JSON:
 
 `created` counts findings inserted on this call; `observed` counts findings that already existed with the same fingerprint and had their `seen_count` bumped. A SARIF file with several runs, or a CSV grouping rows under several `Repository` slugs, returns one result per repository.
 
-`received` counts the findings the parser produced, `accepted` counts those that survived the scanner caps described below, and `dropped_per_rule` plus `dropped_total_cap` say how many each cap rejected. Only SARIF is capped, so every other format reports `received` equal to `accepted` and both drop counts zero. `created` plus `observed` can still be lower than `accepted` because identical findings within one report collapse onto a single fingerprint before anything is written.
+`received` counts the findings the parser produced, `accepted` counts those that survived the scanner caps described below, while `dropped_per_rule` plus `dropped_total_cap` say how many each cap rejected. Only the scanner-export formats are capped, so a curated format reports `received` equal to `accepted` with both drop counts zero. `created` plus `observed` can still be lower than `accepted` because identical findings within one report collapse onto a single fingerprint before anything is written.
 
 When the report carries no repository (most pentest writeups, the minimal-JSON shape with `repository: ""`), pass `?repo=<https-url>`:
 
@@ -45,16 +45,18 @@ Re-importing the same report against the same repository upserts: findings with 
 
 ## Bounded scanner imports
 
-A SARIF report is raw scanner output, and raw scanner output is unbounded. One over-eager CodeQL or Semgrep rule can fire thousands of times against a single repository, and without a limit every one of those hits becomes a `Finding` row plus a `revalidate` job that chains into `verify`. Two caps bound that at the door, applied per result (so a multi-run SARIF file is capped per run, not once for the whole upload):
+A scanner export is raw scanner output, which is unbounded. One over-eager CodeQL or Semgrep rule can fire thousands of times against a single repository, so without a limit every one of those hits becomes a `Finding` row plus a `revalidate` job that chains into `verify`. Two caps bound that:
 
 | Cap | Value | Meaning |
 |---|---|---|
 | Per rule | 5 | The most findings one `rule_id` may contribute to one result. |
 | Per result | 50 | The most findings one result may contribute in total, whatever the spread of rules. |
 
-The caps apply only to SARIF. Every other format is somebody's considered list of findings rather than raw rule output: a hand-written minimal-JSON report, a CSV or markdown export an analyst assembled, and scrutineer's own [sharing bundle](encrypted-sharing.md) all import whole. The `ingest` skill fallback for unrecognised payloads is likewise uncapped, since its output is a model-normalised report rather than a rule dump.
+Both are per result, which is one repository's findings from one tool: a multi-run SARIF file is capped per run while a multi-repo CSV is capped per repository, so one upload's ceiling is the per-result cap times the number of results it parses to. The budget is deliberately not shared across the upload, since one repository's noise would otherwise starve another repository's findings out of the same file.
 
-Selection is by input order: the first five hits of a rule and the first fifty findings of a result are the ones kept. The same report therefore always truncates the same way, so re-uploading it after a fix changes nothing about which findings you see, and an operator can say exactly which hits were dropped by reading the report top to bottom. A SARIF result that carries no `ruleId` is grouped by its title instead, which is the rule's short description whenever the parser could resolve a rule for it; the per-result cap backstops the case where it could not.
+The caps apply to the formats carrying raw scanner output: SARIF plus the code-scanning CSV export and the hosted-scanner markdown export. Every other format is somebody's considered list of findings rather than raw rule output: a hand-written minimal-JSON report and scrutineer's own [sharing bundle](encrypted-sharing.md) both import whole. The `ingest` skill fallback for unrecognised payloads is likewise uncapped, since its output is a model-normalised report rather than a rule dump.
+
+Selection is by input order: the first five hits of a rule and the first fifty findings of a result are the ones kept. The same report therefore always truncates the same way, so re-uploading it after a fix changes nothing about which findings you see while an operator can say exactly which hits were dropped by reading the report top to bottom. A SARIF result that carries no `ruleId` is grouped by its title instead, which is the rule's short description whenever the parser could resolve a rule for it; the per-result cap backstops the case where it could not. A CSV export carries the per-alert Finding URL in `rule_id`, which is unique per row, so it is ignored as a grouping key for the same reason and the alert's `Name` or `Category` column stands in; keying on the URL straight would put every row in its own bucket and leave the per-rule cap inert for that whole format.
 
 A finding both caps would reject is counted against the per-rule cap only, so `dropped_per_rule` plus `dropped_total_cap` equals `received` minus `accepted` rather than double-counting. When either count is non-zero the server logs one warning line per bounded result, carrying the same counters and the cap values in force; it never logs a line per dropped finding.
 
@@ -120,7 +122,7 @@ Per-result mapping:
 
 Severity defaulting in SARIF is deliberately conservative: when the producer left both fields empty, scrutineer stores an empty severity and the UI shows it as such rather than guessing.
 
-SARIF is the one format the import caps apply to; see [Bounded scanner imports](#bounded-scanner-imports) above for what a run contributes at most and how the truncation is reported.
+The import caps apply to SARIF; see [Bounded scanner imports](#bounded-scanner-imports) above for what a run contributes at most and how the truncation is reported.
 
 ### Minimal JSON
 
