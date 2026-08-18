@@ -29,6 +29,41 @@ var packageRiskFlagOrder = []PackageRiskFlag{
 	PackageRiskMaintainerDomainExpired,
 }
 
+// packageRiskFlagLabels maps each known flag id to the phrase shown on the
+// package page and in health summaries. The stored column, the API and the
+// skill contract all keep the ids, so only display goes through here.
+var packageRiskFlagLabels = map[PackageRiskFlag]string{
+	PackageRiskSingleMaintainer:        "single maintainer",
+	PackageRiskNoSecurityPolicy:        "no security policy",
+	PackageRiskNativeExtension:         "ships native code",
+	PackageRiskStaleRelease:            "no recent release",
+	PackageRiskMaintainerDomainExpired: "maintainer domain expired",
+}
+
+// PackageRiskFlagLabel returns the display label for a risk-flag id, falling
+// back to the id itself when there is none, so a value written before a
+// label existed still renders.
+func PackageRiskFlagLabel(id string) string {
+	if label, ok := packageRiskFlagLabels[PackageRiskFlag(id)]; ok {
+		return label
+	}
+	return id
+}
+
+// PackageRiskFlagLabels maps a list of risk-flag ids to their display
+// labels. Returns nil for empty input, consistent with the other helpers in
+// this file.
+func PackageRiskFlagLabels(ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	labels := make([]string, len(ids))
+	for i, id := range ids {
+		labels[i] = PackageRiskFlagLabel(id)
+	}
+	return labels
+}
+
 // NormalisePackageRiskFlags validates and canonically orders the risk-flag
 // ids the packages skill reported for one package. kept holds the known ids
 // in packageRiskFlagOrder, deduped, ready to be comma-joined (no space) into

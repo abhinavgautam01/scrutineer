@@ -397,12 +397,12 @@ func TestParsePackagesOutput_dropsUnknownRiskFlagAndWarns(t *testing.T) {
 	}
 	var warned bool
 	for _, e := range events {
-		if strings.Contains(e, "made_up_flag") {
+		if strings.Contains(e, "made_up_flag") && strings.Contains(e, row.Ecosystem) {
 			warned = true
 		}
 	}
 	if !warned {
-		t.Errorf("events = %v, want a warning naming the dropped flag", events)
+		t.Errorf("events = %v, want a warning naming the dropped flag and the ecosystem %q", events, row.Ecosystem)
 	}
 }
 

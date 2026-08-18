@@ -57,6 +57,38 @@ func TestNormalisePackageRiskFlags(t *testing.T) {
 	}
 }
 
+func TestPackageRiskFlagLabel(t *testing.T) {
+	tests := []struct {
+		id   string
+		want string
+	}{
+		{id: "single_maintainer", want: "single maintainer"},
+		{id: "no_security_policy", want: "no security policy"},
+		{id: "native_extension", want: "ships native code"},
+		{id: "stale_release", want: "no recent release"},
+		{id: "maintainer_domain_expired", want: "maintainer domain expired"},
+		{id: "unknown_id", want: "unknown_id"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.id, func(t *testing.T) {
+			if got := PackageRiskFlagLabel(tt.id); got != tt.want {
+				t.Errorf("PackageRiskFlagLabel(%q) = %q, want %q", tt.id, got, tt.want)
+			}
+		})
+	}
+
+	gotList := PackageRiskFlagLabels([]string{"single_maintainer", "unknown_id"})
+	wantList := []string{"single maintainer", "unknown_id"}
+	if !reflect.DeepEqual(gotList, wantList) {
+		t.Errorf("PackageRiskFlagLabels = %#v, want %#v", gotList, wantList)
+	}
+
+	if got := PackageRiskFlagLabels(nil); got != nil {
+		t.Errorf("PackageRiskFlagLabels(nil) = %#v, want nil", got)
+	}
+}
+
 func TestPackageRiskFlags(t *testing.T) {
 	tests := []struct {
 		name   string

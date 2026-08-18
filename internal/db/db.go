@@ -446,7 +446,7 @@ type Package struct {
 	// maintainer_domain_expired. The ids are validated and canonically
 	// ordered on write, so a stored value only ever names known flags. Each
 	// flag's evidence sentence stays in the scan report; promoting only the
-	// ids keeps health scoring and the package page free of JSON decoding.
+	// ids keeps the health summary and the package page free of JSON decoding.
 	RiskFlags string
 
 	CreatedAt time.Time

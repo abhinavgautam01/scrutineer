@@ -175,7 +175,7 @@ func (w *Worker) parsePackagesOutput(scan *db.Scan, report string, emit func(Eve
 		for _, f := range p.RiskFlags {
 			flagIDs = append(flagIDs, f.ID)
 		}
-		row.RiskFlags = packageRiskFlags(emit, p.Name, flagIDs)
+		row.RiskFlags = packageRiskFlags(emit, p.Name, row.Ecosystem, flagIDs)
 		rows = append(rows, row)
 	}
 	// Replace the prior row set atomically: a failed insert after the
@@ -204,10 +204,10 @@ func (w *Worker) parsePackagesOutput(scan *db.Scan, report string, emit func(Eve
 // An unknown id is dropped with a warning rather than failing the scan: the
 // rest of the package row is still accurate, while a model inventing a
 // sixth flag name should not cost the repository its whole package set.
-func packageRiskFlags(emit func(Event), packageName string, ids []string) string {
+func packageRiskFlags(emit func(Event), name, ecosystem string, ids []string) string {
 	kept, dropped := db.NormalisePackageRiskFlags(ids)
 	if len(dropped) > 0 {
-		emit(Event{Kind: KindText, Text: fmt.Sprintf("packages: dropping unknown risk flag(s) %s for %s", strings.Join(dropped, ", "), packageName)})
+		emit(Event{Kind: KindText, Text: fmt.Sprintf("packages: dropping unknown risk flag(s) %s for %s (%s)", strings.Join(dropped, ", "), name, ecosystem)})
 	}
 	return strings.Join(kept, ",")
 }

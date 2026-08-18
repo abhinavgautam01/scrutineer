@@ -348,6 +348,7 @@ func New(gdb *gorm.DB, q *queue.Queue, log *slog.Logger, broker *Broker, w *work
 		"len64":     tmplLen64,
 		"sortkey":   sortKey,
 		"riskflags": db.PackageRiskFlags,
+		"risklabel": db.PackageRiskFlagLabel,
 		"cwename": func(id string) string {
 			if _, c, ok := LookupCWE(id); ok {
 				return c.Name

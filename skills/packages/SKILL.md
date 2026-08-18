@@ -57,7 +57,7 @@ The five flags and how to check each:
 - `stale_release`: the latest release is more than eighteen months older than today. Compute it from the upstream `latest_release_published_at`.
 - `maintainer_domain_expired`: a maintainer contact's email domain no longer resolves.
 
-Omit a flag you could not check. An absent flag means "not checked or not found", never "checked and clean". Guessing is worse than silence here, because these ids feed the repository's health classification.
+Omit a flag you could not check. An absent flag means "not checked or not found", never "checked and clean". Guessing is worse than silence here, because an analyst reads every flag as something you actually verified.
 
 `./src` is the repository checkout, available to this skill, so the source-derived checks read from there. Under `--hardened` the DNS check for `maintainer_domain_expired` is unavailable, so that flag is simply omitted rather than guessed.
 

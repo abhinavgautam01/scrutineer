@@ -58,11 +58,28 @@ func TestAssessRepositoryHealth(t *testing.T) {
 			want:     RepositoryHealthZombie,
 		},
 		{
-			name:     "stale_release flag holds classification at stale despite a recent push",
+			name:     "release older than eighteen months holds classification at stale despite a recent push",
 			repo:     Repository{PushedAt: ptrTime(now.Add(-30 * 24 * time.Hour))},
-			packages: []Package{{RiskFlags: string(PackageRiskStaleRelease)}},
+			packages: []Package{{LatestReleaseAt: ptrTime(now.Add(-19 * 30 * 24 * time.Hour))}},
 			people:   []Maintainer{active},
 			want:     RepositoryHealthStale,
+		},
+		{
+			name: "monorepo stays active while one package still ships",
+			repo: Repository{PushedAt: ptrTime(now.Add(-30 * 24 * time.Hour))},
+			packages: []Package{
+				{LatestReleaseAt: ptrTime(now.Add(-19 * 30 * 24 * time.Hour))},
+				{LatestReleaseAt: ptrTime(now.Add(-30 * 24 * time.Hour))},
+			},
+			people: []Maintainer{active},
+			want:   RepositoryHealthActive,
+		},
+		{
+			name:     "stale_release flag alone does not move classification with a recent release",
+			repo:     Repository{PushedAt: ptrTime(now.Add(-30 * 24 * time.Hour))},
+			packages: []Package{{RiskFlags: string(PackageRiskStaleRelease), LatestReleaseAt: ptrTime(now.Add(-30 * 24 * time.Hour))}},
+			people:   []Maintainer{active},
+			want:     RepositoryHealthActive,
 		},
 		{
 			name: "missing evidence is unassessed",
@@ -101,6 +118,19 @@ func TestAssessRepositoryHealth_unionsAndOrdersRiskFlags(t *testing.T) {
 	}
 	if !strings.Contains(got.Summary, "risk flags:") {
 		t.Errorf("summary should mention risk flags, got %q", got.Summary)
+	}
+}
+
+func TestAssessRepositoryHealth_summaryNamesLastReleaseAge(t *testing.T) {
+	now := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	repo := Repository{PushedAt: ptrTime(now.Add(-30 * 24 * time.Hour))}
+	packages := []Package{{LatestReleaseAt: ptrTime(now.Add(-60 * 24 * time.Hour))}}
+	people := []Maintainer{{Status: MaintainerActive}}
+
+	got := AssessRepositoryHealth(repo, packages, people, now)
+
+	if !strings.Contains(got.Summary, "last release ") {
+		t.Errorf("summary should name the last release age, got %q", got.Summary)
 	}
 }
 
