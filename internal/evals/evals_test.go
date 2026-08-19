@@ -784,6 +784,103 @@ func TestMassAssignmentScenario(t *testing.T) {
 	}
 }
 
+func TestAPIMisuseScenario(t *testing.T) {
+	sc := mustLoadScenario(t, "../../evals/security-deep-dive-api-misuse.yaml")
+	report := `{"findings":[{
+  "title":"TLS verification disabled by default in fetch",
+  "cwe":"CWE-295",
+  "location":"client.py:5",
+  "trace":"fetch(url, verify=False) leaves context.verify_mode at ssl.CERT_NONE for a caller who passes nothing."
+}]}`
+	got, err := (HeuristicJudge{}).Judge(sc, report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("results = %d, want 3", len(got))
+	}
+	for _, result := range got {
+		if !result.Matched {
+			t.Fatalf("api-misuse assertion did not pass: %+v", result)
+		}
+	}
+
+	// The two helpers have identical bodies, so a run that reports the one
+	// whose default is safe is reacting to the opt-out rather than to the
+	// default. That is what the negative assertion exists to catch.
+	safeReport := `{"findings":[{
+  "title":"TLS verification can be turned off in fetch_pinned",
+  "cwe":"CWE-295",
+  "location":"client.py:14",
+  "trace":"fetch_pinned sets ssl.CERT_NONE when the caller passes verify=True explicitly inverted."
+}]}`
+	got, err = (HeuristicJudge{}).Judge(sc, safeReport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("safe results = %d, want 3", len(got))
+	}
+	if got[2].Kind != assertionShouldNotFind {
+		t.Fatalf("safe result kind = %q, want %q", got[2].Kind, assertionShouldNotFind)
+	}
+	if got[2].Matched {
+		t.Fatalf("safely defaulted helper unexpectedly passed should_not_find: %+v", got[2])
+	}
+}
+
+func TestConventionPrevalenceScenario(t *testing.T) {
+	sc := mustLoadScenario(t, "../../evals/security-deep-dive-convention.yaml")
+	// One finding for the reachable site, with the other eight named as the
+	// convention in prior_art. Citing them there must not read as reporting
+	// them, which is what keeps the convention write-up from tripping the
+	// negative assertion.
+	report := `{"findings":[{
+  "title":"SQL injection in search",
+  "cwe":"CWE-89",
+  "location":"search.py:11",
+  "trace":"flask.request.args supplies q, which reaches SELECT id FROM items through store.query.",
+  "prior_art":"grep -rn store.query finds 9 sites; the 8 in reports.py interpolate module constants."
+}]}`
+	got, err := (HeuristicJudge{}).Judge(sc, report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("results = %d, want 2", len(got))
+	}
+	for _, result := range got {
+		if !result.Matched {
+			t.Fatalf("convention assertion did not pass: %+v", result)
+		}
+	}
+
+	conventionReport := `{"findings":[{
+  "title":"SQL injection in search",
+  "cwe":"CWE-89",
+  "location":"search.py:11",
+  "trace":"flask.request.args supplies q, which reaches SELECT id FROM items through store.query."
+},{
+  "title":"SQL injection in active_accounts",
+  "cwe":"CWE-89",
+  "location":"reports.py:5",
+  "trace":"STATUS_ACTIVE is interpolated into the accounts query."
+}]}`
+	got, err = (HeuristicJudge{}).Judge(sc, conventionReport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("convention results = %d, want 2", len(got))
+	}
+	if got[1].Kind != assertionShouldNotFind {
+		t.Fatalf("convention result kind = %q, want %q", got[1].Kind, assertionShouldNotFind)
+	}
+	if got[1].Matched {
+		t.Fatalf("house-idiom site unexpectedly passed should_not_find: %+v", got[1])
+	}
+}
+
 func TestRunnerCountsMustNotContainFailure(t *testing.T) {
 	sc, err := LoadScenario("../../evals/security-deep-dive-sqli.yaml")
 	if err != nil {
