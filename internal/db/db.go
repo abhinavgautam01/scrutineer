@@ -1527,12 +1527,13 @@ func preMigrate(gdb *gorm.DB) error {
 	}
 	// FindingReference gained a unique (finding_id, url) index. Databases
 	// written before AddFindingReference deduplicated (#519, #865) can hold
-	// several rows for one URL, and AutoMigrate cannot build the index over
-	// them, so collapse them first. Gated on the index's absence so this is a
-	// true one-shot migration: once it exists there can be no duplicates left
-	// to find, and rescanning the table on every boot would be wasted work.
+	// several rows for one URL, so the duplicates are collapsed and the index
+	// is created together here, ahead of the AutoMigrate that would otherwise
+	// have built it. Gated on the index's absence so this is a true one-shot
+	// migration: once it exists there can be no duplicates left to find, so
+	// rescanning the table on every boot would be wasted work.
 	if m.HasTable(&FindingReference{}) && !m.HasIndex(&FindingReference{}, findingRefURLIndex) {
-		if err := mergeDuplicateFindingReferences(gdb, findingRefMergeBatch); err != nil {
+		if err := mergeAndIndexFindingReferences(gdb, findingRefMergeBatch); err != nil {
 			return fmt.Errorf("merge duplicate finding references: %w", err)
 		}
 	}
@@ -1550,9 +1551,9 @@ const findingRefURLIndex = "idx_finding_ref_url"
 // never reach.
 const findingRefMergeBatch = 500
 
-// mergeDuplicateFindingReferences collapses every (finding_id, url) group in
-// finding_references down to one row, so the unique index can be created over
-// the result.
+// mergeAndIndexFindingReferences collapses every (finding_id, url) group in
+// finding_references down to one row then creates the unique index over the
+// result, both in one transaction.
 //
 // The lowest id in a group survives, which keeps the reference a finding page
 // has always shown and makes the merge deterministic: the same database always
@@ -1570,29 +1571,48 @@ const findingRefMergeBatch = 500
 // writes today. A row whose URL is blank once trimmed is deleted rather than
 // kept, since it points nowhere and no writer can produce one any more.
 //
-// The whole merge runs in one transaction, so a failure leaves the table as it
-// was rather than half-collapsed.
-func mergeDuplicateFindingReferences(gdb *gorm.DB, batch int) error {
+// The merge and the index creation are one unit of work, which is what makes
+// the repair safe to interrupt. Leaving the index to AutoMigrate would commit
+// the deletions first and build the index in a later statement, so a schema
+// step that failed in between would return an error from Open having already
+// dropped rows the operator cannot get back. The index is the only reason those
+// rows were removed: either the table ends up collapsed and constrained, or it
+// ends up untouched. SQLite rolls DDL back with the rest of a transaction, so a
+// CREATE INDEX that fails takes the deletes with it. AutoMigrate then finds the
+// index already present and has nothing left to do for this table.
+func mergeAndIndexFindingReferences(gdb *gorm.DB, batch int) error {
 	return gdb.Transaction(func(tx *gorm.DB) error {
-		var after uint
-		for {
-			var findingIDs []uint
-			err := tx.Model(&FindingReference{}).
-				Where("finding_id > ?", after).
-				Distinct().Order("finding_id").Limit(batch).
-				Pluck("finding_id", &findingIDs).Error
-			if err != nil {
-				return fmt.Errorf("page finding ids: %w", err)
-			}
-			if len(findingIDs) == 0 {
-				return nil
-			}
-			if err := mergeFindingReferencePage(tx, findingIDs, batch); err != nil {
-				return err
-			}
-			after = findingIDs[len(findingIDs)-1]
+		if err := mergeFindingReferences(tx, batch); err != nil {
+			return err
 		}
+		if err := tx.Migrator().CreateIndex(&FindingReference{}, findingRefURLIndex); err != nil {
+			return fmt.Errorf("create %s: %w", findingRefURLIndex, err)
+		}
+		return nil
 	})
+}
+
+// mergeFindingReferences pages through the findings that own references and
+// collapses each page. The caller owns the transaction.
+func mergeFindingReferences(tx *gorm.DB, batch int) error {
+	var after uint
+	for {
+		var findingIDs []uint
+		err := tx.Model(&FindingReference{}).
+			Where("finding_id > ?", after).
+			Distinct().Order("finding_id").Limit(batch).
+			Pluck("finding_id", &findingIDs).Error
+		if err != nil {
+			return fmt.Errorf("page finding ids: %w", err)
+		}
+		if len(findingIDs) == 0 {
+			return nil
+		}
+		if err := mergeFindingReferencePage(tx, findingIDs, batch); err != nil {
+			return err
+		}
+		after = findingIDs[len(findingIDs)-1]
+	}
 }
 
 // mergeFindingReferencePage merges the references of one page of findings.

@@ -365,7 +365,7 @@ External interactions about a finding: emails, GHSA submissions, issue replies, 
 
 External URLs related to a finding. One URL is one row per finding, enforced by the unique index `idx_finding_ref_url` on `(finding_id, url)`. `AddFindingReference` reuses the existing row for a URL, so a later write carrying non-empty tags or a summary replaces what is stored rather than adding a row. Last non-empty write wins; an empty field on the incoming write leaves the stored one untouched. Whitespace is trimmed off all three fields before the lookup, so the same URL written with stray padding finds the row it already has.
 
-Databases written before the index existed are repaired on the next start: `preMigrate` collapses each `(finding_id, url)` group onto its lowest id, moves any tags and summary that only the removed rows carried onto the survivor, trims stored whitespace, then deletes any row left with no URL at all, so `AutoMigrate` can create the index over what remains. The pass is skipped once the index is present.
+Databases written before the index existed are repaired on the next start: `preMigrate` collapses each `(finding_id, url)` group onto its lowest id, moves any tags and summary that only the removed rows carried onto the survivor, trims stored whitespace, then deletes any row left with no URL at all. It creates the index over what remains in the same transaction, so a failure anywhere in the repair leaves the table exactly as it was rather than short of rows the index was meant to justify removing. The pass is skipped once the index is present.
 
 | Column | Type | Notes |
 |--------|------|-------|

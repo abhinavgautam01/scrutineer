@@ -408,8 +408,8 @@ func findingReferencesFor(t *testing.T, gdb *gorm.DB, findingID uint) []FindingR
 // batch must still collapse every group. No other fixture here comes close to
 // the production batch of 500, which would leave the `finding_id > ?` advance
 // and the claim that paging never splits a group untested: a regression in
-// either loops forever or leaves duplicates behind for AutoMigrate to trip on.
-func TestMergeDuplicateFindingReferences_pagesAcrossBatches(t *testing.T) {
+// either loops forever or leaves a duplicate for the index creation to trip on.
+func TestMergeAndIndexFindingReferences_pagesAcrossBatches(t *testing.T) {
 	const (
 		findings = 5
 		batch    = 2
@@ -427,8 +427,11 @@ func TestMergeDuplicateFindingReferences_pagesAcrossBatches(t *testing.T) {
 	}
 	seedFindingReferences(t, gdb, rows)
 
-	if err := mergeDuplicateFindingReferences(gdb, batch); err != nil {
+	if err := mergeAndIndexFindingReferences(gdb, batch); err != nil {
 		t.Fatalf("merge: %v", err)
+	}
+	if !gdb.Migrator().HasIndex(&FindingReference{}, findingRefURLIndex) {
+		t.Fatalf("%s missing after the merge", findingRefURLIndex)
 	}
 
 	for i, id := range ids {
@@ -444,6 +447,36 @@ func TestMergeDuplicateFindingReferences_pagesAcrossBatches(t *testing.T) {
 		if got[0].Tags != "cve" || got[0].Summary != wantSummary {
 			t.Errorf("finding %d metadata = tags %q summary %q, want cve / %q", id, got[0].Tags, got[0].Summary, wantSummary)
 		}
+	}
+}
+
+// Collapsing duplicates is only safe because the index creation that justifies
+// it is in the same transaction. If the two were separate statements, a schema
+// step failing after the cleanup committed would leave Open returning an error
+// over a table that had already lost rows. Claiming the index name on another
+// table is the cheapest way to make CREATE INDEX fail the way a broken schema
+// step would.
+func TestMergeAndIndexFindingReferences_rollsBackWhenIndexCreationFails(t *testing.T) {
+	gdb, ids := newFindingReferenceDB(t, filepath.Join(t.TempDir(), "old.db"), 1)
+	const url = "https://example.com/advisory/1"
+	seedFindingReferences(t, gdb, []FindingReference{
+		{ID: 1, FindingID: ids[0], URL: url, Tags: "cve"},
+		{ID: 2, FindingID: ids[0], URL: url, Summary: "duplicate"},
+	})
+	if err := gdb.Exec("CREATE INDEX " + findingRefURLIndex + " ON findings(id)").Error; err != nil {
+		t.Fatalf("claim index name: %v", err)
+	}
+
+	if err := mergeAndIndexFindingReferences(gdb, findingRefMergeBatch); err == nil {
+		t.Fatal("mergeAndIndexFindingReferences() = nil, want the index creation to fail")
+	}
+
+	got := findingReferencesFor(t, gdb, ids[0])
+	if len(got) != 2 {
+		t.Fatalf("references after the failure = %d, want both duplicates still there", len(got))
+	}
+	if got[0].Summary != "" || got[1].Tags != "" {
+		t.Errorf("rows were merged before the rollback: %+v", got)
 	}
 }
 
