@@ -163,6 +163,8 @@ Rows whose `Status` column is anything other than `Open` (case-insensitive) are 
 
 `Repository` is read as either a full URL or a `owner/repo` slug; bare slugs are expanded to `https://github.com/<slug>` since the producer of this export shape is GitHub-only. The tool name is the host of the `Finding URL` column; an export that omits it falls back to the literal string `csv`.
 
+The import caps apply to this format; see [Bounded scanner imports](#bounded-scanner-imports) above. Each `Repository` group is one result, so each carries its own budget.
+
 ### Findings markdown
 
 The export shape some hosted scanners produce, with one finding per H1 heading followed by an H2 section per fact:
@@ -195,12 +197,14 @@ The export shape some hosted scanners produce, with one finding per H1 heading f
 
 The tool name for markdown imports is the literal string `markdown` since the export format carries no producer field.
 
+The import caps apply to this format; see [Bounded scanner imports](#bounded-scanner-imports) above.
+
 ## What happens after the upload
 
 The flow is the same regardless of format:
 
 1. **Detect and parse.** `ingest.Parse` sniffs the body, picks a parser, and returns `[]Result`. Each `Result` is one batch of findings against one repository.
-2. **Bound raw scanner output.** A SARIF result is trimmed to the per-rule and per-result caps before anything is written; every other format passes through whole. See [Bounded scanner imports](#bounded-scanner-imports) above.
+2. **Bound raw scanner output.** A result parsed from a raw scanner format (SARIF, the code-scanning CSV export or the hosted-scanner markdown export) is trimmed to the per-rule and per-result caps before anything is written; every other format passes through whole. See [Bounded scanner imports](#bounded-scanner-imports) above.
 3. **Resolve the repository.** `?repo=` if present, otherwise `Result.RepoURL`. The URL is normalised through `ParseRepoInput` (the same path the UI uses) and a `Repository` row is created on first sight.
 4. **Create the scan row.** One per `Result`, with `kind = import`, `status = done`, `skill_name = <tool>`, `findings_count = len(findings)` (the accepted findings, after any capping). The scan's `commit` is `Result.Commit` when the format carried one (SARIF `versionControlProvenance`, minimal-JSON `commit`).
 5. **Upsert findings.** Each parsed finding is fingerprinted with the tool name in the skill-name slot and its sub-path (`db.FingerprintFinding(tool, sub_path, cwe, location, title)`), then matched against existing rows by `(repository_id, fingerprint)`. The sub-path is empty for every format except scrutineer's own bundle, so their fingerprints are unchanged; carrying it keeps two findings at the same location in different monorepo sub-projects from collapsing onto one fingerprint. Match found: `last_seen_scan_id`, `last_seen_commit`, `seen_count` are updated and a `FindingHistory` row is written. No match: a new `Finding` row is created with `imported_from = <tool>`. Whatever fix an ingest carries — the `suggested_fix` a parser extracted from a SARIF/markdown report, or the minimal/bundle `patch` — is folded into the finding's trace prose, not written to the `suggested_fix` column, which is reserved for diffs a `patch` run has put through the applicability gate. An `include=all` bundle also carries `notes`, `communications` and `references`; these are attached to the finding after it is created (or, on a re-import onto an existing finding, appended only where an identical record does not already exist). References are matched on their URL alone rather than on their whole content, because `(finding_id, url)` is unique: a bundle naming a URL the finding already carries leaves the stored row alone whatever tags or summary it puts on it, and a bundle naming one URL twice writes it once.
