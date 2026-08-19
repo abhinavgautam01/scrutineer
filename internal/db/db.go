@@ -440,6 +440,14 @@ type Package struct {
 	LatestReleaseAt      *time.Time
 	DependentPackagesURL string
 	Metadata             string `gorm:"type:text"`
+	// RiskFlags is the comma-joined set of supply-chain hygiene warnings the
+	// packages skill reported for this package: single_maintainer,
+	// no_security_policy, native_extension, stale_release,
+	// maintainer_domain_expired. The ids are validated and canonically
+	// ordered on write, so a stored value only ever names known flags. Each
+	// flag's evidence sentence stays in the scan report; promoting only the
+	// ids keeps the health summary and the package page free of JSON decoding.
+	RiskFlags string
 
 	CreatedAt time.Time
 }

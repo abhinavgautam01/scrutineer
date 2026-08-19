@@ -355,6 +355,57 @@ func TestParsePackages_replacesPackageRows(t *testing.T) {
 	}
 }
 
+func TestParsePackages_riskFlagsCanonicallyOrdered(t *testing.T) {
+	report := `{"packages":[
+		{"name":"foo","ecosystem":"rubygems","risk_flags":[{"id":"stale_release","evidence":"latest release 2024-01-01"},{"id":"single_maintainer","evidence":"one owner listed"}]},
+		{"name":"foo-cli","ecosystem":"rubygems"}
+	]}`
+	repo, gdb := runSkillWithReport(t, "packages", report)
+	var rows []db.Package
+	gdb.Where("repository_id = ?", repo.ID).Order("name").Find(&rows)
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+	if rows[0].Name != "foo" || rows[0].RiskFlags != "single_maintainer,stale_release" {
+		t.Errorf("row foo RiskFlags = %q, want canonically ordered single_maintainer,stale_release", rows[0].RiskFlags)
+	}
+	if rows[1].Name != "foo-cli" || rows[1].RiskFlags != "" {
+		t.Errorf("row foo-cli RiskFlags = %q, want empty (no risk_flags key)", rows[1].RiskFlags)
+	}
+}
+
+// An unknown risk-flag id must not cost the package its known flags: the
+// scan still needs an accurate row for downstream health scoring.
+func TestParsePackagesOutput_dropsUnknownRiskFlagAndWarns(t *testing.T) {
+	repo, gdb := runSkillWithReport(t, "packages", `{"packages":[]}`)
+	scan := db.Scan{RepositoryID: repo.ID}
+	gdb.Create(&scan)
+
+	var events []string
+	w := &Worker{DB: gdb, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	report := `{"packages":[{"name":"foo","ecosystem":"rubygems","risk_flags":[{"id":"single_maintainer","evidence":"one owner listed"},{"id":"made_up_flag","evidence":"n/a"}]}]}`
+	if err := w.parsePackagesOutput(&scan, report, func(e Event) { events = append(events, e.Text) }); err != nil {
+		t.Fatal(err)
+	}
+
+	var row db.Package
+	if err := gdb.Where("repository_id = ? AND name = ?", repo.ID, "foo").First(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if row.RiskFlags != "single_maintainer" {
+		t.Errorf("RiskFlags = %q, want single_maintainer (unknown flag dropped, known flag kept)", row.RiskFlags)
+	}
+	var warned bool
+	for _, e := range events {
+		if strings.Contains(e, "made_up_flag") && strings.Contains(e, row.Ecosystem) {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Errorf("events = %v, want a warning naming the dropped flag and the ecosystem %q", events, row.Ecosystem)
+	}
+}
+
 // A failed insert must not destroy the existing rows: the delete and the
 // re-insert run in one transaction, so a mid-write failure rolls the delete
 // back and the repository keeps the packages from its last good scan.

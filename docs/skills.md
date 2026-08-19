@@ -13,7 +13,7 @@ These live in `skills/` and are embedded in the Scrutineer executable. At startu
 | `triage` | Default pipeline orchestrator. Classifies the repo, enqueues the appropriate scan set via the scrutineer API, and re-verifies any findings already reported upstream. Edit its body to change what runs by default. |
 | `metadata` | Fetches description, default branch, languages, license, stars, archived status, and icon from repos.ecosyste.ms. |
 | `repo-overview` | Runs `brief --json` for a structured project summary used by other skills as orientation. |
-| `packages` | Looks up every published package the repository produces across all registries, with download and dependent counts. |
+| `packages` | Looks up every published package the repository produces across all registries, with download and dependent counts, plus supply-chain risk flags. |
 | `advisories` | Fetches published GHSA and CVE records that affect any of those packages. |
 | `dependencies` | Indexes every manifest and lockfile in the tree with `git-pkgs list`. |
 | `sbom` | Generates a CycloneDX SBOM with `git-pkgs sbom`. |

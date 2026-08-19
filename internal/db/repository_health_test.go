@@ -1,6 +1,7 @@
 package db
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -57,6 +58,30 @@ func TestAssessRepositoryHealth(t *testing.T) {
 			want:     RepositoryHealthZombie,
 		},
 		{
+			name:     "release older than eighteen months holds classification at stale despite a recent push",
+			repo:     Repository{PushedAt: ptrTime(now.Add(-30 * 24 * time.Hour))},
+			packages: []Package{{LatestReleaseAt: ptrTime(now.Add(-19 * 30 * 24 * time.Hour))}},
+			people:   []Maintainer{active},
+			want:     RepositoryHealthStale,
+		},
+		{
+			name: "monorepo stays active while one package still ships",
+			repo: Repository{PushedAt: ptrTime(now.Add(-30 * 24 * time.Hour))},
+			packages: []Package{
+				{LatestReleaseAt: ptrTime(now.Add(-19 * 30 * 24 * time.Hour))},
+				{LatestReleaseAt: ptrTime(now.Add(-30 * 24 * time.Hour))},
+			},
+			people: []Maintainer{active},
+			want:   RepositoryHealthActive,
+		},
+		{
+			name:     "stale_release flag alone does not move classification with a recent release",
+			repo:     Repository{PushedAt: ptrTime(now.Add(-30 * 24 * time.Hour))},
+			packages: []Package{{RiskFlags: string(PackageRiskStaleRelease), LatestReleaseAt: ptrTime(now.Add(-30 * 24 * time.Hour))}},
+			people:   []Maintainer{active},
+			want:     RepositoryHealthActive,
+		},
+		{
 			name: "missing evidence is unassessed",
 			repo: Repository{},
 			want: "",
@@ -73,6 +98,55 @@ func TestAssessRepositoryHealth(t *testing.T) {
 				t.Error("classified health should explain its evidence")
 			}
 		})
+	}
+}
+
+func TestAssessRepositoryHealth_unionsAndOrdersRiskFlags(t *testing.T) {
+	now := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	repo := Repository{PushedAt: ptrTime(now.Add(-30 * 24 * time.Hour))}
+	packages := []Package{
+		{RiskFlags: string(PackageRiskStaleRelease) + "," + string(PackageRiskSingleMaintainer)},
+		{RiskFlags: string(PackageRiskSingleMaintainer)},
+	}
+	people := []Maintainer{{Status: MaintainerActive}}
+
+	got := AssessRepositoryHealth(repo, packages, people, now)
+
+	want := []string{string(PackageRiskSingleMaintainer), string(PackageRiskStaleRelease)}
+	if !reflect.DeepEqual(got.RiskFlags, want) {
+		t.Errorf("RiskFlags = %#v, want %#v (deduped, canonically ordered)", got.RiskFlags, want)
+	}
+	if !strings.Contains(got.Summary, "risk flags:") {
+		t.Errorf("summary should mention risk flags, got %q", got.Summary)
+	}
+}
+
+func TestAssessRepositoryHealth_summaryNamesLastReleaseAge(t *testing.T) {
+	now := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	repo := Repository{PushedAt: ptrTime(now.Add(-30 * 24 * time.Hour))}
+	packages := []Package{{LatestReleaseAt: ptrTime(now.Add(-60 * 24 * time.Hour))}}
+	people := []Maintainer{{Status: MaintainerActive}}
+
+	got := AssessRepositoryHealth(repo, packages, people, now)
+
+	if !strings.Contains(got.Summary, "last release ") {
+		t.Errorf("summary should name the last release age, got %q", got.Summary)
+	}
+}
+
+func TestAssessRepositoryHealth_flagsSurviveEarlyReturn(t *testing.T) {
+	now := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	repo := Repository{}
+	packages := []Package{{RiskFlags: string(PackageRiskNativeExtension)}}
+
+	got := AssessRepositoryHealth(repo, packages, nil, now)
+
+	if got.Health != "" {
+		t.Errorf("Health = %q, want empty (no push, no maintainer evidence)", got.Health)
+	}
+	want := []string{string(PackageRiskNativeExtension)}
+	if !reflect.DeepEqual(got.RiskFlags, want) {
+		t.Errorf("RiskFlags = %#v, want %#v even on the early-return path", got.RiskFlags, want)
 	}
 }
 
