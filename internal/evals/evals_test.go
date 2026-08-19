@@ -1013,7 +1013,7 @@ func validDeepDiveReport() string {
 	return `{
   "repository": "https://example.com/eval",
   "commit": "abcdef1",
-  "spec_version": 13,
+  "spec_version": 14,
   "model": "test-model",
   "date": "2026-07-09",
   "languages": ["Python"],
@@ -1070,7 +1070,7 @@ func incompleteDeepDiveReport() string {
 	return `{
   "repository": "https://example.com/eval",
   "commit": "abcdef1",
-  "spec_version": 13,
+  "spec_version": 14,
   "model": "test-model",
   "date": "2026-07-09",
   "languages": ["Python"],
