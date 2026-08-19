@@ -325,11 +325,6 @@ func TestPreMigrate_renamesSBOMPackageRepositoryID(t *testing.T) {
 	}
 }
 
-// legacyFindingReferenceDB writes a database file in the pre-index shape and
-// returns its path. It builds the current schema, drops idx_finding_ref_url to
-// get back to what an install written before #868 holds, then lets seed fill
-// finding_references with the duplicates such an install could accumulate.
-// Reopening the file is what puts preMigrate to work.
 // newFindingReferenceDB opens a database at path, seeds a repository, a scan
 // and n findings, then drops the unique index so the caller can write the
 // duplicate rows a pre-#868 install could hold. The returned handle stays open.
@@ -368,6 +363,11 @@ func newFindingReferenceDB(t *testing.T, path string, n int) (*gorm.DB, []uint) 
 	return gdb, ids
 }
 
+// legacyFindingReferenceDB writes a database file in the pre-index shape and
+// returns its path. newFindingReferenceDB gives it the current schema without
+// idx_finding_ref_url, matching what an install written before #868 holds, then
+// seed fills finding_references with the duplicates such an install could
+// accumulate. Reopening the file is what puts preMigrate to work.
 func legacyFindingReferenceDB(t *testing.T, seed func(gdb *gorm.DB, findingA, findingB uint)) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "old.db")
