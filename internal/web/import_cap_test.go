@@ -181,6 +181,46 @@ func TestCapScannerResult_perAlertURLRuleIDGroupsByTitle(t *testing.T) {
 
 // A rule id that is not a URL still wins over the title, so two rules sharing a
 // title keep their own budgets.
+// A code-scanning CSV row carries a Finding URL but can leave both the Name
+// and Category columns blank, which is the one input shape that reaches the
+// cap with a URL rule id and no title. Keying those on the empty string would
+// put unrelated alerts in one bucket the per-rule cap closes at five, so they
+// fall back to the URL: unique per alert, therefore inert for the per-rule cap,
+// leaving the per-result cap as the only bound.
+func TestCapScannerResult_blankTitleKeepsAlertsApart(t *testing.T) {
+	var findings []ingest.Finding
+	for i := range importPerRuleCap + 3 {
+		findings = append(findings, ingest.Finding{
+			RuleID:   fmt.Sprintf("https://github.com/example/widget/security/code-scanning/%d", i),
+			Location: fmt.Sprintf("src/f%d.go:1", i),
+		})
+	}
+	bounded, caps := capScannerResult(ingest.Result{Tool: "github.com", Findings: findings})
+	if len(bounded.Findings) != importPerRuleCap+3 {
+		t.Fatalf("kept %d findings, want all %d", len(bounded.Findings), importPerRuleCap+3)
+	}
+	if caps.DroppedPerRule != 0 || caps.DroppedTotal != 0 {
+		t.Errorf("caps = %+v, want no drops for distinct alerts", caps)
+	}
+}
+
+// Two findings carrying neither a rule id nor a title have nothing left to
+// group on, so they share the empty key and the per-rule cap applies. That is
+// the only case where the key is empty.
+func TestCapScannerResult_noIdentifierAtAllSharesOneBucket(t *testing.T) {
+	var findings []ingest.Finding
+	for i := range importPerRuleCap + 2 {
+		findings = append(findings, ingest.Finding{Location: fmt.Sprintf("src/f%d.go:1", i)})
+	}
+	bounded, caps := capScannerResult(ingest.Result{Tool: "github.com", Findings: findings})
+	if len(bounded.Findings) != importPerRuleCap {
+		t.Fatalf("kept %d findings, want %d", len(bounded.Findings), importPerRuleCap)
+	}
+	if caps.DroppedPerRule != 2 {
+		t.Errorf("DroppedPerRule = %d, want 2", caps.DroppedPerRule)
+	}
+}
+
 func TestCapScannerResult_ruleIDWinsOverSharedTitle(t *testing.T) {
 	var findings []ingest.Finding
 	for _, rule := range []string{"js/xss", "py/xss"} {

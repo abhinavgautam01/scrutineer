@@ -118,9 +118,21 @@ func capScannerResult(res ingest.Result) (ingest.Result, importCapStats) {
 // it is the nearest thing to a rule name the input carries. Where it is not,
 // grouping by it still beats lumping every anonymous hit into one bucket that
 // the fifth finding would close.
+//
+// A finding with no title at all falls back to the URL rule id rather than to
+// the empty string. Both leave the per-rule cap doing nothing for that row,
+// since a per-alert URL is unique, but an inert key is much better than a
+// shared one: `csv.go` fills Title from the Name column falling back to
+// Category, so a code-scanning export with both columns blank would otherwise
+// collapse unrelated alerts into a single bucket the fifth finding closes. The
+// per-result cap still bounds them. The key is empty only when the finding
+// carries neither identifier, where there is nothing left to group on.
 func capKey(f ingest.Finding) string {
 	if f.RuleID != "" && !strings.Contains(f.RuleID, "://") {
 		return f.RuleID
 	}
-	return f.Title
+	if f.Title != "" {
+		return f.Title
+	}
+	return f.RuleID
 }
