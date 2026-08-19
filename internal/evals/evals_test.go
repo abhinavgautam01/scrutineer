@@ -812,7 +812,7 @@ func TestAPIMisuseScenario(t *testing.T) {
   "title":"TLS verification can be turned off in fetch_pinned",
   "cwe":"CWE-295",
   "location":"client.py:14",
-  "trace":"fetch_pinned sets ssl.CERT_NONE when the caller passes verify=True explicitly inverted."
+  "trace":"fetch_pinned exposes an opt-out that reaches ssl.CERT_NONE, although its default keeps certificate checking on."
 }]}`
 	got, err = (HeuristicJudge{}).Judge(sc, safeReport)
 	if err != nil {
@@ -820,6 +820,9 @@ func TestAPIMisuseScenario(t *testing.T) {
 	}
 	if len(got) != 3 {
 		t.Fatalf("safe results = %d, want 3", len(got))
+	}
+	if got[0].Matched {
+		t.Errorf("report naming only the safe helper passed the required positive: %+v", got[0])
 	}
 	if got[2].Kind != assertionShouldNotFind {
 		t.Fatalf("safe result kind = %q, want %q", got[2].Kind, assertionShouldNotFind)
@@ -840,7 +843,7 @@ func TestConventionPrevalenceScenario(t *testing.T) {
   "cwe":"CWE-89",
   "location":"search.py:11",
   "trace":"flask.request.args supplies q, which reaches SELECT id FROM items through store.query.",
-  "prior_art":"grep -rn store.query finds 9 sites; the 8 in reports.py interpolate module constants."
+  "prior_art":"grep -rn 'query(\"SELECT' finds 9 sites; the 8 in reports.py interpolate module constants."
 }]}`
 	got, err := (HeuristicJudge{}).Judge(sc, report)
 	if err != nil {
