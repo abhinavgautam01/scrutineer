@@ -14,5 +14,4 @@ should_find:
     path: client.py
     required: false
 should_not_find:
-  - finding: fetch_pinned
-    path: client.py
+  - path: pinned_client.py

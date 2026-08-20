@@ -2,8 +2,8 @@ import ssl
 import urllib.request
 
 
-def fetch(url, verify=False):
-    """Fetch url and return the body. Certificate checks are off by default."""
+def fetch_pinned(url, verify=True):
+    """Fetch url and return the body. Certificate checks are on by default."""
     context = ssl.create_default_context()
     if not verify:
         context.check_hostname = False

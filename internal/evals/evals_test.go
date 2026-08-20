@@ -807,12 +807,15 @@ func TestAPIMisuseScenario(t *testing.T) {
 
 	// The two helpers have identical bodies, so a run that reports the one
 	// whose default is safe is reacting to the opt-out rather than to the
-	// default. That is what the negative assertion exists to catch.
+	// default. That is what the negative assertion exists to catch. Each
+	// helper owns a file, so both assertions turn on the path: this title
+	// never says fetch_pinned yet the report is still caught, while the
+	// evidence that carries the real finding no longer buys it the positive.
 	safeReport := `{"findings":[{
-  "title":"TLS verification can be turned off in fetch_pinned",
+  "title":"Certificate validation can be disabled in the pinned helper",
   "cwe":"CWE-295",
-  "location":"client.py:14",
-  "trace":"fetch_pinned exposes an opt-out that reaches ssl.CERT_NONE, although its default keeps certificate checking on."
+  "location":"pinned_client.py:5",
+  "trace":"fetch_pinned(url, verify=False) reaches ssl.CERT_NONE, although its default keeps certificate checking on."
 }]}`
 	got, err = (HeuristicJudge{}).Judge(sc, safeReport)
 	if err != nil {
@@ -829,6 +832,28 @@ func TestAPIMisuseScenario(t *testing.T) {
 	}
 	if got[2].Matched {
 		t.Fatalf("safely defaulted helper unexpectedly passed should_not_find: %+v", got[2])
+	}
+
+	// The skill steers a write-up toward contrasting the two defaults, so a
+	// correct finding may well name the safe helper. It stays in client.py,
+	// which is what keeps the negative off it.
+	contrastReport := `{"findings":[{
+  "title":"fetch defaults verify off while fetch_pinned is the safe counterpart",
+  "cwe":"CWE-295",
+  "location":"client.py:5",
+  "trace":"fetch(url, verify=False) leaves context.verify_mode at ssl.CERT_NONE for a caller who passes nothing."
+}]}`
+	got, err = (HeuristicJudge{}).Judge(sc, contrastReport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("contrast results = %d, want 3", len(got))
+	}
+	for _, result := range got {
+		if !result.Matched {
+			t.Errorf("write-up contrasting the two helpers failed an assertion: %+v", result)
+		}
 	}
 }
 
