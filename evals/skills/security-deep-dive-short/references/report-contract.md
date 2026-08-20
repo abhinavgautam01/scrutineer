@@ -4,7 +4,7 @@
 
 ## Identity and scope
 
-- Set `repository` from `context.json`'s repository URL, `commit` from `git -C ./src rev-parse HEAD`, `spec_version` to `13`, and `date` to today.
+- Set `repository` from `context.json`'s repository URL, `commit` from `git -C ./src rev-parse HEAD`, `spec_version` to `14`, and `date` to today.
 - Keep every location repository-relative, or relative to `scan_subpath` when one is set. Use `path:line` when a line is known.
 - Describe the actual source-tree or diff scope in `method.scope`. Do not claim coverage outside a focus area, scan subpath, or diff rescan.
 - Populate `boundaries` from the supplied threat model when available. Preserve its labels, provenance, and source instead of inventing replacements.
