@@ -13,7 +13,7 @@ RUN CGO_ENABLED=0 go build -ldflags "-X main.commit=${COMMIT}" -o /scrutineer ./
 FROM node:26-alpine@sha256:aadf416b2cdce311a8811ba3f0608a61b77dbf997500e2eafe781b51f6a0b019 AS claude
 RUN npm install -g @anthropic-ai/claude-code@2.1.223
 
-FROM python:3.15.0b4-alpine@sha256:c40ec5a55436b283c1570e649ff40a8188e7e0221d7f285e624b20167c712ead AS python-tools
+FROM python:3.15.0rc1-alpine@sha256:c31ce768b814aa1cd3e9247f5d06f4713cf8e4140b707a1bf31fa18411c7c219 AS python-tools
 RUN pip install --no-cache-dir semgrep==1.167.0 "setuptools<81"
 
 FROM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS go-tools
@@ -32,7 +32,7 @@ FROM rust:1.97-alpine@sha256:3c38f3f82c2f3d73da3b38e18d279393a04cb43ddded0e35088
 RUN apk add --no-cache build-base linux-headers
 RUN cargo install --locked --root /out zizmor@1.29.0
 
-FROM python:3.15.0b4-alpine@sha256:c40ec5a55436b283c1570e649ff40a8188e7e0221d7f285e624b20167c712ead
+FROM python:3.15.0rc1-alpine@sha256:c31ce768b814aa1cd3e9247f5d06f4713cf8e4140b707a1bf31fa18411c7c219
 RUN apk add --no-cache git ca-certificates bash nodejs coreutils && \
     rm -f /usr/local/bin/pip* /usr/local/bin/idle* /usr/local/bin/pydoc*
 
