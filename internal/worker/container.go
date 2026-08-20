@@ -10,11 +10,13 @@ package worker
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -83,6 +85,15 @@ type ContainerRunner struct {
 	// zero value keeps the host-proxy path (docker, rootful podman, and all
 	// non-hardened scans). See usesEgressSidecar.
 	Egress EgressSidecarConfig
+	// ProviderProxy contains the base allowlist and host endpoint used to start
+	// a short-lived in-process proxy for one configured OpenCode provider. The
+	// process-wide proxy never receives provider-specific hosts.
+	ProviderProxy ScopedEgressProxyConfig
+	// OpencodeProviders contains provider-scoped images, credentials, state,
+	// config, and egress resolved from the operator's YAML configuration.
+	OpencodeProviders map[string]OpencodeProviderConfig
+	// OpencodeReadiness caches successful provider/model catalog probes.
+	OpencodeReadiness *OpencodeReadinessCache
 	// detectProfile lets tests stub profile auto-detection without a container
 	// runtime. nil means DetectProfile.
 	detectProfile func(ctx context.Context, rt ContainerRuntime, runnerImage, srcDir string, relabel bool) Profile
@@ -105,6 +116,17 @@ type EgressSidecarConfig struct {
 	// reach the host skill API. Required: an empty value means the sidecar
 	// cannot reach the host, so setupHardenedNetwork fails the scan closed.
 	GatewayIP string
+}
+
+// ScopedEgressProxyConfig is the non-secret startup information needed to
+// create a provider-scoped host proxy. Each scan gets a fresh token and
+// listener, which are closed when the scan finishes.
+type ScopedEgressProxyConfig struct {
+	Allow         []string
+	APIPort       string
+	APIHosts      []string
+	ContainerHost string
+	Log           *slog.Logger
 }
 
 // hardenedNetworkPrefix is the common prefix used to name the per-scan
@@ -209,12 +231,52 @@ func proxyURLWithHost(proxyURL, host string) string {
 // legitimate repos.
 const HardenedWorkspaceCapBytes int64 = 2 << 30
 
+type containerRunErrorState struct {
+	accountText  string
+	providerText string
+	rateLimit    *RateLimitInfo
+}
+
+func (s *containerRunErrorState) observe(event Event, h Harness, configuredProvider bool) {
+	s.accountText = preferAccountErrText(s.accountText, h.AccountErrorText(event.Text))
+	if configuredProvider && event.Kind == KindError && event.Text != "hit max turns" {
+		s.providerText = event.Text
+	}
+	if event.Kind == KindRateLimit && event.RateLimit != nil {
+		s.rateLimit = preferRateLimitReset(s.rateLimit, event.RateLimit)
+	}
+}
+
+// resumeRetryable gates the "session gone, restart fresh" fallback. Only an
+// account error (auth/quota) blocks it: a configured-provider error event may
+// be the harness reporting the missing session itself, which is exactly the
+// condition the fallback exists for.
+func (s containerRunErrorState) resumeRetryable() bool {
+	return s.accountText == ""
+}
+
+func (s containerRunErrorState) failure(provider opencodeProvider, runtimeName string, waitErr error) error {
+	if s.accountText != "" {
+		return &AccountError{Detail: s.accountText, ResetAt: resumableReset(s.accountText, s.rateLimit)}
+	}
+	if s.providerText != "" {
+		return classifyOpencodeProviderRunError(provider, s.providerText, waitErr)
+	}
+	return fmt.Errorf("%s exited: %w", runtimeName, waitErr)
+}
+
 // RunSkill runs a skill inside an ephemeral container. The whole workspace
 // (clone + staged .claude/skills + context.json + output) is mounted at
 // /work read-write so claude can read the skill files and write its output.
 // Egress is routed through scrutineer's allowlisting proxy on the host;
 // see EgressProxy. tmpfs/cap-drop rules mirror the local runner's intent.
 func (d ContainerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Event)) (SkillResult, error) {
+	d, provider, result, cleanupProviderProxy, err := d.prepareOpencodeExecution(ctx, sj.Model)
+	if err != nil {
+		return result, err
+	}
+	defer cleanupProviderProxy()
+
 	var src string
 	if sj.SrcReady {
 		src = filepath.Join(sj.WorkRoot, "src")
@@ -222,30 +284,31 @@ func (d ContainerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Ev
 		var err error
 		src, err = ensureClone(ctx, sj.Repo, sj.WorkRoot, d.FullClone, sj.Ref, emit)
 		if err != nil {
-			return SkillResult{}, err
+			return result, err
 		}
 	}
 	if err := d.checkHardenedWorkspace(sj.WorkRoot); err != nil {
-		return SkillResult{}, err
+		return result, err
 	}
 	commit := gitHead(src)
+	result.Commit = commit
 	work := sj.WorkRoot
 	absWork, _ := filepath.Abs(work)
 
 	profile, image := d.resolveProfile(ctx, sj.Profile, src, sj.SubPath, emit)
-	backend := HarnessName(d.harness())
+	result.Profile = profile
 	if sj.RequiresProfile != "" && profile != sj.RequiresProfile {
 		got := profile
 		if got == "" {
 			got = "default"
 		}
-		return SkillResult{Commit: commit, Profile: profile, Backend: backend}, fmt.Errorf("skill %q requires profile %q, resolved %q", sj.Name, sj.RequiresProfile, got)
+		return result, fmt.Errorf("skill %q requires profile %q, resolved %q", sj.Name, sj.RequiresProfile, got)
 	}
 	d.injectProfileGuide(profile, absWork, emit)
 
 	hnet, cleanupNetwork, err := d.setupHardenedNetwork(sj, image)
 	if err != nil {
-		return SkillResult{Commit: commit, Profile: profile, Backend: backend}, err
+		return result, err
 	}
 	// Capture the sidecar's egress decisions (allowlist denials) into the scan
 	// record before teardown removes the ephemeral sidecar.
@@ -257,16 +320,12 @@ func (d ContainerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Ev
 		_ = os.Remove(outPath)
 	}
 
-	// the runtime treats a non-absolute -v source as a named volume (which
-	// rejects '/'), so the config dir must be absolutised like absWork.
-	var absConfig string
-	if sj.StateDir != "" {
-		absConfig, _ = filepath.Abs(sj.StateDir)
-		if err := os.MkdirAll(absConfig, dirPerm); err != nil {
-			return SkillResult{Commit: commit, Profile: profile, Backend: backend}, fmt.Errorf("create harness state dir: %w", err)
-		}
+	absConfig, digest, err := d.prepareHarnessState(ctx, sj.StateDir, provider, absWork, image, hnet)
+	result.RunnerImageDigest = digest
+	if err != nil {
+		return result, err
 	}
-	runBase := d.buildRunArgs(absWork, image, hnet, absConfig)
+	runBase := d.buildRunArgsForProvider(absWork, image, hnet, absConfig, provider, "/work")
 
 	logLine := "$ " + d.Runtime.bin() + " run --rm " + image + " <skill:" + sj.Name + ">"
 	if d.ModelBaseURL != "" {
@@ -275,24 +334,20 @@ func (d ContainerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Ev
 	emit(Event{Kind: KindText, Text: logLine})
 
 	h := d.harness()
-	accountErrText := ""
-	var rateLimitReset *RateLimitInfo
+	runErrors := containerRunErrorState{}
 	wrappedEmit := func(e Event) {
-		accountErrText = preferAccountErrText(accountErrText, h.AccountErrorText(e.Text))
-		if e.Kind == KindRateLimit && e.RateLimit != nil {
-			rateLimitReset = preferRateLimitReset(rateLimitReset, e.RateLimit)
-		}
+		runErrors.observe(e, h, provider.Configured)
 		emit(e)
 	}
-	hitMaxTurns, sessionID, waitErr := d.runContainerOnce(ctx, runBase, sj, wrappedEmit)
+	hitMaxTurns, sessionID, waitErr := d.runContainerOnce(ctx, runBase, sj, provider.Env, wrappedEmit)
 
-	if waitErr != nil && sj.ResumeSessionID != "" && sessionID == "" && accountErrText == "" {
+	if waitErr != nil && sj.ResumeSessionID != "" && sessionID == "" && runErrors.resumeRetryable() {
 		if sj.ResumePrompt != "" && sj.Prompt == "" {
 			// A bare resume prompt is a corrective nudge ("rewrite the invalid
 			// report.json") that means nothing to a fresh agent, and there is
 			// no fresh framing to fall back on.
 			emit(Event{Kind: KindText, Text: "resume of session " + sj.ResumeSessionID + " failed; " + resumePromptNoFreshFallbackText})
-			return SkillResult{Commit: commit, Profile: profile, Backend: backend}, fmt.Errorf("%s exited: %w", d.Runtime.bin(), waitErr)
+			return result, runErrors.failure(provider, d.Runtime.bin(), waitErr)
 		}
 		// The resume produced no session event, so claude could not load the
 		// saved conversation (gone from the mounted store). Restart fresh in
@@ -301,10 +356,11 @@ func (d ContainerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Ev
 		emit(Event{Kind: KindText, Text: "resume of session " + sj.ResumeSessionID + " failed; restarting fresh"})
 		fresh := sj
 		fresh.ResumeSessionID = ""
-		hitMaxTurns, sessionID, waitErr = d.runContainerOnce(ctx, runBase, fresh, wrappedEmit)
+		hitMaxTurns, sessionID, waitErr = d.runContainerOnce(ctx, runBase, fresh, provider.Env, wrappedEmit)
 	}
 
-	res := SkillResult{Commit: commit, Profile: profile, Backend: backend, SessionID: sessionID}
+	res := result
+	res.SessionID = sessionID
 	if outPath != "" {
 		res.Report = readCappedReport(outPath, emit)
 	}
@@ -312,10 +368,7 @@ func (d ContainerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Ev
 		if hitMaxTurns {
 			return res, &MaxTurnsReachedError{}
 		}
-		if accountErrText != "" {
-			return res, &AccountError{Detail: accountErrText, ResetAt: resumableReset(accountErrText, rateLimitReset)}
-		}
-		return res, fmt.Errorf("%s exited: %w", d.Runtime.bin(), waitErr)
+		return res, runErrors.failure(provider, d.Runtime.bin(), waitErr)
 	}
 	return res, nil
 }
@@ -325,14 +378,14 @@ func (d ContainerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Ev
 // through emit, and reporting the wait error, whether the run hit the
 // max-turns cap, and the session id from the init event (empty when no init
 // event arrived, e.g. a --resume that could not find the conversation).
-func (d ContainerRunner) runContainerOnce(ctx context.Context, runBase []string, sj SkillJob, emit func(Event)) (hitMaxTurns bool, sessionID string, waitErr error) {
+func (d ContainerRunner) runContainerOnce(ctx context.Context, runBase []string, sj SkillJob, processEnv map[string]string, emit func(Event)) (hitMaxTurns bool, sessionID string, waitErr error) {
 	h := d.harness()
 	harnessArgs := append([]string{h.Binary()}, h.Args(sj.toJob(d.Effort, d.MaxTurns, d.ModelBaseURL))...)
 	runArgs := append(append([]string{}, runBase...), harnessArgs...)
 
 	cmd := exec.CommandContext(ctx, d.Runtime.bin(), runArgs...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Env = os.Environ()
+	cmd.Env = environmentWith(os.Environ(), processEnv)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -360,12 +413,12 @@ func (d ContainerRunner) runContainerOnce(ctx context.Context, runBase []string,
 	return hitMaxTurns, sessionID, waitErr
 }
 
-// buildRunArgs assembles the container run flags for a skill invocation.
+// buildRunArgsForProvider assembles the container run flags for a skill invocation.
 // Returns the args up to and including the image name; the caller appends
 // the in-container command. Split out of RunSkill to keep its cognitive
 // complexity manageable as new toggles (hardened mode, proxy, profiles)
 // accumulate.
-func (d ContainerRunner) buildRunArgs(absWork, image string, hnet hardenedNet, harnessStateDir string) []string {
+func (d ContainerRunner) buildRunArgsForProvider(absWork, image string, hnet hardenedNet, harnessStateDir string, provider opencodeProvider, workdir string) []string {
 	gwTarget := "host-gateway"
 	if d.Hardened {
 		// setupHardenedNetwork resolved the gateway once against this per-scan
@@ -386,12 +439,23 @@ func (d ContainerRunner) buildRunArgs(absWork, image string, hnet hardenedNet, h
 		"-e", "SEMGREP_SEND_METRICS=off",
 		"--tmpfs", "/tmp:rw,noexec,nosuid,size=256m",
 		"-v", bindMount(absWork, "/work", d.SELinuxRelabel),
-		"-w", "/work",
+		"-w", workdir,
 	)
 	// Harness-specific env: model-API credential, base URL, and the
 	// harness's own telemetry / autoupdate suppressors.
 	for _, e := range d.harness().Env(d.ModelBaseURL) {
+		if provider.Configured && opencodeInheritedCredential(e) {
+			continue
+		}
 		args = append(args, "-e", e)
+	}
+	keys := make([]string, 0, len(provider.Env))
+	for key := range provider.Env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		args = append(args, "-e", key)
 	}
 	if d.Runtime.supportsHostGatewayAddHost() {
 		args = append(args, "--add-host", HostGatewayAlias+":"+gwTarget)
@@ -414,6 +478,9 @@ func (d ContainerRunner) buildRunArgs(absWork, image string, hnet hardenedNet, h
 		for _, e := range d.harness().StateEnv("/harness-state") {
 			args = append(args, "-e", e)
 		}
+	}
+	if HarnessName(d.harness()) == "opencode" {
+		args = d.appendOpencodeStateArgs(args, harnessStateDir, provider)
 	}
 	if d.Hardened || d.HardenedRuntimeOnly {
 		// Read-only rootfs + no-new-privileges close the residual paths a
@@ -467,6 +534,16 @@ func (d ContainerRunner) buildRunArgs(absWork, image string, hnet hardenedNet, h
 		args = append(args, "--network", "none")
 	}
 	return append(args, "--", image)
+}
+
+func opencodeInheritedCredential(env string) bool {
+	key, _, _ := strings.Cut(env, "=")
+	switch key {
+	case "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENCODE_CONFIG_CONTENT", "OPENCODE_AUTH_CONTENT":
+		return true
+	default:
+		return false
+	}
 }
 
 // resolveProfile picks the runner image for this scan. When requested
@@ -747,7 +824,7 @@ func EnsureHardenedNetwork(rt ContainerRuntime, name string) error {
 
 // hardenedNet bundles a per-scan --internal network name with the host-gateway
 // IPv4 resolved against it. setupHardenedNetwork resolves the gateway once and
-// threads it through both verifyHardenedNetwork and buildRunArgs, so a
+// threads it through both verifyHardenedNetwork and buildRunArgsForProvider, so a
 // hardened scan probes for it a single time instead of once per consumer. The
 // zero value (both fields "") is the non-hardened case.
 type hardenedNet struct {
@@ -1134,7 +1211,7 @@ curl -s -m 5 -o /dev/null http://1.1.1.1 && echo REACHED || echo BLOCKED`
 // (the proxy answers, e.g. 407 without auth) means the TCP path to the host is
 // open. docker/podman wire the host-gateway alias with --add-host exactly as the
 // real run does; Apple's CLI has no --add-host, so the probe targets the
-// resolved gateway IP directly -- the same address buildRunArgs points the proxy
+// resolved gateway IP directly -- the same address buildRunArgsForProvider points the proxy
 // env at for an Apple hardened scan.
 func (rt ContainerRuntime) hardenedProxyReachArgs(network, gatewayIP, proxyPort, image string) []string {
 	args := rt.runArgs("--rm", "--cap-drop", "ALL", "--network", network)
