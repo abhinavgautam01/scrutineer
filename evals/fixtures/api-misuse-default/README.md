@@ -14,4 +14,6 @@ wording. A correct write-up is free to name `fetch_pinned` while contrasting the
 two. A run that files the safe helper is caught whatever title it picks.
 
 The deep-dive eval should file the unsafe default as an API misuse finding
-without flagging the helper whose default is safe.
+without flagging the helper whose default is safe. It reads that class off the
+inventory entry the finding cites, so the run has to reach the API definition
+rather than file the `urlopen` call as a plain network bug.

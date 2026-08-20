@@ -801,7 +801,12 @@ func TestMassAssignmentScenario(t *testing.T) {
 
 func TestAPIMisuseScenario(t *testing.T) {
 	sc := mustLoadScenario(t, "../../evals/security-deep-dive-api-misuse.yaml")
-	report := `{"findings":[{
+	// The scenario asserts the class the run put on the sink it cites, not just
+	// the prose, so the inventory entry is what carries `API misuse` here.
+	report := `{
+  "inventory":[{"id":"S1","location":"client.py:5","class":"API misuse","boundary":"caller of the fetch helper","consumes":"the verify argument default"}],
+  "findings":[{
+  "sinks":["S1"],
   "title":"TLS verification disabled by default in fetch",
   "cwe":"CWE-295",
   "location":"client.py:5",
@@ -826,7 +831,10 @@ func TestAPIMisuseScenario(t *testing.T) {
 	// helper owns a file, so both assertions turn on the path: this title
 	// never says fetch_pinned yet the report is still caught, while the
 	// evidence that carries the real finding no longer buys it the positive.
-	safeReport := `{"findings":[{
+	safeReport := `{
+  "inventory":[{"id":"S1","location":"pinned_client.py:5","class":"API misuse","boundary":"caller of the fetch helper","consumes":"the verify argument default"}],
+  "findings":[{
+  "sinks":["S1"],
   "title":"Certificate validation can be disabled in the pinned helper",
   "cwe":"CWE-295",
   "location":"pinned_client.py:5",
@@ -852,7 +860,10 @@ func TestAPIMisuseScenario(t *testing.T) {
 	// The skill steers a write-up toward contrasting the two defaults, so a
 	// correct finding may well name the safe helper. It stays in client.py,
 	// which is what keeps the negative off it.
-	contrastReport := `{"findings":[{
+	contrastReport := `{
+  "inventory":[{"id":"S1","location":"client.py:5","class":"API misuse","boundary":"caller of the fetch helper","consumes":"the verify argument default"}],
+  "findings":[{
+  "sinks":["S1"],
   "title":"fetch defaults verify off while fetch_pinned is the safe counterpart",
   "cwe":"CWE-295",
   "location":"client.py:5",
@@ -869,6 +880,31 @@ func TestAPIMisuseScenario(t *testing.T) {
 		if !result.Matched {
 			t.Errorf("write-up contrasting the two helpers failed an assertion: %+v", result)
 		}
+	}
+
+	// The same finding filed as a plain TLS bug at the call site. Everything the
+	// prose assertions look at is unchanged, so the class on the cited sink is
+	// the only thing standing between this and the required positive: the
+	// scenario is about reaching the API definition, not about noticing that
+	// urlopen can run without certificate checks.
+	networkReport := `{
+  "inventory":[{"id":"S1","location":"client.py:11","class":"Network","boundary":"caller of the fetch helper","consumes":"the url argument"}],
+  "findings":[{
+  "sinks":["S1"],
+  "title":"TLS verification disabled by default in fetch",
+  "cwe":"CWE-295",
+  "location":"client.py:11",
+  "trace":"fetch(url, verify=False) leaves context.verify_mode at ssl.CERT_NONE for a caller who passes nothing."
+}]}`
+	got, err = (HeuristicJudge{}).Judge(sc, networkReport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("network-class results = %d, want 3", len(got))
+	}
+	if got[0].Matched {
+		t.Errorf("finding whose sink is not classified API misuse passed the required positive: %+v", got[0])
 	}
 }
 

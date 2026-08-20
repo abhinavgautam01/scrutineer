@@ -5,6 +5,7 @@ experiment: security-deep-dive-prompt
 variant: production
 should_find:
   - path: client.py
+    sink_class: API misuse
     evidence_contains:
       - verify=False
       - CERT_NONE
