@@ -430,7 +430,8 @@ func TestHeuristicJudge(t *testing.T) {
 }
 
 func TestAssertionMatchesFinding(t *testing.T) {
-	baseFinding := Finding{Title: "SQL injection in buildQuery", Severity: "high", CWE: "cwe-89", Location: "app.py:12:3"}
+	baseFinding := Finding{Sinks: []string{"S1"}, Title: "SQL injection in buildQuery", Severity: "high", CWE: "cwe-89", Location: "app.py:12:3"}
+	classes := map[string]string{"S1": "Template or interpolation"}
 	tests := []struct {
 		name string
 		a    Assertion
@@ -457,6 +458,20 @@ func TestAssertionMatchesFinding(t *testing.T) {
 			f:    Finding{Title: "nested", Location: "pkg/app.py:1"},
 			want: true,
 		},
+		{name: "sink class match", a: Assertion{SinkClass: "template or interpolation"}, want: true},
+		{name: "sink class mismatch", a: Assertion{SinkClass: "API misuse"}, want: false},
+		{
+			name: "sink class needs an inventory entry",
+			a:    Assertion{SinkClass: "Template or interpolation"},
+			f:    Finding{Sinks: []string{"S9"}, Title: "uninventoried", Location: "app.py:1"},
+			want: false,
+		},
+		{
+			name: "sink class needs a cited sink",
+			a:    Assertion{SinkClass: "Template or interpolation"},
+			f:    Finding{Title: "sinkless", Location: "app.py:1"},
+			want: false,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -464,7 +479,7 @@ func TestAssertionMatchesFinding(t *testing.T) {
 			if f.Title == "" && f.Location == "" {
 				f = baseFinding
 			}
-			if got := assertionMatchesFinding(tc.a, f); got != tc.want {
+			if got := assertionMatchesFinding(tc.a, f, classes); got != tc.want {
 				t.Fatalf("assertionMatchesFinding() = %v, want %v", got, tc.want)
 			}
 		})
