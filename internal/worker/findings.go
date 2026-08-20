@@ -168,13 +168,19 @@ func (f scanFinding) toFinding(scanID, repoID uint, commit, subPath string) db.F
 	}
 }
 
+// toReferences maps a report's references onto rows, keeping the first mention
+// of each URL. A skill listing one URL twice under different tags means one
+// reference, and (finding_id, url) is unique, so passing both through would
+// fail the insert that creates the finding.
 func toReferences(refs []scanReference) []db.FindingReference {
 	out := make([]db.FindingReference, 0, len(refs))
+	seen := make(map[string]bool, len(refs))
 	for _, r := range refs {
 		url := strings.TrimSpace(r.URL)
-		if url == "" {
+		if url == "" || seen[url] {
 			continue
 		}
+		seen[url] = true
 		out = append(out, db.FindingReference{
 			URL:     url,
 			Summary: strings.TrimSpace(r.Summary),

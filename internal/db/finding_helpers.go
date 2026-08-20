@@ -520,7 +520,14 @@ func AddFindingCommunication(gdb *gorm.DB, findingID uint, channel, direction, a
 	return c, nil
 }
 
-// AddFindingReference records an external URL related to the finding.
+// AddFindingReference records an external URL related to the finding, reusing
+// the finding's existing row for that URL and enriching it with any non-empty
+// metadata the new write carries.
+//
+// The lookup and the insert are two statements, so two writers can both miss
+// and both try to insert. The unique index on (finding_id, url) settles that:
+// the loser gets a constraint error back rather than writing the duplicate this
+// function exists to prevent.
 func AddFindingReference(gdb *gorm.DB, findingID uint, url, tags, summary string) (*FindingReference, error) {
 	url = strings.TrimSpace(url)
 	tags = strings.TrimSpace(tags)
