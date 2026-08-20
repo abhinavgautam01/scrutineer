@@ -934,11 +934,15 @@ func TestConventionPrevalenceScenario(t *testing.T) {
 		}
 	}
 
+	// The reachable site is written up correctly here. What the negative catches
+	// is the eight house-idiom sites filed alongside it, so the search finding
+	// keeps its prior art to leave the count out of the verdict.
 	conventionReport := `{"findings":[{
   "title":"SQL injection in search",
   "cwe":"CWE-89",
   "location":"search.py:11",
-  "trace":"flask.request.args supplies q, which reaches SELECT id FROM items through store.query."
+  "trace":"flask.request.args supplies q, which reaches SELECT id FROM items through store.query.",
+  "prior_art":"grep -rn 'query(\"SELECT' finds 9 sites; the 8 in reports.py interpolate module constants."
 },{
   "title":"SQL injection in active_accounts",
   "cwe":"CWE-89",
@@ -957,6 +961,28 @@ func TestConventionPrevalenceScenario(t *testing.T) {
 	}
 	if got[1].Matched {
 		t.Fatalf("house-idiom site unexpectedly passed should_not_find: %+v", got[1])
+	}
+
+	// The same reachable site written up without the sweep behind it. The trace
+	// is as good as the passing report's, so the grep command and its count are
+	// the only thing missing: prevalence is what tells this site apart from the
+	// eight the run is meant to leave alone, so a write-up that never counted
+	// them has not done that work.
+	uncountedReport := `{"findings":[{
+  "title":"SQL injection in search",
+  "cwe":"CWE-89",
+  "location":"search.py:11",
+  "trace":"flask.request.args supplies q, which reaches SELECT id FROM items through store.query."
+}]}`
+	got, err = (HeuristicJudge{}).Judge(sc, uncountedReport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("uncounted results = %d, want 2", len(got))
+	}
+	if got[0].Matched {
+		t.Errorf("write-up with no grep count passed the required positive: %+v", got[0])
 	}
 }
 

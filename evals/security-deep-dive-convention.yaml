@@ -10,6 +10,9 @@ should_find:
     evidence_contains:
       - request.args
       - SELECT id FROM items
+      - grep -rn
+      - 'query("SELECT'
+      - "9"
     required: true
 should_not_find:
   - finding: SQL injection
