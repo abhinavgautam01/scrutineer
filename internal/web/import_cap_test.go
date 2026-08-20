@@ -179,8 +179,6 @@ func TestCapScannerResult_perAlertURLRuleIDGroupsByTitle(t *testing.T) {
 	}
 }
 
-// A rule id that is not a URL still wins over the title, so two rules sharing a
-// title keep their own budgets.
 // A code-scanning CSV row carries a Finding URL but can leave both the Name
 // and Category columns blank, which is the one input shape that reaches the
 // cap with a URL rule id and no title. Keying those on the empty string would
@@ -221,6 +219,8 @@ func TestCapScannerResult_noIdentifierAtAllSharesOneBucket(t *testing.T) {
 	}
 }
 
+// A rule id that is not a URL still wins over the title, so two rules sharing a
+// title keep their own budgets.
 func TestCapScannerResult_ruleIDWinsOverSharedTitle(t *testing.T) {
 	var findings []ingest.Finding
 	for _, rule := range []string{"js/xss", "py/xss"} {
