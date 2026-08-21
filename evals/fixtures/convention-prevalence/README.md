@@ -11,5 +11,4 @@ while the trace is what singles out the one site an attacker can reach.
 
 The deep-dive eval should file the `search.py` site and leave the `reports.py`
 sites in the ruled-out list rather than filing eight more findings for the
-convention. The finding also has to carry the grep command and its nine hits in
-`prior_art`, since counting the sites is what tells the one apart from the eight.
+convention.
