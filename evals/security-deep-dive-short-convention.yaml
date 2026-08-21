@@ -13,7 +13,7 @@ should_find:
       - SELECT id FROM items
       - grep -rn
       - 'query("SELECT'
-      - "9"
+      - 9 hits
     required: true
 should_not_find:
   - finding: SQL injection
