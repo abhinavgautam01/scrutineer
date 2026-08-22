@@ -13,7 +13,7 @@ require (
 	github.com/git-pkgs/cwe v0.1.1
 	github.com/git-pkgs/enrichment v0.6.5
 	github.com/git-pkgs/magic v0.2.0
-	github.com/git-pkgs/pom v0.1.6
+	github.com/git-pkgs/pom v0.1.7
 	github.com/git-pkgs/purl v0.1.16
 	github.com/git-pkgs/sarif v0.1.2
 	github.com/git-pkgs/sbom v0.1.5
