@@ -1057,6 +1057,24 @@ func TestParseCritic_rejectsAppliedAdjustments(t *testing.T) {
 	}
 }
 
+func TestParseCritic_requiresAppliedAdjustmentsArray(t *testing.T) {
+	for name, field := range map[string]string{
+		"missing": "",
+		"null":    `,"applied_adjustments":null`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			report := `{"production_viability":"VIABLE","source_state":"PRESENT","reason":"The shipped server target calls the parser.","counterevidence":[],"attacker_position":"remote client","preconditions":[],"impact":"code execution","likelihood":"plausible","severity":"High"` + field + `,"facts_that_would_change_the_result":[]}`
+			var result criticOutput
+			if err := json.Unmarshal([]byte(report), &result); err != nil {
+				t.Fatal(err)
+			}
+			if err := validateCriticOutput(result); err == nil || !strings.Contains(err.Error(), "must be present as an empty array") {
+				t.Fatalf("error = %v, want required applied_adjustments array rejection", err)
+			}
+		})
+	}
+}
+
 func TestParseVerify_invalidRubricIsStoredUngraded(t *testing.T) {
 	report := strings.Replace(confirmedVerificationReport(t), `"number":2`, `"number":1`, 1)
 	f, gdb := runSkillWithFinding(t, "verify", report, db.FindingNew)

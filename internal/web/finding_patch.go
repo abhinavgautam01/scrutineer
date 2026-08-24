@@ -12,7 +12,7 @@ import (
 )
 
 var errNoRemediationAttempt = errors.New("no gated patch is available to re-attack")
-var errFindingNonViable = errors.New("latest critic assessment is NON_VIABLE; disclosure is blocked")
+var errFindingNonViable = errors.New("latest critic assessment is NON_VIABLE; disclosure and upstream reporting are blocked")
 
 const reportUpstreamSkillName = "report-upstream"
 

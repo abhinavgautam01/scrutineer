@@ -47,7 +47,7 @@ type criticOutput struct {
 	Impact              string `json:"impact"`
 	Likelihood          string `json:"likelihood"`
 	Severity            string `json:"severity"`
-	AppliedAdjustments  []any  `json:"applied_adjustments"`
+	AppliedAdjustments  *[]any `json:"applied_adjustments"`
 }
 
 // parseRepoMetadataOutput updates the Repository columns that previously
@@ -1040,7 +1040,10 @@ func validateCriticOutput(result criticOutput) error {
 	if strings.TrimSpace(result.Reason) == "" || strings.TrimSpace(result.AttackerPosition) == "" || strings.TrimSpace(result.Impact) == "" {
 		return errors.New("critic reason, attacker_position, and impact must be non-empty")
 	}
-	if len(result.AppliedAdjustments) != 0 {
+	if result.AppliedAdjustments == nil {
+		return errors.New("critic applied_adjustments must be present as an empty array")
+	}
+	if len(*result.AppliedAdjustments) != 0 {
 		return errors.New("critic applied_adjustments must be empty")
 	}
 	return nil

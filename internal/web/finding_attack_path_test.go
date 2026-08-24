@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -116,8 +117,8 @@ func TestFindingSkillScanOptsBlocksBothDisclosureSkills(t *testing.T) {
 	f := seedFindingForForm(t, s)
 	s.DB.Model(&f).Update("production_viability", db.ProductionViabilityNonViable)
 	for _, skill := range []string{discloseSkillName, reportUpstreamSkillName} {
-		if _, err := s.findingSkillScanOpts(f.ID, skill, ""); err == nil || !strings.Contains(err.Error(), "NON_VIABLE") {
-			t.Errorf("%s error = %v, want NON_VIABLE precondition", skill, err)
+		if _, err := s.findingSkillScanOpts(f.ID, skill, ""); !errors.Is(err, errFindingNonViable) {
+			t.Errorf("%s error = %v, want %q", skill, err, errFindingNonViable)
 		}
 	}
 }
