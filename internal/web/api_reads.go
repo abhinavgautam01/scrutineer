@@ -386,6 +386,14 @@ func (s *Server) apiGetFinding(w http.ResponseWriter, r *http.Request) {
 	if verification != nil {
 		summary["verification"] = findingVerificationResponse(verification)
 	}
+	attackPath, err := db.LatestFindingAttackPath(s.DB, f.ID)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "load finding attack path")
+		return
+	}
+	if attackPath != nil {
+		summary["attack_path"] = findingAttackPathResponse(attackPath)
+	}
 	attempt, err := db.LatestRemediationAttempt(s.DB, f.ID)
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "load remediation attempt")
@@ -410,6 +418,7 @@ var findingSummaryColumns = []string{
 	"quality_tier", "cve_id", "ghsa_id", "cvss_vector", "cvss_score",
 	"fix_version", "fix_commit", "resolution", "assignee", "missed_count",
 	"dup_check", "novelty", "novelty_checked_commit", "novelty_checked_at",
+	"production_viability",
 }
 
 func findingSummary(f db.Finding) map[string]any {
@@ -442,5 +451,6 @@ func findingSummary(f db.Finding) map[string]any {
 		"novelty":                string(f.Novelty),
 		"novelty_checked_commit": f.NoveltyCheckedCommit,
 		"novelty_checked_at":     f.NoveltyCheckedAt,
+		"production_viability":   f.ProductionViability,
 	}
 }

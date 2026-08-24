@@ -887,6 +887,11 @@ type Finding struct {
 	// queue can filter on an indexed column rather than LIKE-scanning
 	// finding_notes for the revalidate header.
 	LastRevalidateVerdict string `gorm:"index"`
+	// ProductionViability caches the newest immutable critic assessment so
+	// finding lists and disclosure gates do not need to parse report JSON or
+	// join the attack-path history. The append-only FindingAttackPath row is
+	// the source of truth; this column is only its current projection.
+	ProductionViability string `gorm:"index"`
 	// Novelty records whether the finding's source location changed between
 	// the scanned commit and the HEAD inspected by revalidate. A touched file
 	// starts as unclear until revalidate classifies the staged diff.
@@ -955,6 +960,7 @@ type Finding struct {
 	References             []FindingReference      `gorm:"constraint:OnDelete:CASCADE"`
 	History                []FindingHistory        `gorm:"constraint:OnDelete:CASCADE"`
 	Verifications          []FindingVerification   `gorm:"constraint:OnDelete:CASCADE"`
+	AttackPaths            []FindingAttackPath     `gorm:"constraint:OnDelete:CASCADE"`
 	RemediationAttempts    []RemediationAttempt    `gorm:"constraint:OnDelete:CASCADE"`
 	RemediationValidations []RemediationValidation `gorm:"constraint:OnDelete:CASCADE"`
 
@@ -1233,6 +1239,27 @@ type FindingVerification struct {
 	CreatedAt time.Time
 }
 
+const (
+	ProductionViabilityViable            = "VIABLE"
+	ProductionViabilityNonViable         = "NON_VIABLE"
+	ProductionViabilitySampleOrTest      = "SAMPLE_OR_TEST"
+	ProductionViabilityConditionalViable = "CONDITIONAL_VIABLE"
+)
+
+// FindingAttackPath is one immutable release-viability assessment produced
+// by a finding-scoped critic scan. Report preserves the complete structured
+// attack-path record; ProductionViability is promoted for display and
+// filtering. The same scan cannot be recorded twice when parser work retries.
+type FindingAttackPath struct {
+	ID                  uint   `gorm:"primarykey"`
+	FindingID           uint   `gorm:"index;not null;uniqueIndex:idx_finding_attack_path_scan,priority:1"`
+	ScanID              uint   `gorm:"not null;uniqueIndex:idx_finding_attack_path_scan,priority:2"`
+	ProductionViability string `gorm:"index;not null"`
+	Report              string `gorm:"type:text;not null"`
+
+	CreatedAt time.Time
+}
+
 // RemediationAttempt is one immutable patch that passed the host-side
 // applicability gate. Attempt numbers are scoped to a finding; PatchScanID
 // makes parser retries idempotent. Finding.SuggestedFix remains the convenient
@@ -1486,7 +1513,7 @@ func Open(dsn string) (*gorm.DB, error) {
 	if err := gdb.AutoMigrate(
 		&Repository{}, &Scan{},
 		&Finding{}, &FindingLabel{}, &FindingNote{},
-		&FindingCommunication{}, &FindingReference{}, &FindingHistory{}, &FindingReview{}, &FindingVerification{},
+		&FindingCommunication{}, &FindingReference{}, &FindingHistory{}, &FindingReview{}, &FindingVerification{}, &FindingAttackPath{},
 		&RemediationAttempt{}, &RemediationValidation{}, &AuditEvent{},
 		&Dependency{}, &ExpectedFinding{}, &Package{}, &PackageAlternative{}, &Dependent{}, &FindingDependent{}, &Advisory{}, &AdvisoryAudit{},
 		&Maintainer{}, &Skill{}, &Subproject{},

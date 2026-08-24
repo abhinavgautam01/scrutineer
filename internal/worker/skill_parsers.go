@@ -24,6 +24,7 @@ const insertBatchSize = 50
 const (
 	findingDedupSkill = "finding-dedup"
 	verifySkillName   = "verify"
+	criticSkillName   = "critic"
 )
 
 type verifyOutput struct {
@@ -36,6 +37,17 @@ type verifyOutput struct {
 	Reproducer string `json:"reproducer"`
 	Evidence   string `json:"evidence"`
 	Notes      string `json:"notes"`
+}
+
+type criticOutput struct {
+	ProductionViability string `json:"production_viability"`
+	SourceState         string `json:"source_state"`
+	Reason              string `json:"reason"`
+	AttackerPosition    string `json:"attacker_position"`
+	Impact              string `json:"impact"`
+	Likelihood          string `json:"likelihood"`
+	Severity            string `json:"severity"`
+	AppliedAdjustments  []any  `json:"applied_adjustments"`
 }
 
 // parseRepoMetadataOutput updates the Repository columns that previously
@@ -936,6 +948,101 @@ func (w *Worker) parseVerifyOutput(scan *db.Scan, report string, emit func(Event
 	}
 
 	emit(Event{Kind: KindText, Text: "finding " + fmt.Sprint(f.ID) + " -> " + result.Status})
+	return nil
+}
+
+// parseCriticOutput records an immutable release-viability assessment and
+// updates the finding's indexed latest projection. The raw report remains the
+// source of truth for preconditions, counterevidence, adjustments, and facts
+// that could change the result.
+func (w *Worker) parseCriticOutput(scan *db.Scan, report string, emit func(Event)) error {
+	if scan.FindingID == nil {
+		return errors.New("critic scan has no finding_id")
+	}
+	var result criticOutput
+	if err := json.Unmarshal([]byte(report), &result); err != nil {
+		return fmt.Errorf("parse critic report: %w", err)
+	}
+	if err := validateCriticOutput(result); err != nil {
+		return err
+	}
+
+	err := w.DB.Transaction(func(tx *gorm.DB) error {
+		var f db.Finding
+		if err := tx.First(&f, *scan.FindingID).Error; err != nil {
+			return fmt.Errorf("load finding %d: %w", *scan.FindingID, err)
+		}
+		if result.Severity != f.Severity {
+			return fmt.Errorf("critic severity %q does not match finding severity %q", result.Severity, f.Severity)
+		}
+		var existing db.FindingAttackPath
+		lookup := tx.Where("finding_id = ? AND scan_id = ?", f.ID, scan.ID).Limit(1).Find(&existing)
+		if lookup.Error != nil {
+			return fmt.Errorf("check existing critic record: %w", lookup.Error)
+		}
+		if lookup.RowsAffected > 0 {
+			return nil
+		}
+		row := db.FindingAttackPath{
+			FindingID:           f.ID,
+			ScanID:              scan.ID,
+			ProductionViability: result.ProductionViability,
+			Report:              report,
+		}
+		if err := tx.Create(&row).Error; err != nil {
+			return fmt.Errorf("record critic assessment: %w", err)
+		}
+		if err := tx.Model(&db.Finding{}).Where("id = ?", f.ID).
+			Update("production_viability", result.ProductionViability).Error; err != nil {
+			return fmt.Errorf("update production viability: %w", err)
+		}
+		note := fmt.Sprintf("critic: %s\nsource state: %s\nlikelihood: %s\nseverity: %s\n\n%s\n",
+			result.ProductionViability, result.SourceState, result.Likelihood, result.Severity,
+			strings.TrimSpace(result.Reason))
+		if _, err := db.AddFindingNote(tx, f.ID, note, criticSkillName); err != nil {
+			return fmt.Errorf("record critic note: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	emit(Event{Kind: KindText, Text: fmt.Sprintf("finding %d production viability -> %s", *scan.FindingID, result.ProductionViability)})
+	return nil
+}
+
+func validateCriticOutput(result criticOutput) error {
+	switch result.ProductionViability {
+	case db.ProductionViabilityViable, db.ProductionViabilityNonViable,
+		db.ProductionViabilitySampleOrTest, db.ProductionViabilityConditionalViable:
+	default:
+		return fmt.Errorf("critic production_viability %q is not one of VIABLE|NON_VIABLE|SAMPLE_OR_TEST|CONDITIONAL_VIABLE", result.ProductionViability)
+	}
+	switch result.SourceState {
+	case "PRESENT", "MOVED", "MISSING", "UNKNOWN":
+	default:
+		return fmt.Errorf("critic source_state %q is not one of PRESENT|MOVED|MISSING|UNKNOWN", result.SourceState)
+	}
+	if (result.SourceState == "MOVED" || result.SourceState == "MISSING") &&
+		result.ProductionViability != db.ProductionViabilityConditionalViable {
+		return fmt.Errorf("critic must classify source_state %s as CONDITIONAL_VIABLE", result.SourceState)
+	}
+	switch result.Likelihood {
+	case "likely", "plausible", "unlikely", "unknown":
+	default:
+		return fmt.Errorf("critic likelihood %q is not one of likely|plausible|unlikely|unknown", result.Likelihood)
+	}
+	switch result.Severity {
+	case "Critical", "High", "Medium", "Low":
+	default:
+		return fmt.Errorf("critic severity %q is not one of Critical|High|Medium|Low", result.Severity)
+	}
+	if strings.TrimSpace(result.Reason) == "" || strings.TrimSpace(result.AttackerPosition) == "" || strings.TrimSpace(result.Impact) == "" {
+		return errors.New("critic reason, attacker_position, and impact must be non-empty")
+	}
+	if len(result.AppliedAdjustments) != 0 {
+		return errors.New("critic applied_adjustments must be empty")
+	}
 	return nil
 }
 

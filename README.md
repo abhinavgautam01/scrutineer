@@ -105,7 +105,7 @@ When the containerised runner is active (the default when a container runtime is
 ### Triage and disclosure workflow
 
 - **Finding workflow** -- guided triage flow from new through verification, disclosure, and publication with human gates at each step
-- **Cheap-classifier pre-sort** -- the `revalidate` skill auto-enqueues for High/Critical deep-dive findings and every imported finding, emitting `true_positive` / `false_positive` / `already_fixed` / `uncertain` plus an optional severity adjustment; a `true_positive` on a High/Critical finding chains into `verify` automatically
+- **Classifier and release-viability pre-sort** -- the `revalidate` skill auto-enqueues for High/Critical deep-dive findings and every imported finding, emitting `true_positive` / `false_positive` / `already_fixed` / `uncertain` plus an optional severity adjustment; every true positive chains into the `critic` release-build assessment, while High/Critical true positives also chain into `verify`
 - **Audit queue** -- random sample of recent low and false-positive verdicts at `/audit` so the operator can spot-check the classifier; each review records an agreement-or-overturn verdict on the finding
 - **Exploited-in-the-wild flag** -- analyst-only `yes`/`no` field on findings with free-text evidence, surfaced on the finding page, in the OSV `database_specific` block, in CSAF audit notes, and in markdown report exports
 - **Breaking-change classifier** -- the `breaking-change` skill runs over a suggested-fix diff plus the top dependents, recording `breaking` / `non_breaking` / `unknown` with a rationale and the list of affected dependents
@@ -163,7 +163,8 @@ Adding a repo enqueues the `triage` skill, whose SKILL.md lists the further skil
 | `advisory-deep-dive` | Re-audits every past advisory against its fix commit for a fix bypass, an incomplete fix, or the same bug class in sibling code the patch never touched; the deep-dive scoped to the advisory space |
 | `finding-dedup` | Compares open findings and marks overlapping reports as duplicates |
 | `verify` | Re-checks one finding against current HEAD, records an evidenced attack tree, runs three isolated attempts, and stores an append-only five-criterion grading record with a derived score |
-| `revalidate` | Cheap read-only classifier (prose + `git log`, no PoC execution) that emits true / false positive / already-fixed / uncertain; auto-enqueued for High/Critical from `security-deep-dive` and for every imported finding. A `true_positive` on a High/Critical finding chains automatically to `verify` |
+| `critic` | Assesses whether a true-positive finding can affect a real release build, stores an append-only attack-path record, and marks release paths as viable, non-viable, sample/test-only, or conditional |
+| `revalidate` | Cheap read-only classifier (prose + `git log`, no PoC execution) that emits true / false positive / already-fixed / uncertain; auto-enqueued for High/Critical from `security-deep-dive` and for every imported finding. Every `true_positive` chains to `critic`, and High/Critical true positives also chain to `verify` |
 | `breaking-change` | Static breaking-change check on the suggested-fix diff; records `breaking`/`non_breaking`/`unknown` with rationale and the affected dependents |
 | `release-watch` | After a finding reaches `fixed`, watches the upstream for a release containing the fix commit; records release tag, URL, and timestamp on the finding |
 | `disclose` | Drafts a GHSA-shaped advisory (title, description, CVSS, CWEs, references) for one finding |
@@ -215,9 +216,9 @@ Every index page has a search box plus filter and sort dropdowns; the specifics 
 
 Each finding from the `security-deep-dive` skill starts at **new** and moves through a guided workflow:
 
-1. **new** -- just identified. High/Critical from `security-deep-dive` and every imported finding auto-enqueue a `revalidate` pass first, which records `true_positive` / `false_positive` / `already_fixed` / `uncertain` on the finding and (when true_positive on High/Critical) chains into `verify`. Outside that path: click "Verify" to trigger independent confirmation, "Skip to triage" if you trust the audit, or "Reject"
+1. **new** -- just identified. High/Critical from `security-deep-dive` and every imported finding auto-enqueue a `revalidate` pass first, which records `true_positive` / `false_positive` / `already_fixed` / `uncertain` on the finding. Every true positive chains into the release-build `critic`; High/Critical true positives also chain into `verify`. Outside that path: click "Verify" to trigger independent confirmation, "Skip to triage" if you trust the audit, or "Reject"
 2. **enriched** -- verification ran. Review and click "Triage"
-3. **triaged** -- confirmed real. Click "Prepare disclosure"
+3. **triaged** -- confirmed real. Review the critic's release-build assessment, then click "Prepare disclosure". An exact `NON_VIABLE` assessment blocks disclosure and upstream reporting; `VIABLE`, `SAMPLE_OR_TEST`, `CONDITIONAL_VIABLE`, and unassessed findings remain analyst decisions
 4. **ready** -- draft prepared. Run the `report-upstream` skill to file it via GitHub PVR (github.com only, requires `gh` auth), run `public-issue` for reviewed low-severity hardening findings that are safe to file publicly, or click "Mark as reported" after sending it yourself. When upstream has no PVR, follow the runbook in [docs/disclosure-fallback.md](docs/disclosure-fallback.md): route to a CNA when `cna-match` names one, otherwise contact the channel `maintainers` returned
 5. **reported** -- sent to maintainer. Click "Acknowledged" when they respond
 6. **acknowledged** -- maintainer working on fix. Click "Mark fixed" when it ships

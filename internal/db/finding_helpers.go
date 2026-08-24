@@ -499,6 +499,27 @@ func LatestFindingVerification(gdb *gorm.DB, findingID uint) (*FindingVerificati
 	return &row, nil
 }
 
+// LatestFindingAttackPath returns the newest append-only critic assessment.
+// A missing row is normal for findings that predate the critic pipeline.
+func LatestFindingAttackPath(gdb *gorm.DB, findingID uint) (*FindingAttackPath, error) {
+	var row FindingAttackPath
+	result := gdb.Where("finding_id = ?", findingID).Order("id desc").Limit(1).Find(&row)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, nil
+	}
+	return &row, nil
+}
+
+// FindingDisclosureBlocked reports whether the latest critic assessment says
+// this finding cannot affect a release build. Other critic outcomes remain
+// analyst decisions and do not automatically suppress disclosure.
+func FindingDisclosureBlocked(f Finding) bool {
+	return f.ProductionViability == ProductionViabilityNonViable
+}
+
 // AddFindingCommunication records one external interaction.
 func AddFindingCommunication(gdb *gorm.DB, findingID uint, channel, direction, actor, body, offeredHelp string, at time.Time) (*FindingCommunication, error) {
 	if at.IsZero() {

@@ -34,6 +34,17 @@ func (s *Server) apiPatchFinding(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if body.Fields[statusKey] == string(db.FindingReported) {
+		var f db.Finding
+		if err := s.DB.Select("id", "production_viability").First(&f, id).Error; err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "load finding viability")
+			return
+		}
+		if db.FindingDisclosureBlocked(f) {
+			writeAPIError(w, http.StatusPreconditionFailed, errFindingNonViable.Error())
+			return
+		}
+	}
 	source := sourceFromRequest(r)
 	fields := make([]string, 0, len(body.Fields))
 	for field := range body.Fields {

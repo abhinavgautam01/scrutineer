@@ -437,6 +437,8 @@ func (w *Worker) parseSkillOutput(skill *db.Skill, scan *db.Scan, report string,
 		return w.parseVerifyOutput(scan, report, emit)
 	case "revalidate":
 		return w.parseRevalidateOutput(scan, report, emit)
+	case "critic":
+		return w.parseCriticOutput(scan, report, emit)
 	case "breaking_change":
 		return w.parseBreakingChangeOutput(scan, report, emit)
 	case "mitigation":

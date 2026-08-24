@@ -972,6 +972,91 @@ func TestParseVerify_isIdempotentPerScan(t *testing.T) {
 	}
 }
 
+func TestParseCritic_recordsImmutableAssessmentAndProjection(t *testing.T) {
+	report := `{"production_viability":"CONDITIONAL_VIABLE","source_state":"PRESENT","reason":"The parser ships only behind the experimental build tag.","counterevidence":["release workflow omits the tag"],"attacker_position":"remote unauthenticated client","preconditions":["operator enables experimental parser"],"impact":"attacker-controlled input reaches the parser sink","likelihood":"plausible","severity":"High","applied_adjustments":[],"facts_that_would_change_the_result":["a default release enables the parser"]}`
+	f, gdb := runSkillWithFinding(t, "critic", report, db.FindingEnriched)
+	if f.ProductionViability != db.ProductionViabilityConditionalViable {
+		t.Fatalf("production viability = %q, want CONDITIONAL_VIABLE", f.ProductionViability)
+	}
+	var rows []db.FindingAttackPath
+	if err := gdb.Where("finding_id = ?", f.ID).Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Report != report {
+		t.Fatalf("attack path rows = %+v, want one immutable raw report", rows)
+	}
+	var scan db.Scan
+	if err := gdb.First(&scan, rows[0].ScanID).Error; err != nil {
+		t.Fatal(err)
+	}
+	w := &Worker{DB: gdb, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if err := w.parseCriticOutput(&scan, report, func(Event) {}); err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	gdb.Model(&db.FindingAttackPath{}).Where("finding_id = ?", f.ID).Count(&count)
+	if count != 1 || len(findingNotes(gdb, f.ID)) != 1 {
+		t.Fatalf("parser retry created duplicates: rows=%d notes=%d", count, len(findingNotes(gdb, f.ID)))
+	}
+}
+
+func TestParseCritic_rejectsMissingSourceAsNonViable(t *testing.T) {
+	gdb, err := db.Open(filepath.Join(t.TempDir(), "critic.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := db.Repository{URL: "https://example.com/x", Name: "x"}
+	gdb.Create(&repo)
+	prior := db.Scan{RepositoryID: repo.ID, Kind: JobSkill, Status: db.ScanDone}
+	gdb.Create(&prior)
+	f := db.Finding{ScanID: prior.ID, RepositoryID: repo.ID, Title: "x", Severity: "High"}
+	gdb.Create(&f)
+	scan := db.Scan{RepositoryID: repo.ID, FindingID: new(f.ID)}
+	w := &Worker{DB: gdb, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	report := `{"production_viability":"NON_VIABLE","source_state":"MISSING","reason":"path absent","attacker_position":"remote client","impact":"code execution","likelihood":"unknown","severity":"High"}`
+	err = w.parseCriticOutput(&scan, report, func(Event) {})
+	if err == nil || !strings.Contains(err.Error(), "must classify source_state MISSING as CONDITIONAL_VIABLE") {
+		t.Fatalf("error = %v, want source-drift fail-closed error", err)
+	}
+	var count int64
+	gdb.Model(&db.FindingAttackPath{}).Where("finding_id = ?", f.ID).Count(&count)
+	if count != 0 {
+		t.Fatalf("attack path rows = %d, want 0", count)
+	}
+}
+
+func TestParseCritic_rejectsSeverityAdjustment(t *testing.T) {
+	report := `{"production_viability":"VIABLE","source_state":"PRESENT","reason":"The shipped server target calls the parser.","counterevidence":[],"attacker_position":"remote client","preconditions":[],"impact":"code execution","likelihood":"plausible","severity":"Medium","applied_adjustments":[],"facts_that_would_change_the_result":[]}`
+	gdb, err := db.Open(filepath.Join(t.TempDir(), "critic.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := db.Repository{URL: "https://example.com/critic", Name: "critic"}
+	gdb.Create(&repo)
+	parent := db.Scan{RepositoryID: repo.ID, Kind: JobSkill, Status: db.ScanDone}
+	gdb.Create(&parent)
+	finding := db.Finding{ScanID: parent.ID, RepositoryID: repo.ID, Title: "x", Severity: "High"}
+	gdb.Create(&finding)
+	scan := db.Scan{RepositoryID: repo.ID, FindingID: new(finding.ID)}
+	w := &Worker{DB: gdb, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+
+	err = w.parseCriticOutput(&scan, report, func(Event) {})
+	if err == nil || !strings.Contains(err.Error(), "does not match finding severity") {
+		t.Fatalf("error = %v, want severity mismatch", err)
+	}
+}
+
+func TestParseCritic_rejectsAppliedAdjustments(t *testing.T) {
+	report := `{"production_viability":"VIABLE","source_state":"PRESENT","reason":"The shipped server target calls the parser.","counterevidence":[],"attacker_position":"remote client","preconditions":[],"impact":"code execution","likelihood":"plausible","severity":"High","applied_adjustments":[{"kind":"cap"}],"facts_that_would_change_the_result":[]}`
+	var result criticOutput
+	if err := json.Unmarshal([]byte(report), &result); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateCriticOutput(result); err == nil || !strings.Contains(err.Error(), "must be empty") {
+		t.Fatalf("error = %v, want applied_adjustments rejection", err)
+	}
+}
+
 func TestParseVerify_invalidRubricIsStoredUngraded(t *testing.T) {
 	report := strings.Replace(confirmedVerificationReport(t), `"number":2`, `"number":1`, 1)
 	f, gdb := runSkillWithFinding(t, "verify", report, db.FindingNew)
