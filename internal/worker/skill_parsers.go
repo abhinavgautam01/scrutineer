@@ -46,7 +46,6 @@ type criticOutput struct {
 	AttackerPosition    string `json:"attacker_position"`
 	Impact              string `json:"impact"`
 	Likelihood          string `json:"likelihood"`
-	Severity            string `json:"severity"`
 	AppliedAdjustments  *[]any `json:"applied_adjustments"`
 }
 
@@ -972,9 +971,6 @@ func (w *Worker) parseCriticOutput(scan *db.Scan, report string, emit func(Event
 		if err := tx.First(&f, *scan.FindingID).Error; err != nil {
 			return fmt.Errorf("load finding %d: %w", *scan.FindingID, err)
 		}
-		if result.Severity != f.Severity {
-			return fmt.Errorf("critic severity %q does not match finding severity %q", result.Severity, f.Severity)
-		}
 		var existing db.FindingAttackPath
 		lookup := tx.Where("finding_id = ? AND scan_id = ?", f.ID, scan.ID).Limit(1).Find(&existing)
 		if lookup.Error != nil {
@@ -997,7 +993,7 @@ func (w *Worker) parseCriticOutput(scan *db.Scan, report string, emit func(Event
 			return fmt.Errorf("update production viability: %w", err)
 		}
 		note := fmt.Sprintf("critic: %s\nsource state: %s\nlikelihood: %s\nseverity: %s\n\n%s\n",
-			result.ProductionViability, result.SourceState, result.Likelihood, result.Severity,
+			result.ProductionViability, result.SourceState, result.Likelihood, f.Severity,
 			strings.TrimSpace(result.Reason))
 		if _, err := db.AddFindingNote(tx, f.ID, note, criticSkillName); err != nil {
 			return fmt.Errorf("record critic note: %w", err)
@@ -1031,11 +1027,6 @@ func validateCriticOutput(result criticOutput) error {
 	case "likely", "plausible", "unlikely", "unknown":
 	default:
 		return fmt.Errorf("critic likelihood %q is not one of likely|plausible|unlikely|unknown", result.Likelihood)
-	}
-	switch result.Severity {
-	case "Critical", "High", "Medium", "Low":
-	default:
-		return fmt.Errorf("critic severity %q is not one of Critical|High|Medium|Low", result.Severity)
 	}
 	if strings.TrimSpace(result.Reason) == "" || strings.TrimSpace(result.AttackerPosition) == "" || strings.TrimSpace(result.Impact) == "" {
 		return errors.New("critic reason, attacker_position, and impact must be non-empty")

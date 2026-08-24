@@ -148,7 +148,7 @@ Declaring `scrutineer.paths` replaces this skip list entirely: the skill sees on
 | `subprojects` | Subproject rows for monorepo scoping. |
 | `posture` | Posture tier and check results on the Repository row. |
 | `verify` | Verification result and miss-count update on one Finding. |
-| `critic` | Append-only attack-path assessment on one Finding. The latest `production_viability` is cached on the finding for filtering and disclosure gating; moved or missing source must be `CONDITIONAL_VIABLE`. |
+| `critic` | Append-only attack-path assessment on one Finding. The latest `production_viability` is cached on the finding for filtering and external-reporting gates; moved or missing source must be `CONDITIONAL_VIABLE`. |
 | `revalidate` | Cheap classifier verdict (`true_positive`/`false_positive`/`already_fixed`/`uncertain`) appended as a Note on one Finding. `true_positive` transitions a `new` finding to `enriched`; an optional `adjusted_severity` overwrites the finding's severity with the change recorded in FindingHistory. |
 | `breaking_change` | `breaking_change` verdict and `breaking_change_rationale` prose on one Finding, with the verdict change recorded in FindingHistory. |
 | `patch` | Suggested-fix diff and base commit on one Finding. |

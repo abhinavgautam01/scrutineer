@@ -1025,8 +1025,8 @@ func TestParseCritic_rejectsMissingSourceAsNonViable(t *testing.T) {
 	}
 }
 
-func TestParseCritic_rejectsSeverityAdjustment(t *testing.T) {
-	report := `{"production_viability":"VIABLE","source_state":"PRESENT","reason":"The shipped server target calls the parser.","counterevidence":[],"attacker_position":"remote client","preconditions":[],"impact":"code execution","likelihood":"plausible","severity":"Medium","applied_adjustments":[],"facts_that_would_change_the_result":[]}`
+func TestParseCritic_usesStoredSeverityWithoutRoundTrip(t *testing.T) {
+	report := `{"production_viability":"VIABLE","source_state":"PRESENT","reason":"The shipped server target calls the parser.","counterevidence":[],"attacker_position":"remote client","preconditions":[],"impact":"code execution","likelihood":"plausible","applied_adjustments":[],"facts_that_would_change_the_result":[]}`
 	gdb, err := db.Open(filepath.Join(t.TempDir(), "critic.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -1035,14 +1035,26 @@ func TestParseCritic_rejectsSeverityAdjustment(t *testing.T) {
 	gdb.Create(&repo)
 	parent := db.Scan{RepositoryID: repo.ID, Kind: JobSkill, Status: db.ScanDone}
 	gdb.Create(&parent)
-	finding := db.Finding{ScanID: parent.ID, RepositoryID: repo.ID, Title: "x", Severity: "High"}
+	finding := db.Finding{ScanID: parent.ID, RepositoryID: repo.ID, Title: "x", Severity: "Unrated"}
 	gdb.Create(&finding)
-	scan := db.Scan{RepositoryID: repo.ID, FindingID: new(finding.ID)}
+	scan := db.Scan{RepositoryID: repo.ID, FindingID: new(finding.ID), Kind: JobSkill, Status: db.ScanDone, SkillName: criticSkillName}
+	gdb.Create(&scan)
 	w := &Worker{DB: gdb, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 
 	err = w.parseCriticOutput(&scan, report, func(Event) {})
-	if err == nil || !strings.Contains(err.Error(), "does not match finding severity") {
-		t.Fatalf("error = %v, want severity mismatch", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got db.Finding
+	if err := gdb.First(&got, finding.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Severity != "Unrated" {
+		t.Fatalf("severity = %q, want stored value unchanged", got.Severity)
+	}
+	notes := findingNotes(gdb, finding.ID)
+	if len(notes) != 1 || !strings.Contains(notes[0].Body, "severity: Unrated") {
+		t.Fatalf("critic notes = %+v, want stored severity", notes)
 	}
 }
 

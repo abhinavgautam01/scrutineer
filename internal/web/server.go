@@ -1549,15 +1549,15 @@ func (s *Server) findingStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "a saved disclosure draft is required before marking ready", http.StatusUnprocessableEntity)
 		return
 	}
-	if status == db.FindingReported && db.FindingDisclosureBlocked(f) {
-		http.Error(w, errFindingNonViable.Error(), http.StatusPreconditionFailed)
-		return
-	}
 	switch status {
 	case db.FindingNew, db.FindingEnriched, db.FindingTriaged, db.FindingReady,
 		db.FindingReported, db.FindingAcknowledged, db.FindingFixed, db.FindingPublished,
 		db.FindingRejected, db.FindingDuplicate:
 		if err := db.WriteFindingField(s.DB, f.ID, statusKey, string(status), db.SourceAnalyst, ""); err != nil {
+			if errors.Is(err, db.ErrFindingNonViable) {
+				http.Error(w, err.Error(), http.StatusPreconditionFailed)
+				return
+			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

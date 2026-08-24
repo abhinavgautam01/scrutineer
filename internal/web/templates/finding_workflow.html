@@ -194,7 +194,7 @@
             <i data-lucide="file-check-2"></i> Review disclosure
           </a>
         {{end}}
-        {{if not (or (eq .Severity "High") (eq .Severity "Critical"))}}
+        {{if and (not .DisclosureBlocked) (not (or (eq .Severity "High") (eq .Severity "Critical")))}}
           <button type="submit" class="btn-outline" formaction="/findings/{{$id}}/public-issue"
                   hx-post="/findings/{{$id}}/public-issue">
             <i data-lucide="message-square-plus"></i> File public issue

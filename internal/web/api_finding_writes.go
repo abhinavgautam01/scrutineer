@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"sort"
 	"strconv"
@@ -34,17 +35,6 @@ func (s *Server) apiPatchFinding(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if body.Fields[statusKey] == string(db.FindingReported) {
-		var f db.Finding
-		if err := s.DB.Select("id", "production_viability").First(&f, id).Error; err != nil {
-			writeAPIError(w, http.StatusInternalServerError, "load finding viability")
-			return
-		}
-		if db.FindingDisclosureBlocked(f) {
-			writeAPIError(w, http.StatusPreconditionFailed, errFindingNonViable.Error())
-			return
-		}
-	}
 	source := sourceFromRequest(r)
 	fields := make([]string, 0, len(body.Fields))
 	for field := range body.Fields {
@@ -59,6 +49,10 @@ func (s *Server) apiPatchFinding(w http.ResponseWriter, r *http.Request) {
 		}
 		return nil
 	}); err != nil {
+		if errors.Is(err, db.ErrFindingNonViable) {
+			writeAPIError(w, http.StatusPreconditionFailed, err.Error())
+			return
+		}
 		writeAPIError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}

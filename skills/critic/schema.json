@@ -12,7 +12,6 @@
     "preconditions",
     "impact",
     "likelihood",
-    "severity",
     "applied_adjustments",
     "facts_that_would_change_the_result"
   ],

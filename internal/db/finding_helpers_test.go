@@ -201,6 +201,29 @@ func TestWriteFindingField_noOpWhenUnchanged(t *testing.T) {
 	}
 }
 
+func TestWriteFindingField_blocksNonViableReportingStates(t *testing.T) {
+	gdb := newTestDB(t)
+	f := seedFinding(t, gdb)
+	if err := gdb.Model(&f).Update("production_viability", ProductionViabilityNonViable).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []FindingLifecycle{FindingReady, FindingReported} {
+		t.Run(string(status), func(t *testing.T) {
+			err := WriteFindingField(gdb, f.ID, "status", string(status), SourceAnalyst, "tester")
+			if !errors.Is(err, ErrFindingNonViable) {
+				t.Fatalf("error = %v, want ErrFindingNonViable", err)
+			}
+			var got Finding
+			if err := gdb.First(&got, f.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != FindingNew {
+				t.Fatalf("status = %q, want %q", got.Status, FindingNew)
+			}
+		})
+	}
+}
+
 func TestWriteFindingField_concurrentUpdatesKeepHistoryChain(t *testing.T) {
 	gdb := newTestDB(t)
 	f := seedFinding(t, gdb)

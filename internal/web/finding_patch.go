@@ -12,7 +12,7 @@ import (
 )
 
 var errNoRemediationAttempt = errors.New("no gated patch is available to re-attack")
-var errFindingNonViable = errors.New("latest critic assessment is NON_VIABLE; disclosure and upstream reporting are blocked")
+var errFindingNonViable = db.ErrFindingNonViable
 
 const reportUpstreamSkillName = "report-upstream"
 
@@ -30,7 +30,7 @@ type patchReport struct {
 
 func (s *Server) findingSkillScanOpts(findingID uint, skillName, model string) (ScanOpts, error) {
 	opts := ScanOpts{Model: model}
-	if skillName == discloseSkillName || skillName == reportUpstreamSkillName {
+	if skillName == discloseSkillName || skillName == reportUpstreamSkillName || skillName == publicIssueSkillName {
 		var f db.Finding
 		if err := s.DB.Select("id", "production_viability").First(&f, findingID).Error; err != nil {
 			return ScanOpts{}, fmt.Errorf("load finding viability: %w", err)

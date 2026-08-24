@@ -189,7 +189,7 @@ func TestBundledSchemas_compileAndAcceptSamples(t *testing.T) {
 			  "counterevidence":[],"attacker_position":"unauthenticated network client",
 			  "preconditions":["default server configuration"],
 			  "impact":"attacker-controlled bytes reach the vulnerable parser",
-			  "likelihood":"likely","severity":"High","applied_adjustments":[],
+			  "likelihood":"likely","applied_adjustments":[],
 			  "facts_that_would_change_the_result":["release build disables the parser"]}`,
 		},
 		{

@@ -29,6 +29,10 @@ const (
 
 var errFindingWriteConflict = errors.New("finding changed concurrently")
 
+// ErrFindingNonViable prevents a finding whose latest critic assessment ruled
+// out a production path from entering an external-reporting lifecycle state.
+var ErrFindingNonViable = errors.New("latest critic assessment is NON_VIABLE; disclosure and upstream reporting are blocked")
+
 // validateFindingField rejects values that must follow a fixed format
 // before they reach the column. Most fields are free text and pass
 // through untouched; an empty value is always allowed so a field can be
@@ -66,6 +70,12 @@ func WriteFindingField(gdb *gorm.DB, findingID uint, field, newValue string, sou
 		}
 		if old == newValue {
 			return nil
+		}
+		if field == "status" && FindingDisclosureBlocked(f) {
+			switch FindingLifecycle(newValue) {
+			case FindingReady, FindingReported:
+				return ErrFindingNonViable
+			}
 		}
 		if err := validateFindingField(field, newValue); err != nil {
 			return err
@@ -515,7 +525,7 @@ func LatestFindingAttackPath(gdb *gorm.DB, findingID uint) (*FindingAttackPath, 
 
 // FindingDisclosureBlocked reports whether the latest critic assessment says
 // this finding cannot affect a release build. Other critic outcomes remain
-// analyst decisions and do not automatically suppress disclosure.
+// analyst decisions and do not automatically suppress external reporting.
 func FindingDisclosureBlocked(f Finding) bool {
 	return f.ProductionViability == ProductionViabilityNonViable
 }

@@ -71,15 +71,66 @@ func TestNonViableFindingCannotTransitionToReported(t *testing.T) {
 	}
 }
 
-func TestAPINonViableFindingCannotTransitionToReported(t *testing.T) {
+func TestNonViableFindingCannotTransitionToReady(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	f := seedFindingForForm(t, s)
+	if err := s.DB.Model(&f).Updates(map[string]any{
+		"status": db.FindingTriaged, "disclosure_draft": "reviewed draft",
+		"production_viability": db.ProductionViabilityNonViable,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	w := postForm(t, s, fmt.Sprintf("/findings/%d/status", f.ID), url.Values{"status": {string(db.FindingReady)}})
+	if w.Code != http.StatusPreconditionFailed {
+		t.Fatalf("status = %d, want 412; body=%s", w.Code, w.Body)
+	}
+	var got db.Finding
+	s.DB.First(&got, f.ID)
+	if got.Status != db.FindingTriaged {
+		t.Fatalf("finding status = %q, want triaged", got.Status)
+	}
+}
+
+func TestAPINonViableFindingCannotEnterReportingStates(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
 	f, token, _ := seedFindingForAPI(t, s)
 	s.DB.Model(&f).Update("production_viability", db.ProductionViabilityNonViable)
-	w := apiReq(t, s, http.MethodPatch, fmt.Sprintf("/api/findings/%d", f.ID), token,
-		`{"fields":{"status":"reported"},"by":"report-upstream"}`)
+	for _, status := range []db.FindingLifecycle{db.FindingReady, db.FindingReported} {
+		t.Run(string(status), func(t *testing.T) {
+			body := fmt.Sprintf(`{"fields":{"status":%q},"by":"report-upstream"}`, status)
+			w := apiReq(t, s, http.MethodPatch, fmt.Sprintf("/api/findings/%d", f.ID), token, body)
+			if w.Code != http.StatusPreconditionFailed || !strings.Contains(w.Body.String(), "NON_VIABLE") {
+				t.Fatalf("status = %d, body=%s; want 412 NON_VIABLE", w.Code, w.Body)
+			}
+		})
+	}
+}
+
+func TestNonViableFindingCannotEnqueuePublicIssue(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	f := seedFindingForForm(t, s)
+	if err := s.DB.Model(&f).Updates(map[string]any{
+		"status": db.FindingReady, "severity": "Low",
+		"production_viability": db.ProductionViabilityNonViable,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.Create(&db.Skill{
+		Name: publicIssueSkillName, OutputFile: "report.json", OutputKind: "freeform", Version: 1, Active: true,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	w := postForm(t, s, fmt.Sprintf("/findings/%d/public-issue", f.ID), nil)
 	if w.Code != http.StatusPreconditionFailed || !strings.Contains(w.Body.String(), "NON_VIABLE") {
 		t.Fatalf("status = %d, body=%s; want 412 NON_VIABLE", w.Code, w.Body)
+	}
+	var count int64
+	s.DB.Model(&db.Scan{}).Where("finding_id = ? AND skill_name = ?", f.ID, publicIssueSkillName).Count(&count)
+	if count != 0 {
+		t.Fatalf("public-issue scans = %d, want 0", count)
 	}
 }
 
@@ -111,12 +162,12 @@ func TestFindingsProductionViabilityFilter(t *testing.T) {
 	}
 }
 
-func TestFindingSkillScanOptsBlocksBothDisclosureSkills(t *testing.T) {
+func TestFindingSkillScanOptsBlocksExternalReportingSkills(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
 	f := seedFindingForForm(t, s)
 	s.DB.Model(&f).Update("production_viability", db.ProductionViabilityNonViable)
-	for _, skill := range []string{discloseSkillName, reportUpstreamSkillName} {
+	for _, skill := range []string{discloseSkillName, reportUpstreamSkillName, publicIssueSkillName} {
 		if _, err := s.findingSkillScanOpts(f.ID, skill, ""); !errors.Is(err, errFindingNonViable) {
 			t.Errorf("%s error = %v, want %q", skill, err, errFindingNonViable)
 		}

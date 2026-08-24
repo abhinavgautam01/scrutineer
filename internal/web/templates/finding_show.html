@@ -871,7 +871,7 @@ git commit -m "fix: {{$f.Title}}"</pre>
         <dl class="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm mb-3">
           <div><dt class="text-muted-foreground">Source state</dt><dd>{{.Assessment.SourceState}}</dd></div>
           <div><dt class="text-muted-foreground">Attacker position</dt><dd>{{.Assessment.AttackerPosition}}</dd></div>
-          <div><dt class="text-muted-foreground">Likelihood / severity</dt><dd>{{.Assessment.Likelihood}} / {{.Assessment.Severity}}</dd></div>
+          <div><dt class="text-muted-foreground">Likelihood{{if .Assessment.Severity}} / recorded severity{{end}}</dt><dd>{{.Assessment.Likelihood}}{{if .Assessment.Severity}} / {{.Assessment.Severity}}{{end}}</dd></div>
         </dl>
         <div class="prose max-w-none text-sm mb-3"><p>{{.Assessment.Reason}}</p><p><strong>Impact:</strong> {{.Assessment.Impact}}</p></div>
         {{if .Assessment.Preconditions}}<div class="text-sm mb-2"><span class="font-medium">Preconditions:</span> {{range $i, $item := .Assessment.Preconditions}}{{if $i}}; {{end}}{{$item}}{{end}}</div>{{end}}
