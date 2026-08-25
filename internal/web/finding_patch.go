@@ -30,15 +30,6 @@ type patchReport struct {
 
 func (s *Server) findingSkillScanOpts(findingID uint, skillName, model string) (ScanOpts, error) {
 	opts := ScanOpts{Model: model}
-	if skillName == discloseSkillName || skillName == reportUpstreamSkillName || skillName == publicIssueSkillName {
-		var f db.Finding
-		if err := s.DB.Select("id", "production_viability").First(&f, findingID).Error; err != nil {
-			return ScanOpts{}, fmt.Errorf("load finding viability: %w", err)
-		}
-		if db.FindingDisclosureBlocked(f) {
-			return ScanOpts{}, errFindingNonViable
-		}
-	}
 	if skillName != reattackSkillName {
 		return opts, nil
 	}
@@ -55,6 +46,24 @@ func (s *Server) findingSkillScanOpts(findingID uint, skillName, model string) (
 	opts.RemediationAttemptID = new(attempt.ID)
 	opts.Ref = attempt.BaseCommit
 	return opts, nil
+}
+
+func externalReportingSkill(skillName string) bool {
+	return skillName == discloseSkillName || skillName == reportUpstreamSkillName || skillName == publicIssueSkillName
+}
+
+func (s *Server) ensureFindingReportable(findingID uint, skillName string) error {
+	if !externalReportingSkill(skillName) {
+		return nil
+	}
+	var f db.Finding
+	if err := s.DB.Select("id", "production_viability").First(&f, findingID).Error; err != nil {
+		return fmt.Errorf("load finding viability: %w", err)
+	}
+	if db.FindingDisclosureBlocked(f) {
+		return errFindingNonViable
+	}
+	return nil
 }
 
 // latestPatchScan returns the most recent done patch-skill scan for a finding

@@ -1655,7 +1655,7 @@ components:
 
     AttackPathReport:
       type: object
-      required: [production_viability, source_state, reason, counterevidence, attacker_position, preconditions, impact, likelihood, severity, applied_adjustments, facts_that_would_change_the_result]
+      required: [production_viability, source_state, reason, counterevidence, attacker_position, preconditions, impact, likelihood, applied_adjustments, facts_that_would_change_the_result]
       additionalProperties: false
       properties:
         production_viability: { type: string, enum: [VIABLE, NON_VIABLE, SAMPLE_OR_TEST, CONDITIONAL_VIABLE] }
@@ -1666,9 +1666,9 @@ components:
         preconditions: { type: array, items: { type: string } }
         impact: { type: string }
         likelihood: { type: string, enum: [likely, plausible, unlikely, unknown] }
-        severity: { type: string, enum: [Critical, High, Medium, Low] }
         applied_adjustments:
           type: array
+          maxItems: 0
           description: "Reserved for severity-cap calibration; critic emits an empty array."
           items:
             type: object

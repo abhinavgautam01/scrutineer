@@ -1675,6 +1675,10 @@ func (s *Server) runFindingSkill(w http.ResponseWriter, r *http.Request, name st
 	opts.FindingID = new(f.ID)
 	scanID, err := s.enqueueSkillWith(r.Context(), scan.RepositoryID, skill.ID, opts)
 	if err != nil {
+		if errors.Is(err, db.ErrFindingNonViable) {
+			http.Error(w, err.Error(), http.StatusPreconditionFailed)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -3309,13 +3313,9 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 	if repo.FederationOptedOut() {
 		return 0, ErrRepoFederationOptOut
 	}
-	var sk db.Skill
-	hasSkill := s.DB.Select("name, version, metadata, requires_remote, requires_profile, model").First(&sk, skillID).Error == nil
-	if repo.IsLocal() && hasSkill && sk.RequiresRemote {
-		return 0, fmt.Errorf("%w: %q", ErrSkillRequiresRemote, sk.Name)
-	}
-	if hasSkill && sk.RequiresProfile != "" && opts.Profile != "" && opts.Profile != sk.RequiresProfile {
-		return 0, fmt.Errorf("%w: %q needs %q, got %q", ErrSkillProfileMismatch, sk.Name, sk.RequiresProfile, opts.Profile)
+	sk, hasSkill, err := s.skillEnqueuePreflight(repo, skillID, opts)
+	if err != nil {
+		return 0, err
 	}
 	switch opts.RescanMode {
 	case "", db.ScanRescanModeFull:
@@ -3429,6 +3429,23 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 	// rather than trying to swap a row that is not there.
 	s.publishScanList(repoID)
 	return scan.ID, nil
+}
+
+func (s *Server) skillEnqueuePreflight(repo db.Repository, skillID uint, opts ScanOpts) (db.Skill, bool, error) {
+	var sk db.Skill
+	hasSkill := s.DB.Select("name, version, metadata, requires_remote, requires_profile, model").First(&sk, skillID).Error == nil
+	if hasSkill && opts.FindingID != nil {
+		if err := s.ensureFindingReportable(*opts.FindingID, sk.Name); err != nil {
+			return db.Skill{}, false, err
+		}
+	}
+	if repo.IsLocal() && hasSkill && sk.RequiresRemote {
+		return db.Skill{}, false, fmt.Errorf("%w: %q", ErrSkillRequiresRemote, sk.Name)
+	}
+	if hasSkill && sk.RequiresProfile != "" && opts.Profile != "" && opts.Profile != sk.RequiresProfile {
+		return db.Skill{}, false, fmt.Errorf("%w: %q needs %q, got %q", ErrSkillProfileMismatch, sk.Name, sk.RequiresProfile, opts.Profile)
+	}
+	return sk, hasSkill, nil
 }
 
 const (

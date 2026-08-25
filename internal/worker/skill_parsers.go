@@ -1020,8 +1020,8 @@ func validateCriticOutput(result criticOutput) error {
 		return fmt.Errorf("critic source_state %q is not one of PRESENT|MOVED|MISSING|UNKNOWN", result.SourceState)
 	}
 	if (result.SourceState == "MOVED" || result.SourceState == "MISSING") &&
-		result.ProductionViability != db.ProductionViabilityConditionalViable {
-		return fmt.Errorf("critic must classify source_state %s as CONDITIONAL_VIABLE", result.SourceState)
+		result.ProductionViability == db.ProductionViabilityNonViable {
+		return fmt.Errorf("critic must not classify source_state %s as NON_VIABLE", result.SourceState)
 	}
 	switch result.Likelihood {
 	case "likely", "plausible", "unlikely", "unknown":

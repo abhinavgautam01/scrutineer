@@ -31,7 +31,7 @@ var errFindingWriteConflict = errors.New("finding changed concurrently")
 
 // ErrFindingNonViable prevents a finding whose latest critic assessment ruled
 // out a production path from entering an external-reporting lifecycle state.
-var ErrFindingNonViable = errors.New("latest critic assessment is NON_VIABLE; disclosure and upstream reporting are blocked")
+var ErrFindingNonViable = errors.New("latest critic assessment is NON_VIABLE; disclosure, public issue filing, and upstream reporting are blocked")
 
 // validateFindingField rejects values that must follow a fixed format
 // before they reach the column. Most fields are free text and pass

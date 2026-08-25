@@ -341,6 +341,10 @@ func (s *Server) scanRetry(w http.ResponseWriter, r *http.Request) {
 		ImportPayload: scan.ImportPayload,
 	})
 	if err != nil {
+		if errors.Is(err, db.ErrFindingNonViable) {
+			http.Error(w, err.Error(), http.StatusPreconditionFailed)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -441,6 +445,9 @@ func (s *Server) scansRetryFailed(w http.ResponseWriter, r *http.Request) {
 			ParentScanID:         &parent,
 			ImportPayload:        sc.ImportPayload,
 		}); err != nil {
+			if errors.Is(err, db.ErrFindingNonViable) {
+				continue
+			}
 			errored++
 			continue
 		}

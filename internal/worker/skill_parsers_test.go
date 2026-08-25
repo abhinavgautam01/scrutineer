@@ -973,7 +973,7 @@ func TestParseVerify_isIdempotentPerScan(t *testing.T) {
 }
 
 func TestParseCritic_recordsImmutableAssessmentAndProjection(t *testing.T) {
-	report := `{"production_viability":"CONDITIONAL_VIABLE","source_state":"PRESENT","reason":"The parser ships only behind the experimental build tag.","counterevidence":["release workflow omits the tag"],"attacker_position":"remote unauthenticated client","preconditions":["operator enables experimental parser"],"impact":"attacker-controlled input reaches the parser sink","likelihood":"plausible","severity":"High","applied_adjustments":[],"facts_that_would_change_the_result":["a default release enables the parser"]}`
+	report := `{"production_viability":"CONDITIONAL_VIABLE","source_state":"PRESENT","reason":"The parser ships only behind the experimental build tag.","counterevidence":["release workflow omits the tag"],"attacker_position":"remote unauthenticated client","preconditions":["operator enables experimental parser"],"impact":"attacker-controlled input reaches the parser sink","likelihood":"plausible","applied_adjustments":[],"facts_that_would_change_the_result":["a default release enables the parser"]}`
 	f, gdb := runSkillWithFinding(t, "critic", report, db.FindingEnriched)
 	if f.ProductionViability != db.ProductionViabilityConditionalViable {
 		t.Fatalf("production viability = %q, want CONDITIONAL_VIABLE", f.ProductionViability)
@@ -1013,15 +1013,35 @@ func TestParseCritic_rejectsMissingSourceAsNonViable(t *testing.T) {
 	gdb.Create(&f)
 	scan := db.Scan{RepositoryID: repo.ID, FindingID: new(f.ID)}
 	w := &Worker{DB: gdb, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	report := `{"production_viability":"NON_VIABLE","source_state":"MISSING","reason":"path absent","attacker_position":"remote client","impact":"code execution","likelihood":"unknown","severity":"High"}`
+	report := `{"production_viability":"NON_VIABLE","source_state":"MISSING","reason":"path absent","attacker_position":"remote client","impact":"code execution","likelihood":"unknown"}`
 	err = w.parseCriticOutput(&scan, report, func(Event) {})
-	if err == nil || !strings.Contains(err.Error(), "must classify source_state MISSING as CONDITIONAL_VIABLE") {
+	if err == nil || !strings.Contains(err.Error(), "must not classify source_state MISSING as NON_VIABLE") {
 		t.Fatalf("error = %v, want source-drift fail-closed error", err)
 	}
 	var count int64
 	gdb.Model(&db.FindingAttackPath{}).Where("finding_id = ?", f.ID).Count(&count)
 	if count != 0 {
 		t.Fatalf("attack path rows = %d, want 0", count)
+	}
+}
+
+func TestValidateCriticOutput_allowsMovedViableAndSampleOnly(t *testing.T) {
+	for _, viability := range []string{db.ProductionViabilityViable, db.ProductionViabilitySampleOrTest} {
+		t.Run(viability, func(t *testing.T) {
+			empty := []any{}
+			result := criticOutput{
+				ProductionViability: viability,
+				SourceState:         "MOVED",
+				Reason:              "The implementation moved and its current release path was checked.",
+				AttackerPosition:    "remote client",
+				Impact:              "code execution",
+				Likelihood:          "plausible",
+				AppliedAdjustments:  &empty,
+			}
+			if err := validateCriticOutput(result); err != nil {
+				t.Fatalf("validateCriticOutput() error = %v", err)
+			}
+		})
 	}
 }
 
@@ -1059,7 +1079,7 @@ func TestParseCritic_usesStoredSeverityWithoutRoundTrip(t *testing.T) {
 }
 
 func TestParseCritic_rejectsAppliedAdjustments(t *testing.T) {
-	report := `{"production_viability":"VIABLE","source_state":"PRESENT","reason":"The shipped server target calls the parser.","counterevidence":[],"attacker_position":"remote client","preconditions":[],"impact":"code execution","likelihood":"plausible","severity":"High","applied_adjustments":[{"kind":"cap"}],"facts_that_would_change_the_result":[]}`
+	report := `{"production_viability":"VIABLE","source_state":"PRESENT","reason":"The shipped server target calls the parser.","counterevidence":[],"attacker_position":"remote client","preconditions":[],"impact":"code execution","likelihood":"plausible","applied_adjustments":[{"kind":"cap"}],"facts_that_would_change_the_result":[]}`
 	var result criticOutput
 	if err := json.Unmarshal([]byte(report), &result); err != nil {
 		t.Fatal(err)
@@ -1075,7 +1095,7 @@ func TestParseCritic_requiresAppliedAdjustmentsArray(t *testing.T) {
 		"null":    `,"applied_adjustments":null`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			report := `{"production_viability":"VIABLE","source_state":"PRESENT","reason":"The shipped server target calls the parser.","counterevidence":[],"attacker_position":"remote client","preconditions":[],"impact":"code execution","likelihood":"plausible","severity":"High"` + field + `,"facts_that_would_change_the_result":[]}`
+			report := `{"production_viability":"VIABLE","source_state":"PRESENT","reason":"The shipped server target calls the parser.","counterevidence":[],"attacker_position":"remote client","preconditions":[],"impact":"code execution","likelihood":"plausible"` + field + `,"facts_that_would_change_the_result":[]}`
 			var result criticOutput
 			if err := json.Unmarshal([]byte(report), &result); err != nil {
 				t.Fatal(err)

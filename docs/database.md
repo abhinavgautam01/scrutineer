@@ -320,15 +320,15 @@ Append-only grading records produced by finding-scoped `verify` scans. The compl
 
 ## finding_attack_paths
 
-Append-only release-build assessments produced by finding-scoped `critic` scans. The full attack-path report remains immutable in `report`; the newest row's `production_viability` is projected onto `findings.production_viability` for list filtering and disclosure gating. An exact `NON_VIABLE` projection blocks the `disclose` and `report-upstream` paths, while all other values remain visible for analyst judgment.
+Append-only release-build assessments produced by finding-scoped `critic` scans. The full attack-path report remains immutable in `report`; the newest row's `production_viability` is projected onto `findings.production_viability` for list filtering and external-reporting gates. An exact `NON_VIABLE` projection blocks the `disclose`, `public-issue`, and `report-upstream` paths, while all other values remain visible for analyst judgment.
 
 | Column | Type | Notes |
 |--------|------|-------|
 | id | integer PK | |
 | finding_id | integer FK | References `findings.id`; cascade delete. Unique with `scan_id`. |
 | scan_id | integer | The critic scan that produced this record. Unique with `finding_id`. |
-| production_viability | text | `VIABLE`, `NON_VIABLE`, `SAMPLE_OR_TEST`, or `CONDITIONAL_VIABLE`. Moved or missing source is always conditional. |
-| report | text | Complete structured JSON report, including source state, reason, counterevidence, attacker position, preconditions, impact, likelihood, severity, applied adjustments, and facts that would change the result. |
+| production_viability | text | `VIABLE`, `NON_VIABLE`, `SAMPLE_OR_TEST`, or `CONDITIONAL_VIABLE`. Moved or missing source cannot by itself justify `NON_VIABLE`. |
+| report | text | Complete structured JSON report, including source state, reason, counterevidence, attacker position, preconditions, impact, likelihood, applied adjustments, and facts that would change the result. |
 | created_at | datetime | |
 
 ## remediation_attempts

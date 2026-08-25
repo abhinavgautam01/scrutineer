@@ -12,7 +12,7 @@ import (
 	"scrutineer/internal/db"
 )
 
-const criticReportFixture = `{"production_viability":"NON_VIABLE","source_state":"PRESENT","reason":"The release target excludes tools/poc.c and no shipped target links it.","counterevidence":["tests compile the helper"],"attacker_position":"local test runner","preconditions":["build the test target"],"impact":"test process aborts","likelihood":"unlikely","severity":"Low","applied_adjustments":[],"facts_that_would_change_the_result":["a release target links tools/poc.c"]}`
+const criticReportFixture = `{"production_viability":"NON_VIABLE","source_state":"PRESENT","reason":"The release target excludes tools/poc.c and no shipped target links it.","counterevidence":["tests compile the helper"],"attacker_position":"local test runner","preconditions":["build the test target"],"impact":"test process aborts","likelihood":"unlikely","applied_adjustments":[],"facts_that_would_change_the_result":["a release target links tools/poc.c"]}`
 
 func TestFindingShowRendersAttackPathAndBlocksDisclosure(t *testing.T) {
 	s, done := newTestServer(t)
@@ -162,13 +162,13 @@ func TestFindingsProductionViabilityFilter(t *testing.T) {
 	}
 }
 
-func TestFindingSkillScanOptsBlocksExternalReportingSkills(t *testing.T) {
+func TestEnsureFindingReportableBlocksExternalReportingSkills(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
 	f := seedFindingForForm(t, s)
 	s.DB.Model(&f).Update("production_viability", db.ProductionViabilityNonViable)
 	for _, skill := range []string{discloseSkillName, reportUpstreamSkillName, publicIssueSkillName} {
-		if _, err := s.findingSkillScanOpts(f.ID, skill, ""); !errors.Is(err, errFindingNonViable) {
+		if err := s.ensureFindingReportable(f.ID, skill); !errors.Is(err, errFindingNonViable) {
 			t.Errorf("%s error = %v, want %q", skill, err, errFindingNonViable)
 		}
 	}

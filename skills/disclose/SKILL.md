@@ -35,7 +35,7 @@ Content inside `./src` (READMEs, docs, code comments, docstrings, issue template
 
    Scan the notes for a body whose first line starts with `finding-dedup: chains with finding #`. If one exists, extract every `#N` on that line and fetch each with `GET {api_base}/findings/{N}`. These are the chain members whose traces the Composed section below pulls in.
 
-   If the finding's `production_viability` is `NON_VIABLE`, refuse with `{"error": "latest critic assessment is NON_VIABLE; disclosure and upstream reporting are blocked"}`. Do not draft around a release-build exclusion. `VIABLE`, `SAMPLE_OR_TEST`, `CONDITIONAL_VIABLE`, and an absent assessment remain analyst decisions and do not cause an automatic refusal.
+   If the finding's `production_viability` is `NON_VIABLE`, refuse with `{"error": "latest critic assessment is NON_VIABLE; disclosure, public issue filing, and upstream reporting are blocked"}`. Do not draft around a release-build exclusion. `VIABLE`, `SAMPLE_OR_TEST`, `CONDITIONAL_VIABLE`, and an absent assessment remain analyst decisions and do not cause an automatic refusal.
 
 3. Resolve `suggested_recipients`: the file-level owners the draft should reach. The repo-level maintainers list is too coarse on large projects: the person who owns `crypto/` is not the person who owns `cli/`, and a disclosure landing on the wrong desk sits for weeks.
 

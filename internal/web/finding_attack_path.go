@@ -24,7 +24,6 @@ type attackPathReport struct {
 	Preconditions                 []string               `json:"preconditions"`
 	Impact                        string                 `json:"impact"`
 	Likelihood                    string                 `json:"likelihood"`
-	Severity                      string                 `json:"severity"`
 	AppliedAdjustments            []attackPathAdjustment `json:"applied_adjustments"`
 	FactsThatWouldChangeTheResult []string               `json:"facts_that_would_change_the_result"`
 }
