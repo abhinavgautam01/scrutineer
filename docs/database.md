@@ -183,6 +183,7 @@ One row per installed skill. Loaded from `skills/` directories on disk or the UI
 | version | integer | Bumps on every save. |
 | active | boolean | |
 | requires_remote | boolean | When true, scrutineer refuses to enqueue this skill against a local-directory repository (file:// URL). Set via `scrutineer.requires_remote: true` in SKILL.md frontmatter. Use for skills that depend on a forge URL or remote-only data (advisories, exposure, fork, maintainers, metadata, packages, report-upstream). |
+| recurse_submodules | boolean | When true, remote scans initialize recursive depth-one Git submodules before the skill runs. Set via `scrutineer.recurse_submodules: true` in SKILL.md frontmatter. |
 | requires_profile | text | Constrains the skill to a single registered runner profile (e.g. `php`). Empty means no constraint. Set via `scrutineer.requires_profile` in SKILL.md frontmatter. Enqueue returns 400 when the requested profile mismatches; the worker fails the scan when auto-detection resolves to a different profile. |
 | paths | text | Newline-joined shell-glob allow-list from `scrutineer.paths`. When non-empty, the skill sees only matching files inside the workspace `src/` and the builtin skip list is bypassed. |
 | ignore_paths | text | Newline-joined shell-glob deny-list from `scrutineer.ignore_paths`. Always layered on top of the active include set. |
@@ -237,6 +238,8 @@ One row per vulnerability. Lifecycle columns are mutated through `db.WriteFindin
 | resolution | text | `fix`, `migrate`, `workaround`, `adopt`, `wontfix`. |
 | disclosure_draft | text | Draft advisory text. |
 | suggested_recipients | text | File-level owners for the finding's `location`: CODEOWNERS entries or, absent those, recent non-bot committers. Comma-joined free text with provenance. Usually produced by the `disclose` skill, but also editable via the finding form and the PATCH API. |
+| federation_claim_contacts | text | Peers that answered the outbound claim-check with a match when this finding was about to be reported, comma-joined as `<peer> (<contact>)`. Non-empty means the attempt was refused so the analyst coordinates first, and is itself the acknowledgement: the next attempt goes through. Cleared by any status change, so a claim never outlives the transition it was recorded for. See [interchange.md](interchange.md). |
+| federation_claim_at | datetime | When that claim-check ran. Cleared with `federation_claim_contacts`. |
 | assignee | text | Free-text. |
 | suggested_fix | text | Unified diff from the `patch` skill that passed the applicability gate. Empty when no patch run or the gate rejected it. |
 | suggested_fix_commit | text | Sha the suggested_fix applies cleanly against. |

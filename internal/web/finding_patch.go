@@ -13,8 +13,6 @@ import (
 
 var errNoRemediationAttempt = errors.New("no gated patch is available to re-attack")
 
-const reportUpstreamSkillName = "report-upstream"
-
 // patchReport is the subset of the patch skill's report.json shape the UI
 // needs. Mirrors skills/patch/schema.json.
 type patchReport struct {

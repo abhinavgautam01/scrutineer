@@ -12,7 +12,7 @@ Install Scrutineer from [Homebrew](https://brew.sh) on macOS or Linux:
 
 Alternatively, download the Linux or macOS archive for your architecture from [GitHub Releases](https://github.com/alpha-omega-security/scrutineer/releases), verify it against `SHA256SUMS`, and put `scrutineer` on your `PATH`. The macOS archives are currently unsigned and not notarized, so macOS may present a Gatekeeper warning even after you verify the checksum and GitHub build-provenance attestation.
 
-To build or run from source instead, install [Go 1.26+](https://go.dev/dl/):
+To build or run from source instead, install [Go 1.27+](https://go.dev/dl/):
 
     git clone https://github.com/alpha-omega-security/scrutineer
     cd scrutineer
@@ -151,6 +151,7 @@ Adding a repo enqueues the `triage` skill, whose SKILL.md lists the further skil
 | `sbom` | Runs `git-pkgs sbom` for a CycloneDX SBOM |
 | `maintainers` | Model-backed analysis identifying real maintainers and contact routes |
 | `repo-overview` | Runs `brief --json` for a structured project summary |
+| `embedded-native` | Runs `brief --json` at the repository root and each initialized shallow submodule to map native languages, extension bridges, build tools, manifests, and dependencies |
 | `subprojects` | Enumerates monorepo packages/workspaces so deep-dives can be scoped to a sub-path |
 | `recon` | Maps distinct externally reachable input-processing subsystems into focus areas; after threat-model completes, those areas fan out into parallel deep-dive audits |
 | `history` | Mines Git history for security fixes that never received an advisory, with ancestry-checked incremental caching and explicit partial-history reporting |
@@ -219,7 +220,7 @@ Each finding from the `security-deep-dive` skill starts at **new** and moves thr
 1. **new** -- just identified. High/Critical from `security-deep-dive` and every imported finding auto-enqueue a `revalidate` pass first, which records `true_positive` / `false_positive` / `already_fixed` / `uncertain` on the finding. Every true positive chains into the release-build `critic`; High/Critical true positives also chain into `verify`. Outside that path: click "Verify" to trigger independent confirmation, "Skip to triage" if you trust the audit, or "Reject"
 2. **enriched** -- verification ran. Review and click "Triage"
 3. **triaged** -- confirmed real. Review the critic's release-build assessment, then click "Prepare disclosure". An exact `NON_VIABLE` assessment blocks private disclosure, public issues, and upstream reporting; `VIABLE`, `SAMPLE_OR_TEST`, `CONDITIONAL_VIABLE`, and unassessed findings remain analyst decisions
-4. **ready** -- draft prepared. Run the `report-upstream` skill to file it via GitHub PVR (github.com only, requires `gh` auth), run `public-issue` for reviewed low-severity hardening findings that are safe to file publicly, or click "Mark as reported" after sending it yourself. When upstream has no PVR, follow the runbook in [docs/disclosure-fallback.md](docs/disclosure-fallback.md): route to a CNA when `cna-match` names one, otherwise contact the channel `maintainers` returned
+4. **ready** -- draft prepared. Run the `report-upstream` skill to file it via GitHub PVR (github.com only, requires `gh` auth), run `public-issue` for reviewed low-severity hardening findings that are safe to file publicly, or click "Mark as reported" after sending it yourself. When upstream has no PVR, follow the runbook in [docs/disclosure-fallback.md](docs/disclosure-fallback.md): route to a CNA when `cna-match` names one, otherwise contact the channel `maintainers` returned. With `federation_peers` configured, every route out of this state (the button, the `report-upstream` and `public-issue` skills, and the VINCE submission) first asks each peer whether it already holds the same finding and, on a match, names their contact so you coordinate before proceeding (see [docs/interchange.md](docs/interchange.md))
 5. **reported** -- sent to maintainer. Click "Acknowledged" when they respond
 6. **acknowledged** -- maintainer working on fix. Click "Mark fixed" when it ships
 7. **fixed** -- patch available. Click "Mark published" to issue the advisory
@@ -410,7 +411,7 @@ See [docs/codex.md](docs/codex.md) for what differs from claude (argv, skill sta
     backend: opencode
     default_model: anthropic/claude-sonnet-5
 
-Anthropic and OpenAI keep their existing setup. Other providers can use `opencode.providers` to select provider-only credentials, hardened-mode egress hosts, stored OAuth state, OpenCode config, and a derived runner image. Scrutineer checks that the selected model exists in that image before starting the skill, then records the provider image and digest on the scan. Like codex, the OpenCode backend requires the container runner. See [docs/opencode.md](docs/opencode.md) for configuration and image requirements.
+Anthropic and OpenAI keep their existing setup. Other providers can use `opencode.providers` to select provider-only credentials, hardened-mode egress hosts, a host-local model server port, stored OAuth state, OpenCode config, and a derived runner image. Scrutineer checks that the selected model exists in that image before starting the skill, then records the provider image and digest on the scan. Like codex, the OpenCode backend requires the container runner. See [docs/opencode.md](docs/opencode.md) for configuration and image requirements.
 
 ## Copilot backend
 

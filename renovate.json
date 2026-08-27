@@ -1,13 +1,12 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
+  "extends": ["config:recommended", ":disableDependencyDashboard"],
   "enabledManagers": [
     "gomod",
     "github-actions",
     "dockerfile",
     "custom.regex"
   ],
-  "dependencyDashboard": true,
   "automerge": false,
   "internalChecksFilter": "strict",
   "customManagers": [
@@ -92,12 +91,6 @@
       "enabled": true
     },
     {
-      "description": "Require explicit approval before starting a Go module major-version migration",
-      "matchManagers": ["gomod"],
-      "matchUpdateTypes": ["major"],
-      "dependencyDashboardApproval": true
-    },
-    {
       "description": "An indirect dependency's major version is decided by whatever requires it, never here",
       "matchManagers": ["gomod"],
       "matchDepTypes": ["indirect"],
@@ -125,7 +118,7 @@
       "minimumGroupSize": 3
     },
     {
-      "description": "Keep all four Claude Code pins on one GitHub release; do not approve a partial group in the Dependency Dashboard",
+      "description": "Keep all four Claude Code pins on one GitHub release",
       "matchPackageNames": ["anthropics/claude-code"],
       "groupName": "Claude Code",
       "minimumGroupSize": 4,

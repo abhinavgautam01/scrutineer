@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -134,6 +135,7 @@ type flags struct {
 	federationPublicFeed  string
 	federationMembersFeed string
 	federationImportFeeds []string
+	federationPeers       []string
 	subprojectScope       string
 	monorepoAttribution   bool
 	skillLocal            skillDirs
@@ -165,8 +167,26 @@ func validateFederation(f *flags) error {
 		}
 	}
 	f.federationImportFeeds = imports
+	// Peers are trimmed in place for the same reason: ValidatePeerURL parses a
+	// trimmed copy, so an untrimmed entry would pass validation and then be
+	// joined with /claim-check into a URL no request can be built from.
+	var peers []string
+	for _, peer := range f.federationPeers {
+		if peer = strings.TrimSpace(peer); peer != "" {
+			peers = append(peers, peer)
+		}
+	}
+	f.federationPeers = peers
 	if f.federationSalt != "" && f.federationContact == "" {
 		return errors.New("federation: federation_contact is required when federation_salt is set")
+	}
+	if len(f.federationPeers) > 0 && f.federationSalt == "" {
+		return errors.New("federation: federation_salt is required when federation_peers is set")
+	}
+	for _, peer := range f.federationPeers {
+		if err := web.ValidatePeerURL(peer); err != nil {
+			return err
+		}
 	}
 	if f.federationMembersFeed != "" &&
 		(f.recipientsFile == "" || (f.identityFile == "" && len(f.identityPlugins) == 0)) {
@@ -203,6 +223,7 @@ func (f *flags) mergeFederation(cfg *config.Config) {
 		f.federationMembersFeed = cfg.FederationMembersFeed
 	}
 	f.federationImportFeeds = cfg.FederationImportFeeds
+	f.federationPeers = cfg.FederationPeers
 }
 
 func parseFlags() *flags {
@@ -684,6 +705,7 @@ func run(log *slog.Logger) error {
 	srv.FederationPublicFeed = f.federationPublicFeed
 	srv.FederationMembersFeed = f.federationMembersFeed
 	srv.FederationImportFeeds = f.federationImportFeeds
+	srv.FederationPeers = f.federationPeers
 
 	if err := configureEncryption(srv, f, log); err != nil {
 		return err
@@ -988,8 +1010,15 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 		return nil, "", err
 	}
 	allow := buildEgressAllow(h.EgressHosts(), f.hardened, cfg, f.modelBaseURL, log)
+	// The host-gateway alias is always an API host so a container that CONNECTs
+	// to host.docker.internal:<port> gets the port gate and loopback rewrite on
+	// every runtime, including Apple where the container reaches the proxy via
+	// the resolved gateway IP instead. Without the alias here, a HostPorts grant
+	// on Apple falls through to a plain hostname dial that cannot resolve.
+	apiHosts := []string{worker.HostGatewayAlias}
 	if apiHost != worker.HostGatewayAlias {
 		allow = append(allow, apiHost)
+		apiHosts = append(apiHosts, apiHost)
 	}
 	token := worker.NewProxyToken()
 	// Rootless --hardened runs the egress proxy as a per-scan sidecar reusing
@@ -1011,7 +1040,7 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 			Allow:    allow,
 			Token:    token,
 			APIPort:  addrPort(f.addr),
-			APIHosts: []string{apiHost},
+			APIHosts: apiHosts,
 			Log:      log,
 		})
 		if err != nil {
@@ -1046,7 +1075,7 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 		ProviderProxy: worker.ScopedEgressProxyConfig{
 			Allow:         allow,
 			APIPort:       addrPort(f.addr),
-			APIHosts:      []string{apiHost},
+			APIHosts:      apiHosts,
 			ContainerHost: apiHost,
 			Log:           log,
 		},
@@ -1082,6 +1111,20 @@ func loadOpencodeProviders(h worker.Harness, providers map[string]config.Opencod
 			}
 			configContent = string(content)
 		}
+		var hostPort string
+		if provider.HostPort > 0 {
+			hostPort = strconv.Itoa(provider.HostPort)
+			// The readiness probe checks host.docker.internal:<host_port> is
+			// reachable, not that OpenCode is configured to send requests there.
+			// A config_file whose baseURL points at 127.0.0.1 or a different
+			// port passes readiness and then fails inside the OpenCode server.
+			// A substring check catches that at startup without depending on
+			// the config's exact JSON shape.
+			target := worker.HostGatewayAlias + ":" + hostPort
+			if !strings.Contains(configContent, target) {
+				return nil, fmt.Errorf("opencode.providers.%s: host_port %d is set but config_file does not point options.baseURL at http://%s", id, provider.HostPort, target)
+			}
+		}
 		result[id] = worker.OpencodeProviderConfig{
 			RunnerImage:      provider.RunnerImage,
 			ConfigContent:    configContent,
@@ -1090,6 +1133,7 @@ func loadOpencodeProviders(h worker.Harness, providers map[string]config.Opencod
 			PassEnv:          append([]string(nil), provider.PassEnv...),
 			RequiredBinaries: append([]string(nil), provider.RequiredBinaries...),
 			EgressHosts:      append([]string(nil), provider.EgressAllow...),
+			HostPort:         hostPort,
 			StateDir:         stateDir,
 		}
 	}

@@ -482,7 +482,7 @@ func (s *Server) apiRunFindingSkill(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		if errors.Is(err, ErrRepoFederationOptOut) {
+		if errors.Is(err, ErrRepoFederationOptOut) || errors.Is(err, ErrFederationClaimPending) {
 			writeAPIError(w, http.StatusConflict, err.Error())
 			return
 		}
@@ -605,6 +605,9 @@ func scanSummary(sc db.Scan) map[string]any {
 	m["refusal_audit_warning"] = sc.RefusalAuditWarning
 	if sc.Ref != "" {
 		m["ref"] = sc.Ref
+	}
+	if sc.SubPath != "" {
+		m["sub_path"] = sc.SubPath
 	}
 	if sc.RescanMode != "" {
 		m["rescan_mode"] = sc.RescanMode

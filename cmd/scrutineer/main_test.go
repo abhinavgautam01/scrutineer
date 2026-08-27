@@ -159,6 +159,10 @@ func TestValidateFederation(t *testing.T) {
 		{"members feed without recipients", flags{federationMembersFeed: "git@host:o/f.git", identityFile: "~/.ssh/id_ed25519"}, false},
 		{"members feed without identity", flags{federationMembersFeed: "git@host:o/f.git", recipientsFile: "./recipients.txt"}, false},
 		{"public feed needs nothing else", flags{federationPublicFeed: "git@host:o/f.git"}, true},
+		{"peers with salt", flags{federationSalt: "s3cret", federationContact: "s@e.com", federationPeers: []string{"https://peer.example.com"}}, true},
+		{"peers without salt", flags{federationPeers: []string{"https://peer.example.com"}}, false},
+		{"peer with a non-http scheme", flags{federationSalt: "s3cret", federationContact: "s@e.com", federationPeers: []string{"file:///etc/passwd"}}, false},
+		{"credentialed peer", flags{federationSalt: "s3cret", federationContact: "s@e.com", federationPeers: []string{"https://tok@peer.example.com"}}, false},
 		{"credentialed public feed", flags{federationPublicFeed: "https://u:tok@host/o/f.git"}, false},
 		{"credentialed import feed", flags{federationImportFeeds: []string{"https://u:tok@host/o/f.git"}}, false},
 		{"both tiers on one remote", flags{
@@ -184,9 +188,12 @@ func TestValidateFederation(t *testing.T) {
 // configured and run an hourly clone job against a remote git cannot resolve.
 func TestValidateFederation_dropsBlankRemotes(t *testing.T) {
 	f := flags{
+		federationSalt:        "s3cret",
+		federationContact:     "security@example.com",
 		federationPublicFeed:  "  ",
 		federationMembersFeed: "\t",
 		federationImportFeeds: []string{" ", "  git@host:o/f.git  ", ""},
+		federationPeers:       []string{" ", "  https://peer.example.com  ", ""},
 	}
 	if err := validateFederation(&f); err != nil {
 		t.Fatalf("blank remotes are no configuration, not a bad one: %v", err)
@@ -196,6 +203,21 @@ func TestValidateFederation_dropsBlankRemotes(t *testing.T) {
 	}
 	if !slices.Equal(f.federationImportFeeds, []string{"git@host:o/f.git"}) {
 		t.Errorf("import feeds = %#v, want only the real remote, trimmed", f.federationImportFeeds)
+	}
+	// An untrimmed peer passes ValidatePeerURL, which parses its own trimmed
+	// copy, and only breaks later when /claim-check is appended to it.
+	if !slices.Equal(f.federationPeers, []string{"https://peer.example.com"}) {
+		t.Errorf("peers = %#v, want only the real peer, trimmed", f.federationPeers)
+	}
+}
+
+func TestValidateFederation_blankPeersNeedNoSalt(t *testing.T) {
+	f := flags{federationPeers: []string{" ", ""}}
+	if err := validateFederation(&f); err != nil {
+		t.Fatalf("blank peers are no peers, so no salt is required: %v", err)
+	}
+	if len(f.federationPeers) != 0 {
+		t.Errorf("peers = %#v, want none", f.federationPeers)
 	}
 }
 
@@ -350,6 +372,10 @@ func TestLoadOpencodeProvidersResolvesConfigRelativePaths(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(providerDir, "kiro.json"), []byte(`{"plugin":["kiro"]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	ollamaConfig := `{"provider":{"ollama":{"npm":"@ai-sdk/openai-compatible","options":{"baseURL":"http://host.docker.internal:11434/v1"}}}}`
+	if err := os.WriteFile(filepath.Join(providerDir, "ollama.json"), []byte(ollamaConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	h, err := worker.HarnessByName("opencode")
 	if err != nil {
 		t.Fatal(err)
@@ -363,6 +389,7 @@ func TestLoadOpencodeProvidersResolvesConfigRelativePaths(t *testing.T) {
 			EgressAllow:      []string{"q.us-east-1.amazonaws.com"},
 			StateDir:         "state/kiro",
 		},
+		"ollama": {ConfigFile: "providers/ollama.json", HostPort: 11434},
 	}, filepath.Join(dir, "scrutineer.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -376,6 +403,40 @@ func TestLoadOpencodeProvidersResolvesConfigRelativePaths(t *testing.T) {
 	}
 	if !slices.Equal(provider.RequiredBinaries, []string{"kiro-cli"}) {
 		t.Errorf("required binaries = %v", provider.RequiredBinaries)
+	}
+	if got["ollama"].HostPort != "11434" || got["kiro"].HostPort != "" {
+		t.Errorf("host ports = kiro:%q ollama:%q", got["kiro"].HostPort, got["ollama"].HostPort)
+	}
+}
+
+func TestLoadOpencodeProvidersRefusesHostPortWithoutMatchingBaseURL(t *testing.T) {
+	dir := t.TempDir()
+	h, err := worker.HarnessByName("opencode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"no config_file": "",
+		// The container's own loopback, not the host's. This is the mistake the
+		// check exists for: readiness at host.docker.internal:11434 passes and
+		// then OpenCode dials 127.0.0.1:11434 inside the container.
+		"127.0.0.1":  `{"provider":{"ollama":{"options":{"baseURL":"http://127.0.0.1:11434/v1"}}}}`,
+		"wrong port": `{"provider":{"ollama":{"options":{"baseURL":"http://host.docker.internal:1234/v1"}}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			provider := config.OpencodeProvider{HostPort: 11434}
+			if content != "" {
+				path := filepath.Join(dir, strings.ReplaceAll(name, " ", "-")+".json")
+				if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				provider.ConfigFile = path
+			}
+			_, err := loadOpencodeProviders(h, map[string]config.OpencodeProvider{"ollama": provider}, filepath.Join(dir, "scrutineer.yaml"))
+			if err == nil || !strings.Contains(err.Error(), "http://host.docker.internal:11434") {
+				t.Fatalf("error = %v, want config_file/baseURL refusal", err)
+			}
+		})
 	}
 }
 

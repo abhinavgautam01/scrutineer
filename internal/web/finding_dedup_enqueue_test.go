@@ -111,9 +111,10 @@ func TestAutoEnqueueFindingDedup_conditions(t *testing.T) {
 			wantQueued: false,
 		},
 		{
-			// An import (kind=import) is curated data, not noisy scanner
-			// output: it shows in the Findings list by default and so counts
-			// toward the dedup-pass threshold, unlike a tool-scanner skill.
+			// An import (kind=import) is operator-submitted, with a raw
+			// scanner export capped before it is written: it shows in the
+			// Findings list by default and so counts toward the dedup-pass
+			// threshold, unlike a tool-scanner skill.
 			name:        "prior import finding now counts (kind=import)",
 			scanSkill:   "security-deep-dive",
 			newFindings: 1, hasPrior: true, priorSkill: "CodeQL", priorKind: "import", priorStatus: db.FindingNew,
@@ -224,8 +225,8 @@ func newGroupScan(t *testing.T, s *Server, repoID uint, focus string, status db.
 }
 
 // newGroupScanOfSkill is newGroupScan for the cohort members that are not
-// deep dives: enqueueDiffRescanGroup puts recon, threat-model and semgrep in
-// the same scan_group as the fanned-out deep dives.
+// deep dives: enqueueDiffRescanGroup puts recon, embedded-native, threat-model,
+// and semgrep in the same scan_group as the fanned-out deep dives.
 func newGroupScanOfSkill(t *testing.T, s *Server, repoID uint, focus, skillName string, status db.ScanStatus) *db.Scan {
 	t.Helper()
 	scan := db.Scan{RepositoryID: repoID, Status: status, SkillName: skillName,
