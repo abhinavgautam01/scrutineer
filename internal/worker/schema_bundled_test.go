@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"scrutineer/internal/coverage"
 	"scrutineer/internal/skills"
 )
 
@@ -253,7 +254,10 @@ func TestBundledSchemas_compileAndAcceptSamples(t *testing.T) {
 			    "boundary":"library caller","primitive":"realloc","consumes":"XML length"},
 			    {"id":"S2","location":"lib/parser.c:42","class":"Memory safety",
 			    "boundary":"CLI operator","primitive":"realloc","consumes":"command-line length"}],
-			  "findings":[],"ruled_out":[{"sinks":["S1","S2"],"step":2,"reason":"Bounded by documented caller invariants."}]}`,
+			  "findings":[],"ruled_out":[{"sinks":["S1","S2"],"step":2,"reason":"Bounded by documented caller invariants."}],
+			  "coverage":{"receipts":[{"path":"lib/parser.c","disposition":"reviewed_clean"}],
+			    "surfaces":[{"name":"Memory safety","disposition":"reviewed_clean","evidence_ref":"lib/parser.c:42"}],
+			    "open_questions":[],"dropped_findings":[]}}`,
 		},
 		{
 			"../../skills/forensics/schema.json",
@@ -426,6 +430,58 @@ func TestBundledSchemas_compileAndAcceptSamples(t *testing.T) {
 		if got := ValidateReportSchema(schema, tc.report); got != "" {
 			t.Errorf("%s rejected sample: %s\nreport: %s", tc.schema, got, tc.report)
 		}
+	}
+}
+
+func TestSecurityDeepDiveSchemaRejectsInvalidCoverage(t *testing.T) {
+	const base = `{
+		"repository":"https://github.com/o/r","commit":"abc1234","spec_version":14,
+		"model":"claude","date":"2026-08-27","languages":["Go"],
+		"boundaries":[{"actor":"caller","trusted":"no","controls":"bytes","source":"README.md:1"}],
+		"method":{"scope":"./src","grep_patterns":[],"inventory_count":0,"ruled_out_count":0,"unresolved_count":0},
+		"inventory":[],"findings":[],"ruled_out":[],
+		"coverage":{"receipts":[]}}
+	`
+	schema := loadBundledSchema(t, "../../skills/security-deep-dive/schema.json")
+	if got := ValidateReportSchema(schema, base); got != "" {
+		t.Fatalf("valid coverage rejected: %s", got)
+	}
+	tests := []struct {
+		name   string
+		claim  map[string]any
+		needle string
+	}{
+		{
+			name:   "unknown disposition",
+			claim:  map[string]any{"receipts": []any{map[string]any{"path": "a.go", "disposition": "complete"}}},
+			needle: "/coverage/receipts/0/disposition",
+		},
+		{
+			name:   "unfinished receipt without reason",
+			claim:  map[string]any{"receipts": []any{map[string]any{"path": "a.go", "disposition": "failed"}}},
+			needle: "/coverage/receipts/0",
+		},
+		{
+			name:   "worker-owned completeness",
+			claim:  map[string]any{"receipts": []any{}, "completeness": "complete"},
+			needle: "/coverage",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var report map[string]any
+			if err := json.Unmarshal([]byte(base), &report); err != nil {
+				t.Fatal(err)
+			}
+			report[coverage.ReportMetadataKey] = tc.claim
+			raw, err := json.Marshal(report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := ValidateReportSchema(schema, string(raw)); !strings.Contains(got, tc.needle) {
+				t.Fatalf("error = %q, want containing %q", got, tc.needle)
+			}
+		})
 	}
 }
 
