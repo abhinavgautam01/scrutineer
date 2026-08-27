@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strings"
+	"strconv"
 
 	"scrutineer/internal/db"
 )
@@ -52,20 +52,10 @@ type usageCostOutlier struct {
 	Sinks        string
 }
 
-type usageSnapshotKey struct {
-	RepositoryID uint
-	Commit       string
-}
-
-type usageSnapshotValue struct {
-	ScanID uint
-	Value  float64
-}
-
 type usageDriverValues struct {
-	SLOC      *float64
-	Manifests *float64
-	Sinks     *float64
+	SLOC      *int
+	Manifests *int
+	Sinks     *int
 }
 
 type usageDriverPair struct {
@@ -74,88 +64,87 @@ type usageDriverPair struct {
 }
 
 func (s *Server) loadUsageDriverAnalysis(scans []db.Scan) usageDriverAnalysis {
-	repositoryIDs := usageRepositoryIDs(scans)
-	if len(repositoryIDs) == 0 {
-		return usageDriverAnalysis{}
-	}
-	var sources []db.Scan
-	s.DB.Select("id", "repository_id", "skill_name", "commit", "report").
-		Where("status = ?", db.ScanDone).
-		Where("repository_id IN ?", repositoryIDs).
-		Where("skill_name IN ?", []string{"repo-overview", "dependencies", "security-deep-dive"}).
-		Where("report != ''").
-		Find(&sources)
-
-	var repos []db.Repository
-	s.DB.Select("id", "name", "full_name").Where("id IN ?", repositoryIDs).Find(&repos)
-	repoNames := make(map[uint]string, len(repos))
-	for _, repo := range repos {
-		repoNames[repo.ID] = usageRepositoryName(repo)
-	}
-
-	values := usageDriverValuesByScan(scans, sources)
-	return usageDriverAnalysis{
+	values := usageDriverValuesByScan(
+		scans,
+		s.loadUsageSLOC(),
+		s.loadUsageManifestCounts(),
+		s.loadUsageDeepDiveSinks(),
+	)
+	analysis := usageDriverAnalysis{
 		Correlations: usageCorrelations(scans, values),
-		Outliers:     usageOutliers(scans, values, repoNames),
+		Outliers:     usageOutliers(scans, values),
 	}
+	s.loadUsageOutlierRepositoryNames(analysis.Outliers)
+	return analysis
 }
 
-func usageRepositoryIDs(scans []db.Scan) []uint {
-	seen := make(map[uint]struct{}, len(scans))
-	for _, scan := range scans {
-		if scan.RepositoryID != 0 {
-			seen[scan.RepositoryID] = struct{}{}
-		}
-	}
-	ids := make([]uint, 0, len(seen))
-	for id := range seen {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	return ids
-}
+func (s *Server) loadUsageSLOC() map[uint]int {
+	latest := s.DB.Model(&db.Scan{}).
+		Select("MAX(id)").
+		Where("status = ? AND skill_name = ? AND report != ''", db.ScanDone, "repo-overview").
+		Group("repository_id")
+	var sources []db.Scan
+	s.DB.Select("id", "repository_id", "report").Where("id IN (?)", latest).Find(&sources)
 
-func usageDriverValuesByScan(scans, sources []db.Scan) map[uint]usageDriverValues {
-	slocBySnapshot := map[usageSnapshotKey]usageSnapshotValue{}
-	manifestsBySnapshot := map[usageSnapshotKey]usageSnapshotValue{}
-	values := map[uint]usageDriverValues{}
+	values := make(map[uint]int, len(sources))
 	for _, source := range sources {
-		key := usageSnapshotKey{RepositoryID: source.RepositoryID, Commit: source.Commit}
-		switch source.SkillName {
-		case "repo-overview":
-			if sloc, ok := repoOverviewSLOC(source.Report); ok {
-				setLatestUsageSnapshot(slocBySnapshot, key, source.ID, sloc)
-				v := values[source.ID]
-				v.SLOC = floatPointer(sloc)
-				values[source.ID] = v
-			}
-		case "dependencies":
-			if manifests, ok := dependencyManifestCount(source.Report); ok {
-				setLatestUsageSnapshot(manifestsBySnapshot, key, source.ID, manifests)
-				v := values[source.ID]
-				v.Manifests = floatPointer(manifests)
-				values[source.ID] = v
-			}
-		case "security-deep-dive":
-			if sinks, ok := deepDiveSinkCount(source.Report); ok {
-				v := values[source.ID]
-				v.Sinks = floatPointer(sinks)
-				values[source.ID] = v
-			}
+		if sloc, ok := repoOverviewSLOC(source.Report); ok {
+			values[source.RepositoryID] = sloc
 		}
 	}
+	return values
+}
 
+func (s *Server) loadUsageManifestCounts() map[uint]int {
+	var rows []struct {
+		RepositoryID  uint
+		ManifestCount int
+	}
+	s.DB.Model(&db.Dependency{}).
+		Select("repository_id, COUNT(DISTINCT TRIM(manifest_path)) AS manifest_count").
+		Where("TRIM(manifest_path) != ''").
+		Group("repository_id").
+		Scan(&rows)
+
+	values := make(map[uint]int, len(rows))
+	for _, row := range rows {
+		values[row.RepositoryID] = row.ManifestCount
+	}
+	return values
+}
+
+func (s *Server) loadUsageDeepDiveSinks() map[uint]int {
+	latest := s.DB.Model(&db.Scan{}).
+		Select("MAX(id)").
+		Where("status = ? AND skill_name = ? AND cost_usd > 0 AND report != ''", db.ScanDone, "security-deep-dive").
+		Group("repository_id")
+	var sources []db.Scan
+	s.DB.Select("id", "report").Where("id IN (?)", latest).Find(&sources)
+
+	values := make(map[uint]int, len(sources))
+	for _, source := range sources {
+		if sinks, ok := deepDiveSinkCount(source.Report); ok {
+			values[source.ID] = sinks
+		}
+	}
+	return values
+}
+
+func usageDriverValuesByScan(scans []db.Scan, slocByRepo, manifestsByRepo map[uint]int, sinksByScan map[uint]int) map[uint]usageDriverValues {
+	values := make(map[uint]usageDriverValues, len(scans))
 	for _, scan := range scans {
-		v := values[scan.ID]
+		v := usageDriverValues{}
+		if sinks, ok := sinksByScan[scan.ID]; ok {
+			v.Sinks = intPointer(sinks)
+		}
 		// repo-overview and dependencies describe the repository root. Applying
 		// those values to narrower scans would overstate their actual scope.
-		if scan.SubPath == "" && scan.FocusArea == "" && scan.Commit != "" {
-			key := usageSnapshotKey{RepositoryID: scan.RepositoryID, Commit: scan.Commit}
-			if snapshot, ok := slocBySnapshot[key]; ok {
-				v.SLOC = floatPointer(snapshot.Value)
+		if scan.SubPath == "" && scan.FocusArea == "" {
+			if sloc, ok := slocByRepo[scan.RepositoryID]; ok && scan.SkillName != "repo-overview" {
+				v.SLOC = intPointer(sloc)
 			}
-			if snapshot, ok := manifestsBySnapshot[key]; ok {
-				v.Manifests = floatPointer(snapshot.Value)
+			if manifests, ok := manifestsByRepo[scan.RepositoryID]; ok && scan.SkillName != "dependencies" {
+				v.Manifests = intPointer(manifests)
 			}
 		}
 		values[scan.ID] = v
@@ -163,17 +152,7 @@ func usageDriverValuesByScan(scans, sources []db.Scan) map[uint]usageDriverValue
 	return values
 }
 
-func setLatestUsageSnapshot(values map[usageSnapshotKey]usageSnapshotValue, key usageSnapshotKey, scanID uint, value float64) {
-	if key.Commit == "" {
-		return
-	}
-	current, ok := values[key]
-	if !ok || scanID > current.ScanID {
-		values[key] = usageSnapshotValue{ScanID: scanID, Value: value}
-	}
-}
-
-func repoOverviewSLOC(report string) (float64, bool) {
+func repoOverviewSLOC(report string) (int, bool) {
 	var result struct {
 		Lines struct {
 			TotalLines *int `json:"total_lines"`
@@ -182,40 +161,17 @@ func repoOverviewSLOC(report string) (float64, bool) {
 	if json.Unmarshal([]byte(report), &result) != nil || result.Lines.TotalLines == nil || *result.Lines.TotalLines < 0 {
 		return 0, false
 	}
-	return float64(*result.Lines.TotalLines), true
+	return *result.Lines.TotalLines, true
 }
 
-func dependencyManifestCount(report string) (float64, bool) {
-	var result struct {
-		Analyses struct {
-			Inventory *struct {
-				Status string `json:"status"`
-				Result []struct {
-					ManifestPath string `json:"manifest_path"`
-				} `json:"result"`
-			} `json:"inventory"`
-		} `json:"analyses"`
-	}
-	if json.Unmarshal([]byte(report), &result) != nil || result.Analyses.Inventory == nil || result.Analyses.Inventory.Status != "ok" {
-		return 0, false
-	}
-	paths := map[string]struct{}{}
-	for _, row := range result.Analyses.Inventory.Result {
-		if path := strings.TrimSpace(row.ManifestPath); path != "" {
-			paths[path] = struct{}{}
-		}
-	}
-	return float64(len(paths)), true
-}
-
-func deepDiveSinkCount(report string) (float64, bool) {
+func deepDiveSinkCount(report string) (int, bool) {
 	var result struct {
 		Inventory []json.RawMessage `json:"inventory"`
 	}
 	if json.Unmarshal([]byte(report), &result) != nil || result.Inventory == nil {
 		return 0, false
 	}
-	return float64(len(result.Inventory)), true
+	return len(result.Inventory), true
 }
 
 func usageCorrelations(scans []db.Scan, values map[uint]usageDriverValues) []usageDriverCorrelation {
@@ -259,14 +215,14 @@ func usageCorrelations(scans []db.Scan, values map[uint]usageDriverValues) []usa
 	return rows
 }
 
-func appendUsagePair(pairs map[string]map[string][]usageDriverPair, skill, driver string, value *float64, cost float64) {
+func appendUsagePair(pairs map[string]map[string][]usageDriverPair, skill, driver string, value *int, cost float64) {
 	if value == nil {
 		return
 	}
 	if pairs[skill] == nil {
 		pairs[skill] = map[string][]usageDriverPair{}
 	}
-	pairs[skill][driver] = append(pairs[skill][driver], usageDriverPair{Driver: *value, Cost: cost})
+	pairs[skill][driver] = append(pairs[skill][driver], usageDriverPair{Driver: float64(*value), Cost: cost})
 }
 
 func pearsonCorrelation(pairs []usageDriverPair) (float64, bool) {
@@ -310,7 +266,7 @@ func correlationSummary(r float64) string {
 	return strength + " " + direction
 }
 
-func usageOutliers(scans []db.Scan, values map[uint]usageDriverValues, repoNames map[uint]string) []usageCostOutlier {
+func usageOutliers(scans []db.Scan, values map[uint]usageDriverValues) []usageCostOutlier {
 	costsBySkill := map[string][]float64{}
 	for _, scan := range scans {
 		if scan.CostUSD > 0 {
@@ -332,7 +288,6 @@ func usageOutliers(scans []db.Scan, values map[uint]usageDriverValues, repoNames
 		rows = append(rows, usageCostOutlier{
 			ScanID:       scan.ID,
 			RepositoryID: scan.RepositoryID,
-			Repository:   repoNames[scan.RepositoryID],
 			Skill:        scan.SkillName,
 			Model:        scan.Model,
 			Profile:      scan.Profile,
@@ -354,6 +309,34 @@ func usageOutliers(scans []db.Scan, values map[uint]usageDriverValues, repoNames
 	return rows
 }
 
+func (s *Server) loadUsageOutlierRepositoryNames(outliers []usageCostOutlier) {
+	if len(outliers) == 0 {
+		return
+	}
+	seen := make(map[uint]struct{}, len(outliers))
+	ids := make([]uint, 0, len(outliers))
+	for _, outlier := range outliers {
+		if _, ok := seen[outlier.RepositoryID]; ok {
+			continue
+		}
+		seen[outlier.RepositoryID] = struct{}{}
+		ids = append(ids, outlier.RepositoryID)
+	}
+	var repos []db.Repository
+	s.DB.Select("id", "name", "full_name").Where("id IN ?", ids).Find(&repos)
+	names := make(map[uint]string, len(repos))
+	for _, repo := range repos {
+		names[repo.ID] = usageRepositoryName(repo)
+	}
+	for i := range outliers {
+		if name := names[outliers[i].RepositoryID]; name != "" {
+			outliers[i].Repository = name
+		} else {
+			outliers[i].Repository = fmt.Sprintf("repository #%d", outliers[i].RepositoryID)
+		}
+	}
+}
+
 func usageRepositoryName(repo db.Repository) string {
 	if repo.FullName != "" {
 		return repo.FullName
@@ -364,13 +347,13 @@ func usageRepositoryName(repo db.Repository) string {
 	return fmt.Sprintf("repository #%d", repo.ID)
 }
 
-func usageDriverDisplay(value *float64) string {
+func usageDriverDisplay(value *int) string {
 	if value == nil {
 		return ""
 	}
-	return fmt.Sprintf("%.0f", *value)
+	return strconv.Itoa(*value)
 }
 
-func floatPointer(value float64) *float64 {
+func intPointer(value int) *int {
 	return &value
 }

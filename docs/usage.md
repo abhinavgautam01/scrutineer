@@ -6,11 +6,11 @@ Scrutineer records model usage on each scan and aggregates completed and failed 
 
 The **Cost drivers** view compares scan cost with three inexpensive workload proxies:
 
-- **SLOC** is `lines.total_lines` from a successful `repo-overview` report for the same repository and commit.
-- **Dependency manifests** is the number of distinct non-empty `manifest_path` values in a successful `dependencies` inventory for the same repository and commit.
-- **Phase 1 sinks** is the number of entries in the `security-deep-dive` scan's own `inventory`.
+- **SLOC** is `lines.total_lines` from the latest successful `repo-overview` report for the repository.
+- **Dependency manifests** is the current number of distinct non-empty `Dependency.ManifestPath` values stored for the repository.
+- **Phase 1 sinks** is the number of entries in the latest positive-cost completed `security-deep-dive` report for the repository.
 
-Repository-wide SLOC and manifest measurements are not attached to subpath or focus-area scans because the full-repository value would overstate their scope. Reports without an exact non-empty commit match are also excluded. This makes the table intentionally sparse when the prerequisite measurement skills have not run at the same commit.
+Repository-wide SLOC and manifest measurements are not attached to subpath or focus-area scans because the full-repository value would overstate their scope. They are deliberately coarse, inexpensive current-corpus proxies rather than historical commit snapshots: SLOC can lag until `repo-overview` runs again, and dependency rows reflect the latest successful inventory. Phase 1 sink counts are attached only to the selected deep-dive scan, which avoids loading and parsing the repository's complete deep-dive history on every page view.
 
 Correlations are calculated independently per skill over positive-cost runs. A row appears once at least three matched observations exist and both cost and the driver vary. The reported value is Pearson's correlation coefficient (`r`): values near `1` indicate that cost tends to rise with the proxy, values near `-1` indicate an inverse relationship and values near `0` indicate little linear relationship. Correlation describes the stored corpus and does not prove that a proxy caused the cost.
 
