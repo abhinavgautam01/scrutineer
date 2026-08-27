@@ -124,6 +124,18 @@ func TestUsageDriverValuesByScan_matchesExactRootSnapshot(t *testing.T) {
 	}
 }
 
+func TestUsageRepositoryIDs(t *testing.T) {
+	got := usageRepositoryIDs([]db.Scan{
+		{RepositoryID: 3},
+		{RepositoryID: 1},
+		{RepositoryID: 3},
+		{},
+	})
+	if len(got) != 2 || got[0] != 1 || got[1] != 3 {
+		t.Fatalf("repository IDs = %v, want [1 3]", got)
+	}
+}
+
 func TestFormatUSD(t *testing.T) {
 	cases := []struct {
 		v    float64
@@ -340,6 +352,37 @@ func TestUsage_costDriversAndOutliers(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("usage drivers page missing %q", want)
 		}
+	}
+}
+
+func TestUsage_costOutlierRendersProfileWithoutMissingModelMarker(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://x/profile-only", Name: "profile-only"}
+	s.DB.Create(&repo)
+	for _, cost := range []float64{1, 1, 30} {
+		s.DB.Create(&db.Scan{
+			RepositoryID: repo.ID,
+			Kind:         "skill",
+			SkillName:    "profile-only",
+			Status:       db.ScanDone,
+			Profile:      "go",
+			CostUSD:      cost,
+		})
+	}
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", "/usage?view=drivers"))
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, ">go</td>") {
+		t.Error("profile-only outlier did not render its profile")
+	}
+	if strings.Contains(body, "— / go") {
+		t.Error("profile-only outlier rendered a missing-model marker")
 	}
 }
 

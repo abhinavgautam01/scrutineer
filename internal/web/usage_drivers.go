@@ -74,15 +74,20 @@ type usageDriverPair struct {
 }
 
 func (s *Server) loadUsageDriverAnalysis(scans []db.Scan) usageDriverAnalysis {
+	repositoryIDs := usageRepositoryIDs(scans)
+	if len(repositoryIDs) == 0 {
+		return usageDriverAnalysis{}
+	}
 	var sources []db.Scan
 	s.DB.Select("id", "repository_id", "skill_name", "commit", "report").
 		Where("status = ?", db.ScanDone).
+		Where("repository_id IN ?", repositoryIDs).
 		Where("skill_name IN ?", []string{"repo-overview", "dependencies", "security-deep-dive"}).
 		Where("report != ''").
 		Find(&sources)
 
 	var repos []db.Repository
-	s.DB.Select("id", "name", "full_name").Find(&repos)
+	s.DB.Select("id", "name", "full_name").Where("id IN ?", repositoryIDs).Find(&repos)
 	repoNames := make(map[uint]string, len(repos))
 	for _, repo := range repos {
 		repoNames[repo.ID] = usageRepositoryName(repo)
@@ -93,6 +98,21 @@ func (s *Server) loadUsageDriverAnalysis(scans []db.Scan) usageDriverAnalysis {
 		Correlations: usageCorrelations(scans, values),
 		Outliers:     usageOutliers(scans, values, repoNames),
 	}
+}
+
+func usageRepositoryIDs(scans []db.Scan) []uint {
+	seen := make(map[uint]struct{}, len(scans))
+	for _, scan := range scans {
+		if scan.RepositoryID != 0 {
+			seen[scan.RepositoryID] = struct{}{}
+		}
+	}
+	ids := make([]uint, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
 }
 
 func usageDriverValuesByScan(scans, sources []db.Scan) map[uint]usageDriverValues {

@@ -49,10 +49,14 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 	// rows have zero cost and would drag the floor down, and failed runs
 	// did still spend tokens so they stay in.
 	var scans []db.Scan
-	s.DB.Select("id", "repository_id", "skill_name", "model", "profile", "commit",
-		"sub_path", "focus_area", "cost_usd", "turns",
-		"input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
-		"finished_at", "created_at").
+	columns := []string{
+		"skill_name", "cost_usd", "turns", "input_tokens", "output_tokens",
+		"cache_read_tokens", "cache_write_tokens", "finished_at", "created_at",
+	}
+	if view == "drivers" {
+		columns = append(columns, "id", "repository_id", "model", "profile", "commit", "sub_path", "focus_area")
+	}
+	s.DB.Select(columns).
 		Where("status IN ?", []db.ScanStatus{db.ScanDone, db.ScanFailed}).
 		Where("skill_name != ''").
 		Find(&scans)

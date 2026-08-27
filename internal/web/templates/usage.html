@@ -103,7 +103,7 @@
             <td><a href="/scans/{{.ScanID}}" class="link">#{{.ScanID}}</a></td>
             <td><a href="/repositories/{{.RepositoryID}}" class="link">{{.Repository}}</a></td>
             <td class="font-medium">{{.Skill}}</td>
-            <td class="text-muted-foreground">{{if .Model}}{{.Model}}{{else}}—{{end}}{{if .Profile}} / {{.Profile}}{{end}}</td>
+            <td class="text-muted-foreground">{{if .Model}}{{.Model}}{{if .Profile}} / {{.Profile}}{{end}}{{else if .Profile}}{{.Profile}}{{else}}—{{end}}</td>
             <td class="text-right font-medium">{{usd .Cost}}</td>
             <td class="text-right text-muted-foreground">{{usd .Median}}</td>
             <td class="text-right">{{printf "%.1f×" .Multiple}}</td>
