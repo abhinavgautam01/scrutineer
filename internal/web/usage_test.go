@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"math"
 	"net/http/httptest"
 	"strings"
@@ -41,6 +42,85 @@ func TestSummarise(t *testing.T) {
 	}
 	if z := summarise(nil); z != (Stats{}) {
 		t.Errorf("empty summarise = %+v", z)
+	}
+}
+
+func TestUsageDriverReportParsing(t *testing.T) {
+	t.Run("repo overview SLOC", func(t *testing.T) {
+		got, ok := repoOverviewSLOC(`{"lines":{"total_lines":1234}}`)
+		if !ok || got != 1234 {
+			t.Fatalf("repoOverviewSLOC = %v, %v, want 1234, true", got, ok)
+		}
+		if _, ok := repoOverviewSLOC(`{"lines":{"total_files":12}}`); ok {
+			t.Fatal("repoOverviewSLOC accepted report without total_lines")
+		}
+	})
+
+	t.Run("distinct dependency manifests", func(t *testing.T) {
+		report := `{"analyses":{"inventory":{"status":"ok","result":[` +
+			`{"manifest_path":"package.json"},{"manifest_path":"package.json"},` +
+			`{"manifest_path":"cmd/go.mod"},{"manifest_path":""}]}}}`
+		got, ok := dependencyManifestCount(report)
+		if !ok || got != 2 {
+			t.Fatalf("dependencyManifestCount = %v, %v, want 2, true", got, ok)
+		}
+		if _, ok := dependencyManifestCount(`{"analyses":{"inventory":{"status":"error"}}}`); ok {
+			t.Fatal("dependencyManifestCount accepted failed inventory")
+		}
+	})
+
+	t.Run("deep dive sinks", func(t *testing.T) {
+		got, ok := deepDiveSinkCount(`{"inventory":[{"id":"S1"},{"id":"S2"}]}`)
+		if !ok || got != 2 {
+			t.Fatalf("deepDiveSinkCount = %v, %v, want 2, true", got, ok)
+		}
+		if _, ok := deepDiveSinkCount(`{"findings":[]}`); ok {
+			t.Fatal("deepDiveSinkCount accepted report without inventory")
+		}
+	})
+}
+
+func TestPearsonCorrelation(t *testing.T) {
+	positive := []usageDriverPair{{Driver: 1, Cost: 2}, {Driver: 2, Cost: 4}, {Driver: 3, Cost: 6}}
+	if got, ok := pearsonCorrelation(positive); !ok || !almostEq(got, 1) {
+		t.Fatalf("positive correlation = %v, %v, want 1, true", got, ok)
+	}
+	negative := []usageDriverPair{{Driver: 1, Cost: 6}, {Driver: 2, Cost: 4}, {Driver: 3, Cost: 2}}
+	if got, ok := pearsonCorrelation(negative); !ok || !almostEq(got, -1) {
+		t.Fatalf("negative correlation = %v, %v, want -1, true", got, ok)
+	}
+	if _, ok := pearsonCorrelation(positive[:2]); ok {
+		t.Fatal("two samples produced a correlation")
+	}
+	constant := []usageDriverPair{{Driver: 1, Cost: 2}, {Driver: 1, Cost: 3}, {Driver: 1, Cost: 4}}
+	if _, ok := pearsonCorrelation(constant); ok {
+		t.Fatal("constant driver produced a correlation")
+	}
+}
+
+func TestUsageDriverValuesByScan_matchesExactRootSnapshot(t *testing.T) {
+	sources := []db.Scan{
+		{ID: 10, RepositoryID: 1, SkillName: "repo-overview", Commit: "abc", Report: `{"lines":{"total_lines":100}}`},
+		{ID: 11, RepositoryID: 1, SkillName: "dependencies", Commit: "abc", Report: `{"analyses":{"inventory":{"status":"ok","result":[{"manifest_path":"go.mod"}]}}}`},
+		{ID: 12, RepositoryID: 1, SkillName: "security-deep-dive", Commit: "abc", Report: `{"inventory":[{},{}]}`},
+	}
+	scans := []db.Scan{
+		{ID: 20, RepositoryID: 1, Commit: "abc"},
+		{ID: 21, RepositoryID: 1, Commit: "abc", SubPath: "cmd/tool"},
+		{ID: 22, RepositoryID: 1, Commit: "abc", FocusArea: `{"name":"parser"}`},
+		{ID: 23, RepositoryID: 1, Commit: "def"},
+	}
+	got := usageDriverValuesByScan(scans, sources)
+	if got[20].SLOC == nil || *got[20].SLOC != 100 || got[20].Manifests == nil || *got[20].Manifests != 1 {
+		t.Fatalf("root values = %+v, want SLOC 100 and manifests 1", got[20])
+	}
+	for _, id := range []uint{21, 22, 23} {
+		if got[id].SLOC != nil || got[id].Manifests != nil {
+			t.Errorf("scan %d inherited root-only values: %+v", id, got[id])
+		}
+	}
+	if got[12].Sinks == nil || *got[12].Sinks != 2 {
+		t.Fatalf("deep-dive sink count = %+v, want 2", got[12])
 	}
 }
 
@@ -200,6 +280,66 @@ func TestUsage_perDay(t *testing.T) {
 	}
 	if !strings.Contains(body, "3 runs") {
 		t.Errorf("missing 3 runs count")
+	}
+}
+
+func TestUsage_costDriversAndOutliers(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://x/drivers", Name: "drivers", FullName: "owner/drivers"}
+	s.DB.Create(&repo)
+
+	commits := []string{"a", "b", "c"}
+	sloc := []int{100, 200, 300}
+	costs := []float64{1, 2, 30}
+	var outlier db.Scan
+	for i, commit := range commits {
+		s.DB.Create(&db.Scan{
+			RepositoryID: repo.ID,
+			Kind:         "skill",
+			SkillName:    "repo-overview",
+			Status:       db.ScanDone,
+			Commit:       commit,
+			Report:       `{"lines":{"total_lines":` + fmt.Sprint(sloc[i]) + `}}`,
+		})
+		scan := db.Scan{
+			RepositoryID: repo.ID,
+			Kind:         "skill",
+			SkillName:    "audit",
+			Status:       db.ScanDone,
+			Commit:       commit,
+			Model:        "test-model",
+			Profile:      "go",
+			CostUSD:      costs[i],
+			Turns:        5 + i,
+		}
+		s.DB.Create(&scan)
+		if i == 2 {
+			outlier = scan
+		}
+	}
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", "/usage?view=drivers"))
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		"Cost correlations",
+		"audit",
+		"SLOC",
+		"3",
+		"Cost outliers",
+		fmt.Sprintf("/scans/%d", outlier.ID),
+		"owner/drivers",
+		"test-model / go",
+		"15.0×",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("usage drivers page missing %q", want)
+		}
 	}
 }
 

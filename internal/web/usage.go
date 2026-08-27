@@ -41,7 +41,7 @@ type Stats struct {
 
 func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 	view := r.URL.Query().Get("view")
-	if view != "day" {
+	if view != "day" && view != "drivers" {
 		view = "skill"
 	}
 
@@ -49,7 +49,8 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 	// rows have zero cost and would drag the floor down, and failed runs
 	// did still spend tokens so they stay in.
 	var scans []db.Scan
-	s.DB.Select("skill_name", "cost_usd", "turns",
+	s.DB.Select("id", "repository_id", "skill_name", "model", "profile", "commit",
+		"sub_path", "focus_area", "cost_usd", "turns",
 		"input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
 		"finished_at", "created_at").
 		Where("status IN ?", []db.ScanStatus{db.ScanDone, db.ScanFailed}).
@@ -114,13 +115,19 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 
 	rl := buildRateLimitPanel(s.Worker.RateLimitStatus())
 	rl.Downgrading = s.Worker.ShouldDowngradeModel()
+	drivers := usageDriverAnalysis{}
+	if view == "drivers" {
+		drivers = s.loadUsageDriverAnalysis(scans)
+	}
 	s.render(w, r, "usage.html", map[string]any{
-		"Rows":      rows,
-		"DayRows":   dayRows,
-		"TotalCost": totalCost,
-		"TotalRuns": totalRuns,
-		"View":      view,
-		"RateLimit": rl,
+		"Rows":               rows,
+		"DayRows":            dayRows,
+		"DriverCorrelations": drivers.Correlations,
+		"Outliers":           drivers.Outliers,
+		"TotalCost":          totalCost,
+		"TotalRuns":          totalRuns,
+		"View":               view,
+		"RateLimit":          rl,
 	})
 }
 
