@@ -2,7 +2,7 @@ module scrutineer
 
 go 1.26
 
-toolchain go1.26.6
+toolchain go1.27.0
 
 require (
 	filippo.io/age v1.3.1
@@ -39,7 +39,7 @@ require (
 	github.com/git-pkgs/packageurl-go v0.3.1 // indirect
 	github.com/git-pkgs/registries v0.8.0 // indirect
 	github.com/git-pkgs/spdx v0.3.1 // indirect
-	github.com/git-pkgs/vers v0.5.0 // indirect
+	github.com/git-pkgs/vers v0.6.0 // indirect
 	github.com/github/go-spdx/v2 v2.7.0 // indirect
 	github.com/glebarez/go-sqlite v1.23.0 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
@@ -63,6 +63,6 @@ require (
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 	modernc.org/libc v1.75.3 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
-	modernc.org/memory v1.12.0 // indirect
-	modernc.org/sqlite v1.56.0 // indirect
+	modernc.org/memory v1.12.1 // indirect
+	modernc.org/sqlite v1.57.0 // indirect
 )
