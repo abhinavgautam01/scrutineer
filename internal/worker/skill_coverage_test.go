@@ -20,7 +20,7 @@ func TestParseSkillOutputIngestsCoverageClaim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scan := db.Scan{Coverage: initial, Completeness: coverage.CompletenessPartial}
+	scan := db.Scan{RescanMode: db.ScanRescanModeDiff, Coverage: initial, Completeness: coverage.CompletenessPartial}
 	report := `{"coverage":{"receipts":[
 		{"path":"a.go","disposition":"reviewed_clean"},
 		{"path":"b.go","disposition":"reviewed_findings"}],
@@ -54,7 +54,7 @@ func TestParseSkillOutputKeepsDiffPartialWhenReceiptIsMissing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scan := db.Scan{Coverage: initial}
+	scan := db.Scan{RescanMode: db.ScanRescanModeDiff, Coverage: initial}
 	report := `{"coverage":{"receipts":[{"path":"a.go","disposition":"reviewed_clean"}]}}`
 	if err := (&Worker{}).parseSkillOutput(&db.Skill{}, &scan, report, func(Event) {}); err != nil {
 		t.Fatal(err)
@@ -77,7 +77,7 @@ func TestParseSkillOutputRejectsInvalidCoverageBeforeMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scan := db.Scan{Coverage: initial, Completeness: coverage.CompletenessPartial}
+	scan := db.Scan{RescanMode: db.ScanRescanModeDiff, Coverage: initial, Completeness: coverage.CompletenessPartial}
 	report := `{"coverage":{"receipts":[{"path":"../a.go","disposition":"reviewed_clean"}]}}`
 	err = (&Worker{}).parseSkillOutput(&db.Skill{}, &scan, report, func(Event) {})
 	if err == nil || !strings.Contains(err.Error(), "repository-relative") {
@@ -90,7 +90,7 @@ func TestParseSkillOutputRejectsInvalidCoverageBeforeMutation(t *testing.T) {
 
 func TestParseSkillOutputReportsStoredCoverageCorruption(t *testing.T) {
 	const corrupted = `{"version":"invalid"}`
-	scan := db.Scan{Coverage: corrupted, Completeness: coverage.CompletenessPartial}
+	scan := db.Scan{RescanMode: db.ScanRescanModeDiff, Coverage: corrupted, Completeness: coverage.CompletenessPartial}
 	report := `{"coverage":{"receipts":[]}}`
 	err := (&Worker{}).parseSkillOutput(&db.Skill{}, &scan, report, func(Event) {})
 	if err == nil || !strings.Contains(err.Error(), "Record.version") {
@@ -102,7 +102,7 @@ func TestParseSkillOutputReportsStoredCoverageCorruption(t *testing.T) {
 }
 
 func TestParseSkillOutputNeverClaimsCompleteWithoutWorkerScope(t *testing.T) {
-	scan := db.Scan{}
+	scan := db.Scan{RescanMode: db.ScanRescanModeDiff}
 	report := `{"coverage":{"receipts":[{"path":"a.go","disposition":"reviewed_clean"}]}}`
 	if err := (&Worker{}).parseSkillOutput(&db.Skill{}, &scan, report, func(Event) {}); err != nil {
 		t.Fatal(err)
@@ -113,5 +113,25 @@ func TestParseSkillOutputNeverClaimsCompleteWithoutWorkerScope(t *testing.T) {
 	}
 	if scan.Completeness != coverage.CompletenessUnknown || rec.Completeness != coverage.CompletenessUnknown {
 		t.Fatalf("completeness column=%q record=%q", scan.Completeness, rec.Completeness)
+	}
+}
+
+func TestParseSkillOutputIgnoresCoverageOutsideDiffRescan(t *testing.T) {
+	const initial = `{"producer":"other-skill"}`
+	scan := db.Scan{Coverage: initial, Completeness: coverage.CompletenessUnknown}
+	report := `{"coverage":{"format":"skill-specific"}}`
+	if err := (&Worker{}).parseSkillOutput(&db.Skill{}, &scan, report, func(Event) {}); err != nil {
+		t.Fatal(err)
+	}
+	if scan.Coverage != initial || scan.Completeness != coverage.CompletenessUnknown {
+		t.Fatalf("non-diff report mutated coverage: %+v", scan)
+	}
+}
+
+func TestParseSkillOutputLeavesMalformedCoverageEnvelopeToKindParser(t *testing.T) {
+	scan := db.Scan{RescanMode: db.ScanRescanModeDiff}
+	err := (&Worker{}).parseSkillOutput(&db.Skill{OutputKind: "maintainers"}, &scan, `{"coverage":`, func(Event) {})
+	if err == nil || !strings.Contains(err.Error(), "parse maintainers report") {
+		t.Fatalf("error = %v, want maintainers parser error", err)
 	}
 }
