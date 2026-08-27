@@ -54,7 +54,7 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 		"cache_read_tokens", "cache_write_tokens", "finished_at", "created_at",
 	}
 	if view == "drivers" {
-		columns = append(columns, "id", "repository_id", "model", "profile", "commit", "sub_path", "focus_area")
+		columns = append(columns, "id", "repository_id", "model", "profile", "sub_path", "focus_area")
 	}
 	s.DB.Select(columns).
 		Where("status IN ?", []db.ScanStatus{db.ScanDone, db.ScanFailed}).

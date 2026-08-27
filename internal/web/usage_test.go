@@ -311,20 +311,21 @@ func TestUsage_costDriversAndOutliers(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
 
-	repo := db.Repository{URL: "https://x/drivers", Name: "drivers", FullName: "owner/drivers"}
-	s.DB.Create(&repo)
-
-	commits := []string{"a", "b", "c"}
 	sloc := []int{100, 200, 300}
 	costs := []float64{1, 2, 30}
 	var outlier db.Scan
-	for i, commit := range commits {
+	for i := range sloc {
+		repo := db.Repository{
+			URL:      fmt.Sprintf("https://x/drivers-%d", i+1),
+			Name:     fmt.Sprintf("drivers-%d", i+1),
+			FullName: fmt.Sprintf("owner/drivers-%d", i+1),
+		}
+		s.DB.Create(&repo)
 		s.DB.Create(&db.Scan{
 			RepositoryID: repo.ID,
 			Kind:         "skill",
 			SkillName:    "repo-overview",
 			Status:       db.ScanDone,
-			Commit:       commit,
 			Report:       `{"lines":{"total_lines":` + fmt.Sprint(sloc[i]) + `}}`,
 		})
 		scan := db.Scan{
@@ -332,7 +333,6 @@ func TestUsage_costDriversAndOutliers(t *testing.T) {
 			Kind:         "skill",
 			SkillName:    "audit",
 			Status:       db.ScanDone,
-			Commit:       commit,
 			Model:        "test-model",
 			Profile:      "go",
 			CostUSD:      costs[i],
@@ -355,9 +355,11 @@ func TestUsage_costDriversAndOutliers(t *testing.T) {
 		"audit",
 		"SLOC",
 		"3",
+		"0.88",
+		"strong positive",
 		"Cost outliers",
 		fmt.Sprintf("/scans/%d", outlier.ID),
-		"owner/drivers",
+		"owner/drivers-3",
 		"test-model / go",
 		"15.0×",
 	} {
