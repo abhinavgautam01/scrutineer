@@ -417,18 +417,13 @@ func (w *Worker) parseSkillOutput(skill *db.Skill, scan *db.Scan, report string,
 			}
 		}
 	}
-	var (
-		claim    coverage.Claim
-		hasClaim bool
-	)
-	if scan.RescanMode == db.ScanRescanModeDiff {
-		var err error
-		claim, hasClaim, err = extractSkillCoverageClaim(report)
-		if err != nil {
-			return err
-		}
+	if err := w.parseSkillOutputKind(skill, scan, report, emit); err != nil {
+		return err
 	}
-	err := w.parseSkillOutputKind(skill, scan, report, emit)
+	if scan.RescanMode != db.ScanRescanModeDiff {
+		return nil
+	}
+	claim, hasClaim, err := extractSkillCoverageClaim(report)
 	if err != nil || !hasClaim {
 		return err
 	}

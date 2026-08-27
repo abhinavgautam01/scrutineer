@@ -68,7 +68,8 @@ func TestParseSkillOutputKeepsDiffPartialWhenReceiptIsMissing(t *testing.T) {
 	}
 }
 
-func TestParseSkillOutputRejectsInvalidCoverageBeforeMutation(t *testing.T) {
+func TestParseSkillOutputPersistsFindingsBeforeRejectingInvalidCoverage(t *testing.T) {
+	w, repo := newStreamWorker(t)
 	initial, err := coverage.Marshal(coverage.Record{
 		ActualMode:    db.ScanRescanModeDiff,
 		Completeness:  coverage.CompletenessPartial,
@@ -77,11 +78,26 @@ func TestParseSkillOutputRejectsInvalidCoverageBeforeMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scan := db.Scan{RescanMode: db.ScanRescanModeDiff, Coverage: initial, Completeness: coverage.CompletenessPartial}
-	report := `{"coverage":{"receipts":[{"path":"../a.go","disposition":"reviewed_clean"}]}}`
-	err = (&Worker{}).parseSkillOutput(&db.Skill{}, &scan, report, func(Event) {})
+	scan := db.Scan{
+		RepositoryID: repo.ID,
+		Kind:         JobSkill,
+		SkillName:    "security-deep-dive",
+		Status:       db.ScanDone,
+		RescanMode:   db.ScanRescanModeDiff,
+		Coverage:     initial,
+		Completeness: coverage.CompletenessPartial,
+	}
+	w.DB.Create(&scan)
+	report := `{"findings":[{"id":"F1","title":"finding survives","severity":"High","location":"a.go:1"}],` +
+		`"coverage":{"receipts":[{"path":"./a.go","disposition":"reviewed_findings"}]}}`
+	err = w.parseSkillOutput(&db.Skill{OutputKind: "findings"}, &scan, report, func(Event) {})
 	if err == nil || !strings.Contains(err.Error(), "repository-relative") {
 		t.Fatalf("error = %v, want repository-relative validation", err)
+	}
+	var findingCount int64
+	w.DB.Model(&db.Finding{}).Where("scan_id = ?", scan.ID).Count(&findingCount)
+	if findingCount != 1 || scan.FindingsCount != 1 {
+		t.Fatalf("persisted findings = %d, scan count = %d; want 1, 1", findingCount, scan.FindingsCount)
 	}
 	if scan.Coverage != initial || scan.Completeness != coverage.CompletenessPartial {
 		t.Fatalf("invalid claim mutated scan: %+v", scan)
@@ -93,8 +109,8 @@ func TestParseSkillOutputReportsStoredCoverageCorruption(t *testing.T) {
 	scan := db.Scan{RescanMode: db.ScanRescanModeDiff, Coverage: corrupted, Completeness: coverage.CompletenessPartial}
 	report := `{"coverage":{"receipts":[]}}`
 	err := (&Worker{}).parseSkillOutput(&db.Skill{}, &scan, report, func(Event) {})
-	if err == nil || !strings.Contains(err.Error(), "Record.version") {
-		t.Fatalf("error = %v, want stored coverage field detail", err)
+	if err == nil || !strings.Contains(err.Error(), "stored coverage record") {
+		t.Fatalf("error = %v, want stored coverage corruption detail", err)
 	}
 	if scan.Coverage != corrupted || scan.Completeness != coverage.CompletenessPartial {
 		t.Fatalf("corrupt stored coverage mutated scan: %+v", scan)
