@@ -88,6 +88,19 @@ func TestParseSkillOutputRejectsInvalidCoverageBeforeMutation(t *testing.T) {
 	}
 }
 
+func TestParseSkillOutputReportsStoredCoverageCorruption(t *testing.T) {
+	const corrupted = `{"version":"invalid"}`
+	scan := db.Scan{Coverage: corrupted, Completeness: coverage.CompletenessPartial}
+	report := `{"coverage":{"receipts":[]}}`
+	err := (&Worker{}).parseSkillOutput(&db.Skill{}, &scan, report, func(Event) {})
+	if err == nil || !strings.Contains(err.Error(), "Record.version") {
+		t.Fatalf("error = %v, want stored coverage field detail", err)
+	}
+	if scan.Coverage != corrupted || scan.Completeness != coverage.CompletenessPartial {
+		t.Fatalf("corrupt stored coverage mutated scan: %+v", scan)
+	}
+}
+
 func TestParseSkillOutputNeverClaimsCompleteWithoutWorkerScope(t *testing.T) {
 	scan := db.Scan{}
 	report := `{"coverage":{"receipts":[{"path":"a.go","disposition":"reviewed_clean"}]}}`

@@ -32,7 +32,11 @@ func extractSkillCoverageClaim(report string) (coverage.Claim, bool, error) {
 func applySkillCoverageClaim(scan *db.Scan, claim coverage.Claim) error {
 	rec, ok := coverage.Parse(scan.Coverage)
 	if !ok && strings.TrimSpace(scan.Coverage) != "" {
-		return errors.New("parse worker-owned coverage record")
+		var stored coverage.Record
+		if err := json.Unmarshal([]byte(scan.Coverage), &stored); err != nil {
+			return fmt.Errorf("parse worker-owned coverage record: %w", err)
+		}
+		return errors.New("parse worker-owned coverage record: valid JSON did not decode as a coverage record")
 	}
 	var scope []string
 	if rec.ActualMode == db.ScanRescanModeDiff {
