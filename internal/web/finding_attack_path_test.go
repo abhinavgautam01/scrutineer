@@ -168,8 +168,8 @@ func TestEnsureFindingReportableBlocksExternalReportingSkills(t *testing.T) {
 	f := seedFindingForForm(t, s)
 	s.DB.Model(&f).Update("production_viability", db.ProductionViabilityNonViable)
 	for _, skill := range []string{discloseSkillName, reportUpstreamSkillName, publicIssueSkillName} {
-		if err := s.ensureFindingReportable(f.ID, skill); !errors.Is(err, errFindingNonViable) {
-			t.Errorf("%s error = %v, want %q", skill, err, errFindingNonViable)
+		if err := s.ensureFindingReportable(f.ID, skill); !errors.Is(err, db.ErrFindingNonViable) {
+			t.Errorf("%s error = %v, want %q", skill, err, db.ErrFindingNonViable)
 		}
 	}
 }

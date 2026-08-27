@@ -12,7 +12,6 @@ import (
 )
 
 var errNoRemediationAttempt = errors.New("no gated patch is available to re-attack")
-var errFindingNonViable = db.ErrFindingNonViable
 
 const reportUpstreamSkillName = "report-upstream"
 
@@ -61,7 +60,7 @@ func (s *Server) ensureFindingReportable(findingID uint, skillName string) error
 		return fmt.Errorf("load finding viability: %w", err)
 	}
 	if db.FindingDisclosureBlocked(f) {
-		return errFindingNonViable
+		return db.ErrFindingNonViable
 	}
 	return nil
 }
