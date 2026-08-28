@@ -91,8 +91,8 @@ func TestUsageDriverValuesByScan_appliesRootMeasurements(t *testing.T) {
 		{ID: 11, RepositoryID: 1, SkillName: "dependencies"},
 		{ID: 12, RepositoryID: 1, SkillName: "security-deep-dive"},
 		{ID: 20, RepositoryID: 1},
-		{ID: 21, RepositoryID: 1, Commit: "abc", SubPath: "cmd/tool"},
-		{ID: 22, RepositoryID: 1, Commit: "abc", FocusArea: `{"name":"parser"}`},
+		{ID: 21, RepositoryID: 1, SubPath: "cmd/tool"},
+		{ID: 22, RepositoryID: 1, FocusArea: `{"name":"parser"}`},
 	}
 	got := usageDriverValuesByScan(scans, map[uint]int{1: 100}, map[uint]int{1: 1}, map[uint]int{12: 2})
 	if got[20].SLOC == nil || *got[20].SLOC != 100 || got[20].Manifests == nil || *got[20].Manifests != 1 {
