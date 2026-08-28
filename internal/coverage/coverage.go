@@ -82,10 +82,9 @@ type Record struct {
 	// IncludedPaths. Produced by the skill; the worker only reconciles.
 	Receipts []Receipt `json:"receipts,omitempty"`
 
-	// Surfaces, OpenQuestions and DroppedFindings are declared by this
-	// contract but have no producer yet: they arrive with the skill-side
-	// reporting channel. They are listed here so the shape is fixed before
-	// several skills start inventing their own.
+	// Surfaces, OpenQuestions and DroppedFindings are skill-produced evidence.
+	// They enter through Claim so a skill cannot overwrite worker-owned scope
+	// or completeness fields.
 	Surfaces        []Surface         `json:"surfaces,omitempty"`
 	OpenQuestions   []string          `json:"open_questions,omitempty"`
 	DroppedFindings []DroppedFinding  `json:"dropped_findings,omitempty"`

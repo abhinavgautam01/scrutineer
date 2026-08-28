@@ -11,7 +11,7 @@ ARG COMMIT=""
 RUN CGO_ENABLED=0 go build -ldflags "-X main.commit=${COMMIT}" -o /scrutineer ./cmd/scrutineer
 
 FROM node:26-alpine@sha256:aadf416b2cdce311a8811ba3f0608a61b77dbf997500e2eafe781b51f6a0b019 AS claude
-RUN npm install -g @anthropic-ai/claude-code@2.1.237
+RUN npm install -g @anthropic-ai/claude-code@2.1.238
 
 FROM python:3.15.0rc1-alpine@sha256:c31ce768b814aa1cd3e9247f5d06f4713cf8e4140b707a1bf31fa18411c7c219 AS python-tools
 RUN pip install --no-cache-dir semgrep==1.167.0 "setuptools<81"
@@ -28,7 +28,7 @@ FROM golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc99
 RUN apk add --no-cache build-base git
 RUN GOBIN=/out CGO_ENABLED=1 go install github.com/andrew/VID/cmd/vid@v0.1.0
 
-FROM rust:1.97-alpine@sha256:3c38f3f82c2f3d73da3b38e18d279393a04cb43ddded0e35088a8c3324d40900 AS zizmor-build
+FROM rust:1.98-alpine@sha256:a10e64dd139b7387337c7fbe8aca31b959b57b2fd4c8ae20a02cf1d6ea424dce AS zizmor-build
 RUN apk add --no-cache build-base linux-headers
 RUN cargo install --locked --root /out zizmor@1.29.0
 
