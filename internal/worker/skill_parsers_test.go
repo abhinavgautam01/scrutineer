@@ -1157,13 +1157,31 @@ func TestParseVerify_rejectsAttackTreeWithoutCriteria(t *testing.T) {
 	assertRejectedVerifyReport(t, report, "no grading rubric")
 }
 
-func TestParseVerify_rejectsLiveReportWithoutControlBypass(t *testing.T) {
+func TestParseVerify_storesLiveReportWithoutControlBypassUngraded(t *testing.T) {
 	var report verification.Report
 	if err := json.Unmarshal([]byte(confirmedVerificationReport(t)), &report); err != nil {
 		t.Fatal(err)
 	}
 	report.Criteria.ControlBypass = nil
-	assertRejectedVerifyReport(t, report, "requires criteria.control_bypass")
+	raw, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, gdb := runSkillWithFinding(t, "verify", string(raw), db.FindingNew)
+	if f.Status != db.FindingNew {
+		t.Fatalf("status = %s, want new: an ungraded report must not change lifecycle", f.Status)
+	}
+	var row db.FindingVerification
+	if err := gdb.Where("finding_id = ?", f.ID).First(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if row.Status != "confirmed" || row.Score != nil || row.Report != string(raw) {
+		t.Fatalf("ungraded verification = %+v", row)
+	}
+	notes := findingNotes(gdb, f.ID)
+	if len(notes) != 1 || !strings.Contains(notes[0].Body, "verify report requires criteria.control_bypass") {
+		t.Fatalf("notes = %+v, want missing control-bypass validation reason", notes)
+	}
 }
 
 func TestParseVerify_validatesControlBypassAgainstHostMatch(t *testing.T) {

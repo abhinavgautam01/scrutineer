@@ -1069,7 +1069,7 @@ func decodeVerifyOutput(report string) (verifyOutput, *verification.Report, *flo
 		return result, nil, nil, err.Error(), nil
 	}
 	if rubric.Criteria.ControlBypass == nil {
-		return verifyOutput{}, nil, nil, "", errors.New("verify report requires criteria.control_bypass")
+		return result, nil, nil, "verify report requires criteria.control_bypass", nil
 	}
 	score := rubric.Score()
 	return result, &rubric, &score, "", nil
