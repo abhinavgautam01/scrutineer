@@ -88,6 +88,7 @@ var OutputKinds = map[string]bool{
 	"finding_dedup":   true,
 	"verify":          true,
 	"revalidate":      true,
+	"critic":          true,
 	"breaking_change": true,
 	"mitigation":      true,
 	"disclose":        true,

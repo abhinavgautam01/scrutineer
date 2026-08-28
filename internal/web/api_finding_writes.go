@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"sort"
 	"strconv"
@@ -48,6 +49,10 @@ func (s *Server) apiPatchFinding(w http.ResponseWriter, r *http.Request) {
 		}
 		return nil
 	}); err != nil {
+		if errors.Is(err, db.ErrFindingNonViable) {
+			writeAPIError(w, http.StatusPreconditionFailed, err.Error())
+			return
+		}
 		writeAPIError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}

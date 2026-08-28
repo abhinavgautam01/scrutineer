@@ -107,7 +107,7 @@ One row per skill execution or external import. `skill_name` / `skill_version` p
 | skill_version | integer | Version of the skill at run time; the skill row's `version` bumps on every edit so older scans stay readable. |
 | skill_schema_version | integer | Snapshot of the skill frontmatter `metadata.scrutineer.version` at enqueue time. Used by the benchmark page to attribute expected-finding results to the report schema/version the skill was asked to emit. |
 | skill_name | text | Denormalised skill name for UI display. |
-| finding_id | integer FK | Set when the scan is finding-scoped (verify/patch/disclose/exposure). References `findings.id`. |
+| finding_id | integer FK | Set when the scan is finding-scoped (verify/critic/patch/disclose/exposure). References `findings.id`. |
 | dependent_id | integer FK | Set on `exposure` scans only. References `dependents.id`; identifies which downstream consumer the skill is auditing for reachability of the upstream finding. |
 | baseline_scan_id | integer FK | Set on a fix-validation scan (`POST /repositories/{id}/validate-fix`). References the baseline `scans.id` the fix ref is diffed against. Marks the scan as a validation anchor (the auto triage funnel skips it) and, when it finalises, drives the fingerprint diff written back to `report`. Null on ordinary scans. |
 | remediation_attempt_id | integer FK | Set on a `reattack` scan and pinned at enqueue time to the exact immutable `remediation_attempts.id` under test. Prevents a newer patch run from changing what an already queued re-attack validates. Null on every other scan. |
@@ -179,7 +179,7 @@ One row per installed skill. Loaded from `skills/` directories on disk or the UI
 | body | text | Markdown body after the frontmatter. The prompt. |
 | schema_json | text | Optional schema.json contents. |
 | output_file | text | Relative path the skill writes to. Promoted from metadata. |
-| output_kind | text | Parser key: `findings`, `maintainers`, `packages`, `advisories`, `dependencies`, `finding_dedup`, `repo_metadata`, `repo_overview`, `subprojects`, `posture`, `verify`, `patch`, `reattack`, `threat_model`, `exposure`, `freeform`. Promoted from metadata. |
+| output_kind | text | Parser key: `findings`, `maintainers`, `packages`, `advisories`, `dependencies`, `finding_dedup`, `repo_metadata`, `repo_overview`, `subprojects`, `posture`, `verify`, `critic`, `patch`, `reattack`, `threat_model`, `exposure`, `freeform`. Promoted from metadata. |
 | version | integer | Bumps on every save. |
 | active | boolean | |
 | requires_remote | boolean | When true, scrutineer refuses to enqueue this skill against a local-directory repository (file:// URL). Set via `scrutineer.requires_remote: true` in SKILL.md frontmatter. Use for skills that depend on a forge URL or remote-only data (advisories, exposure, fork, maintainers, metadata, packages, report-upstream). |
@@ -249,6 +249,7 @@ One row per vulnerability. Lifecycle columns are mutated through `db.WriteFindin
 | exploited_in_wild_evidence | text | Free-text source note: researcher, ticket link, traffic observation. |
 | mitigation | text | Markdown body from the `mitigate` skill: workarounds consumers can apply before the fix ships, plus detection guidance. |
 | mitigation_semgrep | text | Optional YAML semgrep rule from the same skill that flags the vulnerable pattern. Empty when no rule was warranted. |
+| production_viability | text | Cached latest critic verdict: `VIABLE`, `NON_VIABLE`, `SAMPLE_OR_TEST`, or `CONDITIONAL_VIABLE`. Indexed for finding-list filters. Empty before the first critic assessment; the immutable source record lives in `finding_attack_paths`. |
 | last_revalidate_verdict | text | Cached latest verdict from the `revalidate` skill (`true_positive`, `false_positive`, `already_fixed`, `uncertain`). Indexed so the audit queue can filter without scanning `finding_notes`. Empty when revalidate has not run on this finding. |
 | novelty | text | Upstream novelty state from the bounded host-side history check and revalidate classification: `unfixed`, `fixed`, `unclear`, or `not_checked`. Indexed; empty before a novelty check has run. |
 | novelty_checked_commit | text | Repository HEAD compared with the finding's scanned commit by the latest novelty check. |
@@ -318,6 +319,19 @@ Append-only grading records produced by finding-scoped `verify` scans. The compl
 | status | text | `confirmed`, `fixed`, `inconclusive`, `deferred`, or `not_attempted`. |
 | score | real, nullable | Fraction of the five rubric criteria that passed, from `0.0` to `1.0`. Null for legacy pre-rubric reports and reports that remain internally inconsistent after repair. |
 | report | text | Complete structured JSON report, including the attack-tree goal, evidenced path nodes, reachability verdict, concrete blockers, three attempts, and per-criterion method, evidence, counterevidence, proof gap, and confidence. Reports written before attack-tree support remain readable. |
+| created_at | datetime | |
+
+## finding_attack_paths
+
+Append-only release-build assessments produced by finding-scoped `critic` scans. The full attack-path report remains immutable in `report`; the newest row's `production_viability` is projected onto `findings.production_viability` for list filtering and external-reporting gates. An exact `NON_VIABLE` projection blocks the `disclose`, `public-issue`, and `report-upstream` paths, while all other values remain visible for analyst judgment.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | integer PK | |
+| finding_id | integer FK | References `findings.id`; cascade delete. Unique with `scan_id`. |
+| scan_id | integer | The critic scan that produced this record. Unique with `finding_id`. |
+| production_viability | text | `VIABLE`, `NON_VIABLE`, `SAMPLE_OR_TEST`, or `CONDITIONAL_VIABLE`. Moved or missing source cannot by itself justify `NON_VIABLE`. |
+| report | text | Complete structured JSON report, including source state, reason, counterevidence, attacker position, preconditions, impact, likelihood, applied adjustments, and facts that would change the result. |
 | created_at | datetime | |
 
 ## remediation_attempts

@@ -767,6 +767,75 @@ func TestScansRetryFailed_dedupesRepeatedFailures(t *testing.T) {
 	}
 }
 
+func TestScanRetry_blocksNonViableExternalReporting(t *testing.T) {
+	for _, skillName := range []string{discloseSkillName, reportUpstreamSkillName, publicIssueSkillName} {
+		t.Run(skillName, func(t *testing.T) {
+			s, done := newTestServer(t)
+			defer done()
+
+			repo := db.Repository{URL: "https://example.com/r", Name: "r"}
+			s.DB.Create(&repo)
+			skill := db.Skill{Name: skillName, Description: "d", Body: "b",
+				OutputFile: "report.json", OutputKind: "freeform", Version: 1,
+				Active: true, Source: "ui"}
+			s.DB.Create(&skill)
+			failed := db.Scan{RepositoryID: repo.ID, Kind: worker.JobSkill, Status: db.ScanFailed,
+				StatusPriority: db.StatusPriorityFor(db.ScanFailed), SkillID: &skill.ID, SkillName: skill.Name}
+			s.DB.Create(&failed)
+			finding := db.Finding{RepositoryID: repo.ID, ScanID: failed.ID, Title: "x", Severity: "Low",
+				ProductionViability: db.ProductionViabilityNonViable}
+			s.DB.Create(&finding)
+			s.DB.Model(&failed).Update("finding_id", finding.ID)
+
+			w := httptest.NewRecorder()
+			s.Handler().ServeHTTP(w, localReq(http.MethodPost, fmt.Sprintf("/scans/%d/retry", failed.ID)))
+			if w.Code != http.StatusPreconditionFailed || !strings.Contains(w.Body.String(), "NON_VIABLE") {
+				t.Fatalf("status = %d, body=%s; want 412 NON_VIABLE", w.Code, w.Body)
+			}
+			var count int64
+			s.DB.Model(&db.Scan{}).Where("id > ?", failed.ID).Count(&count)
+			if count != 0 {
+				t.Fatalf("retry created %d scans, want 0", count)
+			}
+		})
+	}
+}
+
+func TestScansRetryFailed_skipsNonViableExternalReporting(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://example.com/r", Name: "r"}
+	s.DB.Create(&repo)
+	disclose := db.Skill{Name: discloseSkillName, Description: "d", Body: "b",
+		OutputFile: "report.json", OutputKind: "freeform", Version: 1, Active: true, Source: "ui"}
+	regular := db.Skill{Name: "metadata", Description: "d", Body: "b",
+		OutputFile: "report.json", OutputKind: "freeform", Version: 1, Active: true, Source: "ui"}
+	s.DB.Create(&disclose)
+	s.DB.Create(&regular)
+	blocked := db.Scan{RepositoryID: repo.ID, Kind: worker.JobSkill, Status: db.ScanFailed,
+		StatusPriority: db.StatusPriorityFor(db.ScanFailed), SkillID: &disclose.ID, SkillName: disclose.Name}
+	allowed := db.Scan{RepositoryID: repo.ID, Kind: worker.JobSkill, Status: db.ScanFailed,
+		StatusPriority: db.StatusPriorityFor(db.ScanFailed), SkillID: &regular.ID, SkillName: regular.Name}
+	s.DB.Create(&blocked)
+	s.DB.Create(&allowed)
+	finding := db.Finding{RepositoryID: repo.ID, ScanID: blocked.ID, Title: "x", Severity: "Low",
+		ProductionViability: db.ProductionViabilityNonViable}
+	s.DB.Create(&finding)
+	s.DB.Model(&blocked).Update("finding_id", finding.ID)
+
+	w := httptest.NewRecorder()
+	s.scansRetryFailed(w, localReq(http.MethodPost, "/scans/retry-failed"))
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303; body=%s", w.Code, w.Body)
+	}
+	var retried []db.Scan
+	s.DB.Where("id > ?", allowed.ID).Find(&retried)
+	if len(retried) != 1 || retried[0].SkillName != regular.Name {
+		t.Fatalf("retried scans = %+v, want only %q", retried, regular.Name)
+	}
+}
+
 func TestScansRetryFailed_preservesFocusArea(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()

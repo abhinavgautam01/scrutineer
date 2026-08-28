@@ -406,6 +406,13 @@ func TestAPIFindingReadsAndFilters(t *testing.T) {
 		FindingID: findingID, ScanID: scan.ID, Status: "inconclusive", Score: &score,
 		Report: `{"status":"inconclusive","notes":"flaky"}`,
 	})
+	s.DB.Model(&db.Finding{}).Where("id = ?", findingID).
+		Update("production_viability", db.ProductionViabilityNonViable)
+	s.DB.Create(&db.FindingAttackPath{
+		FindingID: findingID, ScanID: scan.ID,
+		ProductionViability: db.ProductionViabilityNonViable,
+		Report:              criticReportFixture,
+	})
 	r := httptest.NewRequest("GET", "/api/findings/"+toString(fid), nil)
 	r.Host = testHost
 	r.Header.Set("Authorization", "Bearer "+scan.APIToken)
@@ -433,6 +440,10 @@ func TestAPIFindingReadsAndFilters(t *testing.T) {
 	verification, ok := detail["verification"].(map[string]any)
 	if !ok || verification["status"] != "inconclusive" || verification["score"] != 0.8 {
 		t.Errorf("finding detail missing latest verification: %+v", detail["verification"])
+	}
+	attackPath, ok := detail["attack_path"].(map[string]any)
+	if !ok || attackPath["production_viability"] != db.ProductionViabilityNonViable {
+		t.Errorf("finding detail missing latest attack path: %+v", detail["attack_path"])
 	}
 }
 

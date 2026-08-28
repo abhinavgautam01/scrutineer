@@ -45,6 +45,24 @@ func (s *Server) findingSkillScanOpts(findingID uint, skillName, model string) (
 	return opts, nil
 }
 
+func externalReportingSkill(skillName string) bool {
+	return skillName == discloseSkillName || skillName == reportUpstreamSkillName || skillName == publicIssueSkillName
+}
+
+func (s *Server) ensureFindingReportable(findingID uint, skillName string) error {
+	if !externalReportingSkill(skillName) {
+		return nil
+	}
+	var f db.Finding
+	if err := s.DB.Select("id", "production_viability").First(&f, findingID).Error; err != nil {
+		return fmt.Errorf("load finding viability: %w", err)
+	}
+	if db.FindingDisclosureBlocked(f) {
+		return db.ErrFindingNonViable
+	}
+	return nil
+}
+
 // latestPatchScan returns the most recent done patch-skill scan for a finding
 // along with its parsed report. Returns (nil, nil, nil) when no patch scan
 // has completed for this finding — the UI uses that to hide the section.

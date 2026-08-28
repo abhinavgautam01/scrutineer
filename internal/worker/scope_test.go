@@ -128,6 +128,7 @@ func TestRepoWideProjectionKinds_everyOutputKindClassified(t *testing.T) {
 		"threat_model":    true, // per-subproject threat model
 		"exposure":        true, // per-dependent reachability
 		"verify":          true, // finding-scoped
+		"critic":          true, // finding-scoped
 		"revalidate":      true, // finding-scoped
 		"breaking_change": true, // finding-scoped
 		"mitigation":      true, // finding-scoped

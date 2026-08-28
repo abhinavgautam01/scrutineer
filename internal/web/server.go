@@ -554,6 +554,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /findings/{id}/status", s.findingStatus)
 	mux.HandleFunc("POST /findings/{id}/exploited-in-wild", s.findingExploitedInWild)
 	mux.HandleFunc("POST /findings/{id}/verify", s.findingVerify)
+	mux.HandleFunc("POST /findings/{id}/critic", s.findingCritic)
 	mux.HandleFunc("POST /repositories/{id}/verify-all", s.repoVerifyAll)
 	mux.HandleFunc("POST /findings/{id}/disclose", s.findingDisclose)
 	mux.HandleFunc("POST /findings/{id}/public-issue", s.findingPublicIssue)
@@ -1184,6 +1185,7 @@ func (s *Server) findings(w http.ResponseWriter, r *http.Request) {
 	owner := r.URL.Query().Get("owner")
 	missed := r.URL.Query().Get("missed") == "1"
 	search := strings.TrimSpace(r.URL.Query().Get("q"))
+	viability := productionViabilityFilter(r.URL.Query().Get("viability"))
 
 	sortCol, dir := splitSort(r.URL.Query().Get("sort"))
 	switch sortCol {
@@ -1235,6 +1237,7 @@ func (s *Server) findings(w http.ResponseWriter, r *http.Request) {
 		"Owner": owner, "Missed": missed, "MissedTotal": missedTotal,
 		"Scanners": scanners, "ScannerTotal": scannerTotal,
 		"Status": status, "Statuses": db.FindingLifecycles,
+		"Viability": viability,
 	})
 }
 
@@ -1253,6 +1256,13 @@ func (s *Server) findingsIndexQuery(r *http.Request, includeScanners, includeMis
 	if owner := r.URL.Query().Get("owner"); owner != "" {
 		q = q.Where("repository_id IN (?)",
 			s.DB.Model(&db.Repository{}).Select("id").Where("owner = ?", owner))
+	}
+	if viability := productionViabilityFilter(r.URL.Query().Get("viability")); viability != "" {
+		if viability == "unassessed" {
+			q = q.Where("production_viability = '' OR production_viability IS NULL")
+		} else {
+			q = q.Where("production_viability = ?", viability)
+		}
 	}
 	if includeMissed && r.URL.Query().Get("missed") == "1" {
 		q = q.Where("missed_count > 0")
@@ -1325,6 +1335,14 @@ func findingIndexWhereSQL(r *http.Request, includeScanners, includeMissed bool) 
 		where = append(where, "repository_id IN (SELECT id FROM repositories WHERE owner = ?)")
 		args = append(args, owner)
 	}
+	if viability := productionViabilityFilter(r.URL.Query().Get("viability")); viability != "" {
+		if viability == "unassessed" {
+			where = append(where, "(production_viability = '' OR production_viability IS NULL)")
+		} else {
+			where = append(where, "production_viability = ?")
+			args = append(args, viability)
+		}
+	}
 	if includeMissed && r.URL.Query().Get("missed") == "1" {
 		where = append(where, "missed_count > 0")
 	}
@@ -1344,6 +1362,17 @@ func applyFindingStatusFilter(q *gorm.DB, status string) *gorm.DB {
 		return q
 	default:
 		return q.Where("status = ?", status)
+	}
+}
+
+func productionViabilityFilter(value string) string {
+	switch value {
+	case db.ProductionViabilityViable, db.ProductionViabilityNonViable,
+		db.ProductionViabilitySampleOrTest, db.ProductionViabilityConditionalViable,
+		"unassessed":
+		return value
+	default:
+		return ""
 	}
 }
 
@@ -1546,6 +1575,10 @@ func (s *Server) findingStatus(w http.ResponseWriter, r *http.Request) {
 		db.FindingReported, db.FindingAcknowledged, db.FindingFixed, db.FindingPublished,
 		db.FindingRejected, db.FindingDuplicate:
 		if err := db.WriteFindingField(s.DB, f.ID, statusKey, string(status), db.SourceAnalyst, ""); err != nil {
+			if errors.Is(err, db.ErrFindingNonViable) {
+				http.Error(w, err.Error(), http.StatusPreconditionFailed)
+				return
+			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -1613,6 +1646,10 @@ func (s *Server) findingVerify(w http.ResponseWriter, r *http.Request) {
 	s.runFindingSkill(w, r, verifySkillName, true)
 }
 
+func (s *Server) findingCritic(w http.ResponseWriter, r *http.Request) {
+	s.runFindingSkill(w, r, criticSkillName, true)
+}
+
 func (s *Server) findingDisclose(w http.ResponseWriter, r *http.Request) {
 	s.runFindingSkill(w, r, discloseSkillName, true)
 }
@@ -1670,6 +1707,10 @@ func (s *Server) runFindingSkill(w http.ResponseWriter, r *http.Request, name st
 		return
 	}
 	if err != nil {
+		if errors.Is(err, db.ErrFindingNonViable) {
+			http.Error(w, err.Error(), http.StatusPreconditionFailed)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1899,9 +1940,11 @@ func (s *Server) advisoriesList(w http.ResponseWriter, r *http.Request) {
 type findingWorkflowData struct {
 	db.Finding
 	VerifyInFlight     bool
+	CriticInFlight     bool
 	DiscloseInFlight   bool
 	HasDependents      bool
 	HasDisclosureDraft bool
+	DisclosureBlocked  bool
 }
 
 func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
@@ -1936,6 +1979,10 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.Log.Warn("load finding verifications", "finding", f.ID, "err", err)
 	}
+	attackPaths, err := loadFindingAttackPathViews(s.DB, f.ID)
+	if err != nil {
+		s.Log.Warn("load finding attack paths", "finding", f.ID, "err", err)
+	}
 	remediationAttempts, err := loadRemediationAttemptViews(s.DB, f.ID)
 	if err != nil {
 		s.Log.Warn("load remediation attempts", "finding", f.ID, "err", err)
@@ -1947,6 +1994,7 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 		selected[l.Name] = true
 	}
 	_, verifyInFlight := s.openFindingSkillScan(f.ID, verifySkillName)
+	_, criticInFlight := s.openFindingSkillScan(f.ID, criticSkillName)
 	_, discloseInFlight := s.openFindingSkillScan(f.ID, discloseSkillName)
 	var currentRemediationAttemptID *uint
 	if len(remediationAttempts) > 0 {
@@ -2003,6 +2051,7 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 		"HistoryTotal":        historyTotal,
 		"Reviews":             reviews,
 		"Verifications":       verifications,
+		"AttackPaths":         attackPaths,
 		"RemediationAttempts": remediationAttempts,
 		"ReattackInFlight":    reattackInFlight,
 		"LatestRevalidate":    latestRevalidate,
@@ -2011,9 +2060,11 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 		"Workflow": findingWorkflowData{
 			Finding:            f,
 			VerifyInFlight:     verifyInFlight,
+			CriticInFlight:     criticInFlight,
 			DiscloseInFlight:   discloseInFlight,
 			HasDependents:      hasDependents,
 			HasDisclosureDraft: strings.TrimSpace(f.DisclosureDraft) != "",
+			DisclosureBlocked:  db.FindingDisclosureBlocked(f),
 		},
 		"Exposures":     exposures,
 		"HasDependents": hasDependents,
@@ -2021,6 +2072,9 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(verifications) > 0 {
 		data["LatestVerification"] = verifications[0]
+	}
+	if len(attackPaths) > 0 {
+		data["LatestAttackPath"] = attackPaths[0]
 	}
 	if len(remediationAttempts) > 0 {
 		data["CurrentRemediation"] = remediationAttempts[0]
@@ -3292,13 +3346,9 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 	if repo.FederationOptedOut() {
 		return 0, ErrRepoFederationOptOut
 	}
-	var sk db.Skill
-	hasSkill := s.DB.Select("name, version, metadata, requires_remote, requires_profile, model").First(&sk, skillID).Error == nil
-	if repo.IsLocal() && hasSkill && sk.RequiresRemote {
-		return 0, fmt.Errorf("%w: %q", ErrSkillRequiresRemote, sk.Name)
-	}
-	if hasSkill && sk.RequiresProfile != "" && opts.Profile != "" && opts.Profile != sk.RequiresProfile {
-		return 0, fmt.Errorf("%w: %q needs %q, got %q", ErrSkillProfileMismatch, sk.Name, sk.RequiresProfile, opts.Profile)
+	sk, hasSkill, err := s.skillEnqueuePreflight(repo, skillID, opts)
+	if err != nil {
+		return 0, err
 	}
 	switch opts.RescanMode {
 	case "", db.ScanRescanModeFull:
@@ -3415,6 +3465,23 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 	// rather than trying to swap a row that is not there.
 	s.publishScanList(repoID)
 	return scan.ID, nil
+}
+
+func (s *Server) skillEnqueuePreflight(repo db.Repository, skillID uint, opts ScanOpts) (db.Skill, bool, error) {
+	var sk db.Skill
+	hasSkill := s.DB.Select("name, version, metadata, requires_remote, requires_profile, model").First(&sk, skillID).Error == nil
+	if hasSkill && opts.FindingID != nil {
+		if err := s.ensureFindingReportable(*opts.FindingID, sk.Name); err != nil {
+			return db.Skill{}, false, err
+		}
+	}
+	if repo.IsLocal() && hasSkill && sk.RequiresRemote {
+		return db.Skill{}, false, fmt.Errorf("%w: %q", ErrSkillRequiresRemote, sk.Name)
+	}
+	if hasSkill && sk.RequiresProfile != "" && opts.Profile != "" && opts.Profile != sk.RequiresProfile {
+		return db.Skill{}, false, fmt.Errorf("%w: %q needs %q, got %q", ErrSkillProfileMismatch, sk.Name, sk.RequiresProfile, opts.Profile)
+	}
+	return sk, hasSkill, nil
 }
 
 const (
