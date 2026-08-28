@@ -937,6 +937,17 @@ func (w *Worker) parseVerifyOutput(scan *db.Scan, report string, emit func(Event
 	if err := w.DB.First(&f, *scan.FindingID).Error; err != nil {
 		return fmt.Errorf("load finding %d: %w", *scan.FindingID, err)
 	}
+	if rubric != nil {
+		var expectedControlIDs []string
+		if controls := resolveFindingControls(scan.Repository.ThreatModel, f); controls != nil {
+			expectedControlIDs = controls.IDs
+		}
+		if err := rubric.ValidateControlIDs(expectedControlIDs); err != nil {
+			gradingError = err.Error()
+			rubric = nil
+			score = nil
+		}
+	}
 	nextStatus, err := verifyNextStatus(f, scan, result, gradingError)
 	if err != nil {
 		return err
@@ -1055,6 +1066,9 @@ func decodeVerifyOutput(report string) (verifyOutput, *verification.Report, *flo
 	if err != nil {
 		return result, nil, nil, err.Error(), nil
 	}
+	if rubric.Criteria.ControlBypass == nil {
+		return verifyOutput{}, nil, nil, "", errors.New("verify report requires criteria.control_bypass")
+	}
 	score := rubric.Score()
 	return result, &rubric, &score, "", nil
 }
@@ -1111,6 +1125,11 @@ func verifyNote(result verifyOutput, rubric *verification.Report, score *float64
 		}
 		for _, named := range rubric.Criteria.List() {
 			fmt.Fprintf(&b, "criterion: %s = %s\n", named.Name, named.Criterion.Verdict)
+		}
+		gate := rubric.Criteria.ControlBypass
+		fmt.Fprintf(&b, "control bypass: %d matched\n", len(gate.MatchedControls))
+		for _, assessment := range gate.Assessments {
+			fmt.Fprintf(&b, "control: %s = %s: %s\n", assessment.ControlID, assessment.Disposition, assessment.Evidence)
 		}
 	}
 	if result.Preflight.Classification != "" {

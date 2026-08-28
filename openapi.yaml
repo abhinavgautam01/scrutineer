@@ -1716,7 +1716,7 @@ components:
 
     VerificationReport:
       type: object
-      description: "Immutable verify output containing an evidenced attack tree, three attempt records and the five fixed grading criteria. Reports created before attack-tree support may omit attack_tree. See skills/verify/schema.json for the current output contract."
+      description: "Immutable verify output containing an evidenced attack tree, three attempt records, five scored criteria, and a non-scored host-validated control-bypass gate. Historical reports may omit attack_tree or criteria.control_bypass. See skills/verify/schema.json for the current output contract."
       required: [status]
       additionalProperties: true
       properties:
@@ -1740,7 +1740,27 @@ components:
           minItems: 3
           maxItems: 3
           items: { type: object, additionalProperties: true }
-        criteria: { type: object, additionalProperties: true }
+        criteria:
+          type: object
+          additionalProperties: true
+          properties:
+            control_bypass:
+              type: object
+              required: [matched_controls, assessments]
+              properties:
+                matched_controls:
+                  type: array
+                  uniqueItems: true
+                  items: { type: string }
+                assessments:
+                  type: array
+                  items:
+                    type: object
+                    required: [control_id, disposition, evidence]
+                    properties:
+                      control_id: { type: string }
+                      disposition: { type: string, enum: [bypassed, held, not_applicable, unresolved, not_attempted] }
+                      evidence: { type: string }
 
     FindingExport:
       description: |

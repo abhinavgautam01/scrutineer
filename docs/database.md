@@ -309,7 +309,7 @@ findings that already have a row here.
 
 ## finding_verifications
 
-Append-only grading records produced by finding-scoped `verify` scans. The complete rubric report remains immutable in `report`; `status` and `score` are promoted for display and filtering. The finding page derives its current verification result from the newest row rather than overwriting prior runs.
+Append-only grading records produced by finding-scoped `verify` scans. The complete rubric report remains immutable in `report`; `status` and `score` are promoted for display and filtering. The finding page derives its current verification result from the newest row rather than overwriting prior runs. Current reports also contain a non-scored control-bypass gate whose IDs are checked against the controls resolved by the host for that finding.
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -318,7 +318,7 @@ Append-only grading records produced by finding-scoped `verify` scans. The compl
 | scan_id | integer | The verify scan that produced this record. Unique with `finding_id`. |
 | status | text | `confirmed`, `fixed`, `inconclusive`, `deferred`, or `not_attempted`. |
 | score | real, nullable | Fraction of the five rubric criteria that passed, from `0.0` to `1.0`. Null for legacy pre-rubric reports and reports that remain internally inconsistent after repair. |
-| report | text | Complete structured JSON report, including the attack-tree goal, evidenced path nodes, reachability verdict, concrete blockers, three attempts, and per-criterion method, evidence, counterevidence, proof gap, and confidence. Reports written before attack-tree support remain readable. |
+| report | text | Complete structured JSON report, including the attack-tree goal, evidenced path nodes, reachability verdict, concrete blockers, three attempts, five scored criteria, and per-control bypass assessments. Reports written before attack-tree or control-bypass support remain readable. |
 | created_at | datetime | |
 
 ## finding_attack_paths

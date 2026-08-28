@@ -868,6 +868,10 @@ func verificationReport(t *testing.T, status string, edit func(*verification.Rep
 			ClaimedFailureClass:             criterion,
 			PublicInterfaceToFirstPartySink: criterion,
 			Deterministic:                   criterion,
+			ControlBypass: &verification.ControlBypass{
+				MatchedControls: []string{},
+				Assessments:     []verification.ControlAssessment{},
+			},
 		},
 		Reproducer: "go run ./poc.go",
 		Evidence:   "3/3 attempts reached parser.go:42",
@@ -909,6 +913,10 @@ func verificationReport(t *testing.T, status string, edit func(*verification.Rep
 			ClaimedFailureClass:             notAttempted,
 			PublicInterfaceToFirstPartySink: notAttempted,
 			Deterministic:                   notAttempted,
+			ControlBypass: &verification.ControlBypass{
+				MatchedControls: []string{},
+				Assessments:     []verification.ControlAssessment{},
+			},
 		}
 	}
 	if edit != nil {
@@ -1147,6 +1155,81 @@ func TestParseVerify_rejectsAttackTreeWithoutCriteria(t *testing.T) {
 	}
 	report.Criteria = nil
 	assertRejectedVerifyReport(t, report, "no grading rubric")
+}
+
+func TestParseVerify_rejectsLiveReportWithoutControlBypass(t *testing.T) {
+	var report verification.Report
+	if err := json.Unmarshal([]byte(confirmedVerificationReport(t)), &report); err != nil {
+		t.Fatal(err)
+	}
+	report.Criteria.ControlBypass = nil
+	assertRejectedVerifyReport(t, report, "requires criteria.control_bypass")
+}
+
+func TestParseVerify_validatesControlBypassAgainstHostMatch(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		matched      []string
+		assessments  []verification.ControlAssessment
+		wantStatus   db.FindingLifecycle
+		wantScore    bool
+		wantNotePart string
+	}{
+		{
+			name:         "matched control bypassed",
+			matched:      []string{"web-authz"},
+			assessments:  []verification.ControlAssessment{{ControlID: "web-authz", Disposition: "bypassed", Evidence: "attempt reaches the handler without authentication"}},
+			wantStatus:   db.FindingEnriched,
+			wantScore:    true,
+			wantNotePart: "control: web-authz = bypassed",
+		},
+		{
+			name:         "reported IDs omit host match",
+			matched:      []string{},
+			assessments:  []verification.ControlAssessment{},
+			wantStatus:   db.FindingNew,
+			wantScore:    false,
+			wantNotePart: "do not match host-resolved controls",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gdb, err := db.Open(filepath.Join(t.TempDir(), "controls-verify.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			repo := db.Repository{URL: "https://example.com/x", Name: "x", ThreatModel: controlsModel}
+			if err := gdb.Create(&repo).Error; err != nil {
+				t.Fatal(err)
+			}
+			prior := db.Scan{RepositoryID: repo.ID, Kind: JobSkill, Status: db.ScanDone}
+			gdb.Create(&prior)
+			finding := db.Finding{ScanID: prior.ID, RepositoryID: repo.ID, Location: "internal/web/server.go:120", Title: "x", Severity: "High", Status: db.FindingNew}
+			gdb.Create(&finding)
+			scan := db.Scan{RepositoryID: repo.ID, Repository: repo, FindingID: new(finding.ID), SkillName: verifySkillName}
+			gdb.Create(&scan)
+			report := verificationReport(t, "confirmed", func(report *verification.Report) {
+				report.Criteria.ControlBypass = &verification.ControlBypass{MatchedControls: tc.matched, Assessments: tc.assessments}
+			})
+			w := &Worker{DB: gdb, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+			if err := w.parseVerifyOutput(&scan, report, func(Event) {}); err != nil {
+				t.Fatal(err)
+			}
+			var refreshed db.Finding
+			gdb.First(&refreshed, finding.ID)
+			if refreshed.Status != tc.wantStatus {
+				t.Fatalf("status = %s, want %s", refreshed.Status, tc.wantStatus)
+			}
+			var row db.FindingVerification
+			gdb.Where("finding_id = ?", finding.ID).First(&row)
+			if (row.Score != nil) != tc.wantScore {
+				t.Fatalf("score = %v, want present=%t", row.Score, tc.wantScore)
+			}
+			notes := findingNotes(gdb, finding.ID)
+			if len(notes) != 1 || !strings.Contains(notes[0].Body, tc.wantNotePart) {
+				t.Fatalf("notes = %+v, want %q", notes, tc.wantNotePart)
+			}
+		})
+	}
 }
 
 func assertRejectedVerifyReport(t *testing.T, report verification.Report, wantError string) {
