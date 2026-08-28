@@ -508,37 +508,10 @@ func (w *Worker) clearCloneError(scan *db.Scan) {
 // as ungraded after the repair loop has had its chance to fix it.
 func reportValidationForParsing(skill *db.Skill, report string) (string, bool) {
 	if detail := ValidateReportSchema(skill.SchemaJSON, report); detail != "" {
-		return detail, skill.Name == verifySkillName && verifySchemaOnlyMissingControlBypass(skill.SchemaJSON, report)
+		return detail, false
 	}
 	detail := ValidateReportSemantics(skill.Name, report)
 	return detail, detail != "" && skill.Name == verifySkillName
-}
-
-// verifySchemaOnlyMissingControlBypass identifies current-shape verify reports
-// whose sole structural defect is omission of the non-scored control gate. The
-// repair loop still sees the original schema failure; if repair fails, the
-// parser can retain this report as ungraded evidence.
-func verifySchemaOnlyMissingControlBypass(schemaJSON, report string) bool {
-	var document map[string]any
-	if err := json.Unmarshal([]byte(report), &document); err != nil {
-		return false
-	}
-	criteria, ok := document["criteria"].(map[string]any)
-	if !ok {
-		return false
-	}
-	if _, exists := criteria["control_bypass"]; exists {
-		return false
-	}
-	criteria["control_bypass"] = map[string]any{
-		"matched_controls": []any{},
-		"assessments":      []any{},
-	}
-	patched, err := json.Marshal(document)
-	if err != nil {
-		return false
-	}
-	return ValidateReportSchema(schemaJSON, string(patched)) == ""
 }
 
 // parseFindingsOutput feeds the existing spec-deep parser so skill-driven

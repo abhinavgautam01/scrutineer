@@ -829,6 +829,7 @@ git commit -m "fix: {{$f.Title}}"</pre>
           </table>
         </div>
         {{with .ControlBypass}}
+        {{if or .MatchedControls .UnavailableReason}}
         <div class="mt-4">
           <div class="flex flex-wrap items-center gap-2 text-sm mb-2">
             <span class="font-medium">Control bypass</span>
@@ -850,10 +851,9 @@ git commit -m "fix: {{$f.Title}}"</pre>
               </tbody>
             </table>
           </div>
-          {{else}}
-          <p class="text-sm text-muted-foreground">No matched controls.</p>
           {{end}}
         </div>
+        {{end}}
         {{end}}
         <div class="overflow-x-auto mt-4">
           <table class="w-full text-sm">

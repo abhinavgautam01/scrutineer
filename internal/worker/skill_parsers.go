@@ -1069,7 +1069,7 @@ func decodeVerifyOutput(report string) (verifyOutput, *verification.Report, *flo
 		return result, nil, nil, err.Error(), nil
 	}
 	if rubric.Criteria.ControlBypass == nil {
-		return result, nil, nil, "verify report requires criteria.control_bypass", nil
+		return result, &rubric, nil, "", nil
 	}
 	score := rubric.Score()
 	return result, &rubric, &score, "", nil
@@ -1129,12 +1129,14 @@ func verifyNote(result verifyOutput, rubric *verification.Report, score *float64
 			fmt.Fprintf(&b, "criterion: %s = %s\n", named.Name, named.Criterion.Verdict)
 		}
 		gate := rubric.Criteria.ControlBypass
-		fmt.Fprintf(&b, "control bypass: %d matched\n", len(gate.MatchedControls))
-		if gate.UnavailableReason != "" {
-			fmt.Fprintf(&b, "control resolution unavailable: %s\n", gate.UnavailableReason)
-		}
-		for _, assessment := range gate.Assessments {
-			fmt.Fprintf(&b, "control: %s = %s: %s\n", assessment.ControlID, assessment.Disposition, assessment.Evidence)
+		if len(gate.MatchedControls) > 0 || gate.UnavailableReason != "" {
+			fmt.Fprintf(&b, "control bypass: %d matched\n", len(gate.MatchedControls))
+			if gate.UnavailableReason != "" {
+				fmt.Fprintf(&b, "control resolution unavailable: %s\n", gate.UnavailableReason)
+			}
+			for _, assessment := range gate.Assessments {
+				fmt.Fprintf(&b, "control: %s = %s: %s\n", assessment.ControlID, assessment.Disposition, assessment.Evidence)
+			}
 		}
 	}
 	if result.Preflight.Classification != "" {

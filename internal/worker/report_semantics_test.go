@@ -2,14 +2,12 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"log/slog"
 	"strings"
 	"testing"
 
 	"scrutineer/internal/db"
-	"scrutineer/internal/verification"
 )
 
 const semanticValidationTestSchema = `{
@@ -165,35 +163,5 @@ func TestRepairSchemaReportRepairsVerifySemanticFailure(t *testing.T) {
 	}
 	if len(runner.jobs) != 1 || !strings.Contains(runner.jobs[0].ResumePrompt, "not unique") {
 		t.Fatalf("verify semantic failure did not reach repair prompt: %+v", runner.jobs)
-	}
-}
-
-func TestReportValidationForParsingRecoversOnlyMissingVerifyControlBypass(t *testing.T) {
-	var report verification.Report
-	if err := json.Unmarshal([]byte(confirmedVerificationReport(t)), &report); err != nil {
-		t.Fatal(err)
-	}
-	report.Criteria.ControlBypass = nil
-	raw, err := json.Marshal(report)
-	if err != nil {
-		t.Fatal(err)
-	}
-	skill := &db.Skill{
-		Name:       verifySkillName,
-		SchemaJSON: loadBundledSchema(t, "../../skills/verify/schema.json"),
-	}
-	detail, recoverable := reportValidationForParsing(skill, string(raw))
-	if !recoverable || !strings.Contains(detail, "/criteria") {
-		t.Fatalf("validation = %q, recoverable = %t; want missing gate to be recoverable", detail, recoverable)
-	}
-
-	report.AttackTree = nil
-	raw, err = json.Marshal(report)
-	if err != nil {
-		t.Fatal(err)
-	}
-	detail, recoverable = reportValidationForParsing(skill, string(raw))
-	if recoverable || detail == "" {
-		t.Fatalf("validation = %q, recoverable = %t; want multiple schema defects to remain strict", detail, recoverable)
 	}
 }

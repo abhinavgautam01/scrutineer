@@ -945,11 +945,15 @@ func TestParseVerify_recordsStructuredRubric(t *testing.T) {
 	if rows[0].Status != "confirmed" || rows[0].Score == nil || *rows[0].Score != 1 {
 		t.Fatalf("verification = %+v, want confirmed score 1", rows[0])
 	}
-	if !strings.Contains(findingNotes(gdb, f.ID)[0].Body, "score: 1.00") {
+	note := findingNotes(gdb, f.ID)[0].Body
+	if !strings.Contains(note, "score: 1.00") {
 		t.Error("verify note should include the derived score")
 	}
-	if !strings.Contains(findingNotes(gdb, f.ID)[0].Body, "attack tree: reachable") {
+	if !strings.Contains(note, "attack tree: reachable") {
 		t.Error("verify note should include the attack-tree verdict")
+	}
+	if strings.Contains(note, "control bypass:") {
+		t.Error("verify note should omit an empty control-bypass gate")
 	}
 }
 

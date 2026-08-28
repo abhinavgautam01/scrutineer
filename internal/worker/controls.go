@@ -2,6 +2,7 @@ package worker
 
 import (
 	"fmt"
+	"strings"
 
 	"scrutineer/internal/db"
 	"scrutineer/internal/findingnorm"
@@ -54,6 +55,9 @@ type skillContextControls struct {
 // block that carries no information.
 func (w *Worker) controlsContext(scan *db.Scan, skill *db.Skill) (*skillContextControls, error) {
 	if skill.Name != verifySkillName || scan.FindingID == nil {
+		return nil, nil
+	}
+	if strings.TrimSpace(scan.Repository.ThreatModel) == "" {
 		return nil, nil
 	}
 
