@@ -135,16 +135,16 @@ func usageDriverValuesByScan(scans []db.Scan, slocByRepo, manifestsByRepo map[ui
 	for _, scan := range scans {
 		v := usageDriverValues{}
 		if sinks, ok := sinksByScan[scan.ID]; ok {
-			v.Sinks = intPointer(sinks)
+			v.Sinks = new(sinks)
 		}
 		// repo-overview and dependencies describe the repository root. Applying
 		// those values to narrower scans would overstate their actual scope.
 		if scan.SubPath == "" && scan.FocusArea == "" {
 			if sloc, ok := slocByRepo[scan.RepositoryID]; ok && scan.SkillName != "repo-overview" {
-				v.SLOC = intPointer(sloc)
+				v.SLOC = new(sloc)
 			}
 			if manifests, ok := manifestsByRepo[scan.RepositoryID]; ok && scan.SkillName != "dependencies" {
-				v.Manifests = intPointer(manifests)
+				v.Manifests = new(manifests)
 			}
 		}
 		values[scan.ID] = v
@@ -352,8 +352,4 @@ func usageDriverDisplay(value *int) string {
 		return ""
 	}
 	return strconv.Itoa(*value)
-}
-
-func intPointer(value int) *int {
-	return &value
 }
