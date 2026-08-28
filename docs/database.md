@@ -309,7 +309,7 @@ findings that already have a row here.
 
 ## finding_verifications
 
-Append-only grading records produced by finding-scoped `verify` scans. The complete rubric report remains immutable in `report`; `status` and `score` are promoted for display and filtering. The finding page derives its current verification result from the newest row rather than overwriting prior runs. Current reports also contain a non-scored control-bypass gate whose IDs are checked against the controls resolved by the host for that finding.
+Append-only grading records produced by finding-scoped `verify` scans. The complete rubric report remains immutable in `report`; `status` and `score` are promoted for display and filtering. The finding page derives its current verification result from the newest row rather than overwriting prior runs. Current reports also contain a non-scored control-bypass gate whose IDs and optional resolution-failure reason are checked against the context resolved by the host for that finding.
 
 | Column | Type | Notes |
 |--------|------|-------|

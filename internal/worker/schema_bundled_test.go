@@ -257,7 +257,7 @@ func TestBundledSchemas_compileAndAcceptSamples(t *testing.T) {
 			    "claimed_failure_class":{"verdict":"fail","method":"trace","evidence":"no failure","counterevidence":"","proof_gap":"","confidence":"high"},
 			    "public_interface_to_first_party_sink":{"verdict":"pass","method":"stack","evidence":"public API reached guard","counterevidence":"","proof_gap":"","confidence":"high"},
 			    "deterministic":{"verdict":"pass","method":"compare","evidence":"same guard in 3/3","counterevidence":"","proof_gap":"","confidence":"high"},
-			    "control_bypass":{"matched_controls":[],"assessments":[]}}}`,
+			    "control_bypass":{"matched_controls":[],"assessments":[],"unavailable_reason":"the repository threat model could not be read"}}}`,
 		},
 		{
 			"../../skills/verify/schema.json",
@@ -930,6 +930,19 @@ func TestVerifySchema_rejectsAttackTreeVerdictContradictions(t *testing.T) {
 				delete(report["criteria"].(map[string]any), "control_bypass")
 			},
 			wantErr: "/criteria",
+		},
+		{
+			name: "unavailable control resolution with matched IDs",
+			mutate: func(report map[string]any) {
+				report["criteria"].(map[string]any)["control_bypass"] = map[string]any{
+					"matched_controls": []any{"web-authz"},
+					"assessments": []any{map[string]any{
+						"control_id": "web-authz", "disposition": "bypassed", "evidence": "attempt bypassed router",
+					}},
+					"unavailable_reason": "the repository threat model could not be read",
+				}
+			},
+			wantErr: "/criteria/control_bypass",
 		},
 	}
 

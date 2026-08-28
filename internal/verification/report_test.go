@@ -115,7 +115,7 @@ func TestReportValidateControlBypass(t *testing.T) {
 	if err := report.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if err := report.ValidateControlIDs([]string{"web-authz", "sandbox"}); err != nil {
+	if err := report.ValidateControlContext([]string{"web-authz", "sandbox"}, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -162,15 +162,39 @@ func TestReportValidateControlBypass(t *testing.T) {
 	}
 }
 
-func TestReportValidateControlIDsRejectsContextMismatch(t *testing.T) {
+func TestReportValidateControlContextRejectsMismatch(t *testing.T) {
 	report := completeReport()
 	report.Criteria.ControlBypass = &ControlBypass{
 		MatchedControls: []string{"model-only"},
 		Assessments:     []ControlAssessment{{ControlID: "model-only", Disposition: "bypassed", Evidence: "claimed"}},
 	}
-	err := report.ValidateControlIDs([]string{"host-control"})
+	err := report.ValidateControlContext([]string{"host-control"}, "")
 	if err == nil || !strings.Contains(err.Error(), "do not match host-resolved controls") {
-		t.Fatalf("ValidateControlIDs() = %v, want mismatch", err)
+		t.Fatalf("ValidateControlContext() = %v, want ID mismatch", err)
+	}
+	report.Criteria.ControlBypass = &ControlBypass{MatchedControls: []string{}, Assessments: []ControlAssessment{}}
+	err = report.ValidateControlContext(nil, "the repository threat model could not be read")
+	if err == nil || !strings.Contains(err.Error(), "does not match host-resolved reason") {
+		t.Fatalf("ValidateControlContext() = %v, want unavailable-reason mismatch", err)
+	}
+}
+
+func TestReportValidateUnavailableControlContext(t *testing.T) {
+	report := completeReport()
+	report.Criteria.ControlBypass = &ControlBypass{
+		MatchedControls:   []string{},
+		Assessments:       []ControlAssessment{},
+		UnavailableReason: "the repository threat model could not be read",
+	}
+	if err := report.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := report.ValidateControlContext(nil, report.Criteria.ControlBypass.UnavailableReason); err != nil {
+		t.Fatal(err)
+	}
+	report.Criteria.ControlBypass.MatchedControls = []string{"invented"}
+	if err := report.Validate(); err == nil || !strings.Contains(err.Error(), "requires empty matched_controls") {
+		t.Fatalf("Validate() = %v, want unavailable context shape error", err)
 	}
 }
 

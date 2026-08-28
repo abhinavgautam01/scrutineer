@@ -939,10 +939,12 @@ func (w *Worker) parseVerifyOutput(scan *db.Scan, report string, emit func(Event
 	}
 	if rubric != nil {
 		var expectedControlIDs []string
+		var unavailableReason string
 		if controls := resolveFindingControls(scan.Repository.ThreatModel, f); controls != nil {
 			expectedControlIDs = controls.IDs
+			unavailableReason = controls.UnavailableWhy
 		}
-		if err := rubric.ValidateControlIDs(expectedControlIDs); err != nil {
+		if err := rubric.ValidateControlContext(expectedControlIDs, unavailableReason); err != nil {
 			gradingError = err.Error()
 			rubric = nil
 			score = nil
@@ -1128,6 +1130,9 @@ func verifyNote(result verifyOutput, rubric *verification.Report, score *float64
 		}
 		gate := rubric.Criteria.ControlBypass
 		fmt.Fprintf(&b, "control bypass: %d matched\n", len(gate.MatchedControls))
+		if gate.UnavailableReason != "" {
+			fmt.Fprintf(&b, "control resolution unavailable: %s\n", gate.UnavailableReason)
+		}
 		for _, assessment := range gate.Assessments {
 			fmt.Fprintf(&b, "control: %s = %s: %s\n", assessment.ControlID, assessment.Disposition, assessment.Evidence)
 		}

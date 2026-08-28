@@ -834,6 +834,7 @@ git commit -m "fix: {{$f.Title}}"</pre>
             <span class="font-medium">Control bypass</span>
             <span class="badge-outline">{{len .MatchedControls}} matched</span>
           </div>
+          {{if .UnavailableReason}}<p class="text-sm text-muted-foreground mb-2">Resolution unavailable: {{.UnavailableReason}}</p>{{end}}
           {{if .Assessments}}
           <div class="overflow-x-auto">
             <table class="w-full text-sm">

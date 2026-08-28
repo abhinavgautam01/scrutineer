@@ -246,8 +246,25 @@
           "type": "array",
           "items": { "$ref": "#/$defs/controlAssessment" },
           "description": "Exactly one assessment for every matched control. The worker enforces ID set equality and uniqueness."
+        },
+        "unavailable_reason": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "The exact scrutineer.controls.unavailable_reason staged by the host when control resolution failed; omitted when resolution succeeded or no controls exist."
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["unavailable_reason"] },
+          "then": {
+            "properties": {
+              "matched_controls": { "maxItems": 0 },
+              "assessments": { "maxItems": 0 }
+            }
+          }
+        }
+      ]
     },
     "controlAssessment": {
       "type": "object",

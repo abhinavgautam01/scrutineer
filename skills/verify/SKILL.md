@@ -149,7 +149,7 @@ Record the result under `criteria.control_bypass`. Copy `scrutineer.controls.ids
 - `unresolved`: neither bypass nor enforcement could be established. State the missing proof. This disposition forces the overall status to `inconclusive`.
 - `not_attempted`: evaluation never reached the target. Use this only with overall `deferred` or `not_attempted`.
 
-`confirmed` permits only `bypassed` and `not_applicable`. `fixed` permits `bypassed`, `held`, and `not_applicable`, but not an unresolved control. The block is absent entirely when the repository declares no controls; in that normal case still emit `control_bypass` with empty `matched_controls` and `assessments` arrays. When `unavailable_reason` is set, also emit empty arrays and copy the reason into `notes`.
+`confirmed` permits only `bypassed` and `not_applicable`. `fixed` permits `bypassed`, `held`, and `not_applicable`, but not an unresolved control. The block is absent entirely when the repository declares no controls; in that normal case still emit `control_bypass` with empty `matched_controls` and `assessments` arrays. When `scrutineer.controls.unavailable_reason` is set, also emit empty arrays, copy that exact value into `control_bypass.unavailable_reason`, and include it in `notes`. Do not emit `unavailable_reason` when the controls block is absent or resolution succeeded.
 
 ## Output
 
@@ -193,4 +193,4 @@ Write `./report.json` matching `./schema.json`. Example:
 }
 ```
 
-Scrutineer computes the score from the five scored criteria; `control_bypass` is a non-scored gate. Do not emit a score. It stores the complete report as an append-only verification record keyed to this finding and scan, while preserving the existing lifecycle behavior: `confirmed` moves `new` to `enriched`, `fixed` on the default branch moves the finding to `fixed`, and all other statuses leave it unchanged. The worker compares `matched_controls` with the host-resolved IDs staged in `context.json`; omitted, added, duplicated, or unresolved controls make the report ungraded and prevent a lifecycle change. Historical verification rows without `control_bypass` remain readable.
+Scrutineer computes the score from the five scored criteria; `control_bypass` is a non-scored gate. Do not emit a score. It stores the complete report as an append-only verification record keyed to this finding and scan, while preserving the existing lifecycle behavior: `confirmed` moves `new` to `enriched`, `fixed` on the default branch moves the finding to `fixed`, and all other statuses leave it unchanged. The worker compares `matched_controls` and `unavailable_reason` with the host-resolved context staged in `context.json`; omitted, added, duplicated, unresolved, or invented control state makes the report ungraded and prevents a lifecycle change. Historical verification rows without `control_bypass` remain readable.

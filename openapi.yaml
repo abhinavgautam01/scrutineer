@@ -1752,6 +1752,9 @@ components:
                   type: array
                   uniqueItems: true
                   items: { type: string }
+                unavailable_reason:
+                  type: string
+                  description: "Exact host-staged reason control resolution failed; omitted when resolution succeeded or no controls exist."
                 assessments:
                   type: array
                   items:

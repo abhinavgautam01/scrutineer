@@ -103,8 +103,9 @@ type Criteria struct {
 // verification rows created before this field existed remain readable;
 // schema.json requires it for newly generated reports.
 type ControlBypass struct {
-	MatchedControls []string            `json:"matched_controls"`
-	Assessments     []ControlAssessment `json:"assessments"`
+	MatchedControls   []string            `json:"matched_controls"`
+	Assessments       []ControlAssessment `json:"assessments"`
+	UnavailableReason string              `json:"unavailable_reason,omitempty"`
 }
 
 // ControlAssessment records what happened to one matched design control.
@@ -172,6 +173,14 @@ func (r Report) validateControlBypass() error {
 }
 
 func (gate ControlBypass) validate() error {
+	if gate.UnavailableReason != "" {
+		if strings.TrimSpace(gate.UnavailableReason) == "" {
+			return errors.New("criteria.control_bypass.unavailable_reason is empty")
+		}
+		if len(gate.MatchedControls) != 0 || len(gate.Assessments) != 0 {
+			return errors.New("criteria.control_bypass with unavailable_reason requires empty matched_controls and assessments")
+		}
+	}
 	matched := make(map[string]struct{}, len(gate.MatchedControls))
 	for i, id := range gate.MatchedControls {
 		if strings.TrimSpace(id) == "" {
@@ -240,12 +249,16 @@ func controlDispositionValid(disposition string) bool {
 	}
 }
 
-// ValidateControlIDs proves that the model assessed exactly the controls the
-// host resolved for this finding. JSON Schema cannot compare report contents
-// with context.json, so live ingestion calls this after ordinary validation.
-func (r Report) ValidateControlIDs(expected []string) error {
+// ValidateControlContext proves that the model accounted for exactly the
+// controls, or the resolution failure, that the host staged for this finding.
+// JSON Schema cannot compare report contents with context.json, so live
+// ingestion calls this after ordinary validation.
+func (r Report) ValidateControlContext(expected []string, unavailableReason string) error {
 	if r.Criteria == nil || r.Criteria.ControlBypass == nil {
 		return errors.New("verify report requires criteria.control_bypass")
+	}
+	if got := r.Criteria.ControlBypass.UnavailableReason; got != unavailableReason {
+		return fmt.Errorf("criteria.control_bypass.unavailable_reason %q does not match host-resolved reason %q", got, unavailableReason)
 	}
 	want := slices.Clone(expected)
 	got := slices.Clone(r.Criteria.ControlBypass.MatchedControls)

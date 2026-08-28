@@ -1168,17 +1168,20 @@ func TestParseVerify_rejectsLiveReportWithoutControlBypass(t *testing.T) {
 
 func TestParseVerify_validatesControlBypassAgainstHostMatch(t *testing.T) {
 	for _, tc := range []struct {
-		name         string
-		matched      []string
-		assessments  []verification.ControlAssessment
-		wantStatus   db.FindingLifecycle
-		wantScore    bool
-		wantNotePart string
+		name                  string
+		matched               []string
+		assessments           []verification.ControlAssessment
+		threatModel           string
+		copyUnavailableReason bool
+		wantStatus            db.FindingLifecycle
+		wantScore             bool
+		wantNotePart          string
 	}{
 		{
 			name:         "matched control bypassed",
 			matched:      []string{"web-authz"},
 			assessments:  []verification.ControlAssessment{{ControlID: "web-authz", Disposition: "bypassed", Evidence: "attempt reaches the handler without authentication"}},
+			threatModel:  controlsModel,
 			wantStatus:   db.FindingEnriched,
 			wantScore:    true,
 			wantNotePart: "control: web-authz = bypassed",
@@ -1187,9 +1190,29 @@ func TestParseVerify_validatesControlBypassAgainstHostMatch(t *testing.T) {
 			name:         "reported IDs omit host match",
 			matched:      []string{},
 			assessments:  []verification.ControlAssessment{},
+			threatModel:  controlsModel,
 			wantStatus:   db.FindingNew,
 			wantScore:    false,
 			wantNotePart: "do not match host-resolved controls",
+		},
+		{
+			name:                  "unavailable resolution preserved",
+			matched:               []string{},
+			assessments:           []verification.ControlAssessment{},
+			threatModel:           `{"controls":[`,
+			copyUnavailableReason: true,
+			wantStatus:            db.FindingEnriched,
+			wantScore:             true,
+			wantNotePart:          "control resolution unavailable",
+		},
+		{
+			name:         "unavailable resolution omitted",
+			matched:      []string{},
+			assessments:  []verification.ControlAssessment{},
+			threatModel:  `{"controls":[`,
+			wantStatus:   db.FindingNew,
+			wantScore:    false,
+			wantNotePart: "does not match host-resolved reason",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1197,7 +1220,7 @@ func TestParseVerify_validatesControlBypassAgainstHostMatch(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			repo := db.Repository{URL: "https://example.com/x", Name: "x", ThreatModel: controlsModel}
+			repo := db.Repository{URL: "https://example.com/x", Name: "x", ThreatModel: tc.threatModel}
 			if err := gdb.Create(&repo).Error; err != nil {
 				t.Fatal(err)
 			}
@@ -1208,7 +1231,11 @@ func TestParseVerify_validatesControlBypassAgainstHostMatch(t *testing.T) {
 			scan := db.Scan{RepositoryID: repo.ID, Repository: repo, FindingID: new(finding.ID), SkillName: verifySkillName}
 			gdb.Create(&scan)
 			report := verificationReport(t, "confirmed", func(report *verification.Report) {
-				report.Criteria.ControlBypass = &verification.ControlBypass{MatchedControls: tc.matched, Assessments: tc.assessments}
+				gate := &verification.ControlBypass{MatchedControls: tc.matched, Assessments: tc.assessments}
+				if tc.copyUnavailableReason {
+					gate.UnavailableReason = resolveFindingControls(repo.ThreatModel, finding).UnavailableWhy
+				}
+				report.Criteria.ControlBypass = gate
 			})
 			w := &Worker{DB: gdb, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 			if err := w.parseVerifyOutput(&scan, report, func(Event) {}); err != nil {
