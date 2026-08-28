@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -35,6 +36,7 @@ func completeReport() Report {
 			ClaimedFailureClass:             criterion,
 			PublicInterfaceToFirstPartySink: criterion,
 			Deterministic:                   criterion,
+			ControlBypass:                   &ControlBypass{MatchedControls: []string{}, Assessments: []ControlAssessment{}},
 		},
 	}
 }
@@ -82,6 +84,117 @@ func TestParseAcceptsPriorRubricWithoutAttackTree(t *testing.T) {
 	}
 	if parsed.AttackTree != nil {
 		t.Fatalf("attack tree = %+v, want nil", parsed.AttackTree)
+	}
+}
+
+func TestParseAcceptsPriorRubricWithoutControlBypass(t *testing.T) {
+	report := completeReport()
+	report.Criteria.ControlBypass = nil
+	raw, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Criteria.ControlBypass != nil {
+		t.Fatalf("control bypass = %+v, want nil", parsed.Criteria.ControlBypass)
+	}
+}
+
+func TestReportValidateControlBypass(t *testing.T) {
+	report := completeReport()
+	report.Criteria.ControlBypass = &ControlBypass{
+		MatchedControls: []string{"sandbox", "web-authz"},
+		Assessments: []ControlAssessment{
+			{ControlID: "web-authz", Disposition: "bypassed", Evidence: "attempt reaches handler without authentication"},
+			{ControlID: "sandbox", Disposition: "not_applicable", Evidence: "the exercised server path does not enter the sandbox"},
+		},
+	}
+	if err := report.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := report.ValidateControlContext([]string{"web-authz", "sandbox"}, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		edit func(*Report)
+		want string
+	}{
+		{
+			name: "missing assessment",
+			edit: func(r *Report) { r.Criteria.ControlBypass.Assessments = r.Criteria.ControlBypass.Assessments[:1] },
+			want: `no assessment for matched control "sandbox"`,
+		},
+		{
+			name: "duplicate assessment",
+			edit: func(r *Report) { r.Criteria.ControlBypass.Assessments[1].ControlID = "web-authz" },
+			want: `repeats control "web-authz"`,
+		},
+		{
+			name: "unmatched assessment",
+			edit: func(r *Report) { r.Criteria.ControlBypass.Assessments[1].ControlID = "unknown" },
+			want: `names unmatched control "unknown"`,
+		},
+		{
+			name: "confirmed unresolved",
+			edit: func(r *Report) { r.Criteria.ControlBypass.Assessments[0].Disposition = "unresolved" },
+			want: `requires control "web-authz" to be bypassed or not_applicable`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := report
+			gate := *report.Criteria.ControlBypass
+			gate.MatchedControls = slices.Clone(gate.MatchedControls)
+			gate.Assessments = slices.Clone(gate.Assessments)
+			criteria := *report.Criteria
+			criteria.ControlBypass = &gate
+			candidate.Criteria = &criteria
+			tc.edit(&candidate)
+			if err := candidate.Validate(); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Validate() = %v, want error containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestReportValidateControlContextRejectsMismatch(t *testing.T) {
+	report := completeReport()
+	report.Criteria.ControlBypass = &ControlBypass{
+		MatchedControls: []string{"model-only"},
+		Assessments:     []ControlAssessment{{ControlID: "model-only", Disposition: "bypassed", Evidence: "claimed"}},
+	}
+	err := report.ValidateControlContext([]string{"host-control"}, "")
+	if err == nil || !strings.Contains(err.Error(), "do not match host-resolved controls") {
+		t.Fatalf("ValidateControlContext() = %v, want ID mismatch", err)
+	}
+	report.Criteria.ControlBypass = &ControlBypass{MatchedControls: []string{}, Assessments: []ControlAssessment{}}
+	err = report.ValidateControlContext(nil, "the repository threat model could not be read")
+	if err == nil || !strings.Contains(err.Error(), "does not match host-resolved reason") {
+		t.Fatalf("ValidateControlContext() = %v, want unavailable-reason mismatch", err)
+	}
+}
+
+func TestReportValidateUnavailableControlContext(t *testing.T) {
+	report := completeReport()
+	report.Criteria.ControlBypass = &ControlBypass{
+		MatchedControls:   []string{},
+		Assessments:       []ControlAssessment{},
+		UnavailableReason: "the repository threat model could not be read",
+	}
+	if err := report.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := report.ValidateControlContext(nil, report.Criteria.ControlBypass.UnavailableReason); err != nil {
+		t.Fatal(err)
+	}
+	report.Criteria.ControlBypass.MatchedControls = []string{"invented"}
+	if err := report.Validate(); err == nil || !strings.Contains(err.Error(), "requires empty matched_controls") {
+		t.Fatalf("Validate() = %v, want unavailable context shape error", err)
 	}
 }
 

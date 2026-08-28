@@ -192,6 +192,24 @@ func TestControlsContextSkipsModelWithoutControls(t *testing.T) {
 	}
 }
 
+func TestControlsContextSkipsEmptyModelBeforeFindingLookup(t *testing.T) {
+	fixture := newControlsFixture(t, "", "internal/web/server.go:120")
+	missingFindingID := fixture.finding.ID + 1000
+	scan := &db.Scan{
+		RepositoryID: fixture.repo.ID,
+		Repository:   fixture.repo,
+		FindingID:    &missingFindingID,
+	}
+
+	got, err := (&Worker{DB: fixture.gdb}).controlsContext(scan, &db.Skill{Name: verifySkillName})
+	if err != nil {
+		t.Fatalf("controlsContext queried the finding for an empty threat model: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("controls = %+v for an empty threat model, want nil", got)
+	}
+}
+
 // A malformed model must not cost the operator the verify run: the reason is
 // reported in the block instead of failing the scan.
 func TestControlsContextDegradesOnMalformedModel(t *testing.T) {

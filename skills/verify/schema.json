@@ -45,14 +45,16 @@
         "reproduces_three_of_three",
         "claimed_failure_class",
         "public_interface_to_first_party_sink",
-        "deterministic"
+        "deterministic",
+        "control_bypass"
       ],
       "properties": {
         "poc_well_formed": { "$ref": "#/$defs/criterion" },
         "reproduces_three_of_three": { "$ref": "#/$defs/criterion" },
         "claimed_failure_class": { "$ref": "#/$defs/criterion" },
         "public_interface_to_first_party_sink": { "$ref": "#/$defs/criterion" },
-        "deterministic": { "$ref": "#/$defs/criterion" }
+        "deterministic": { "$ref": "#/$defs/criterion" },
+        "control_bypass": { "$ref": "#/$defs/controlBypass" }
       }
     },
     "reproducer": {
@@ -229,6 +231,60 @@
         }
       }
     },
+    "controlBypass": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["matched_controls", "assessments"],
+      "properties": {
+        "matched_controls": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "pattern": "\\S" },
+          "uniqueItems": true,
+          "description": "The exact control IDs supplied by scrutineer.controls.ids; empty when no controls were matched or no controls block was staged."
+        },
+        "assessments": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/controlAssessment" },
+          "description": "Exactly one assessment for every matched control. The worker enforces ID set equality and uniqueness."
+        },
+        "unavailable_reason": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "The exact scrutineer.controls.unavailable_reason staged by the host when control resolution failed; omitted when resolution succeeded or no controls exist."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["unavailable_reason"] },
+          "then": {
+            "properties": {
+              "matched_controls": { "maxItems": 0 },
+              "assessments": { "maxItems": 0 }
+            }
+          }
+        }
+      ]
+    },
+    "controlAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["control_id", "disposition", "evidence"],
+      "properties": {
+        "control_id": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "disposition": {
+          "type": "string",
+          "enum": ["bypassed", "held", "not_applicable", "unresolved", "not_attempted"],
+          "description": "bypassed = execution defeated the claimed control; held = evidenced control enforcement blocked the path; not_applicable = evidence shows the matched control does not govern this path; unresolved = neither bypass nor enforcement was established; not_attempted = evaluation could not start."
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "Concrete bypass or enforcement evidence, the reason the control does not apply, or the proof gap preventing assessment."
+        }
+      }
+    },
     "notAttemptedCriteria": {
       "type": "object",
       "properties": {
@@ -236,7 +292,14 @@
         "reproduces_three_of_three": { "properties": { "verdict": { "const": "not_attempted" } } },
         "claimed_failure_class": { "properties": { "verdict": { "const": "not_attempted" } } },
         "public_interface_to_first_party_sink": { "properties": { "verdict": { "const": "not_attempted" } } },
-        "deterministic": { "properties": { "verdict": { "const": "not_attempted" } } }
+        "deterministic": { "properties": { "verdict": { "const": "not_attempted" } } },
+        "control_bypass": {
+          "properties": {
+            "assessments": {
+              "items": { "properties": { "disposition": { "const": "not_attempted" } } }
+            }
+          }
+        }
       }
     }
   },
@@ -292,7 +355,14 @@
               "reproduces_three_of_three": { "properties": { "verdict": { "const": "pass" } } },
               "claimed_failure_class": { "properties": { "verdict": { "const": "pass" } } },
               "public_interface_to_first_party_sink": { "properties": { "verdict": { "const": "pass" } } },
-              "deterministic": { "properties": { "verdict": { "const": "pass" } } }
+              "deterministic": { "properties": { "verdict": { "const": "pass" } } },
+              "control_bypass": {
+                "properties": {
+                  "assessments": {
+                    "items": { "properties": { "disposition": { "enum": ["bypassed", "not_applicable"] } } }
+                  }
+                }
+              }
             }
           },
           "attack_tree": {
@@ -318,7 +388,14 @@
           },
           "criteria": {
             "properties": {
-              "reproduces_three_of_three": { "properties": { "verdict": { "const": "fail" } } }
+              "reproduces_three_of_three": { "properties": { "verdict": { "const": "fail" } } },
+              "control_bypass": {
+                "properties": {
+                  "assessments": {
+                    "items": { "properties": { "disposition": { "enum": ["bypassed", "held", "not_applicable"] } } }
+                  }
+                }
+              }
             }
           },
           "attack_tree": {

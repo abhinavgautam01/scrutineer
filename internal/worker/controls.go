@@ -2,6 +2,7 @@ package worker
 
 import (
 	"fmt"
+	"strings"
 
 	"scrutineer/internal/db"
 	"scrutineer/internal/findingnorm"
@@ -56,21 +57,29 @@ func (w *Worker) controlsContext(scan *db.Scan, skill *db.Skill) (*skillContextC
 	if skill.Name != verifySkillName || scan.FindingID == nil {
 		return nil, nil
 	}
-
-	model, err := threatmodel.Parse(scan.Repository.ThreatModel)
-	if err != nil {
-		return &skillContextControls{UnavailableWhy: controlsModelBroken + ": " + err.Error()}, nil
-	}
-	if len(model.Controls) == 0 {
+	if strings.TrimSpace(scan.Repository.ThreatModel) == "" {
 		return nil, nil
-	}
-	if err := model.Validate(); err != nil {
-		return &skillContextControls{UnavailableWhy: controlsModelBroken + ": " + err.Error()}, nil
 	}
 
 	var finding db.Finding
 	if err := w.DB.Select("location", "sub_path").First(&finding, *scan.FindingID).Error; err != nil {
 		return nil, fmt.Errorf("load finding for controls match: %w", err)
+	}
+	return resolveFindingControls(scan.Repository.ThreatModel, finding), nil
+}
+
+// resolveFindingControls is shared by context staging and report ingestion so
+// the model sees and the worker validates against the same host-owned match.
+func resolveFindingControls(rawModel string, finding db.Finding) *skillContextControls {
+	model, err := threatmodel.Parse(rawModel)
+	if err != nil {
+		return &skillContextControls{UnavailableWhy: controlsModelBroken + ": " + err.Error()}
+	}
+	if len(model.Controls) == 0 {
+		return nil
+	}
+	if err := model.Validate(); err != nil {
+		return &skillContextControls{UnavailableWhy: controlsModelBroken + ": " + err.Error()}
 	}
 
 	// The subpath comes from the finding, never from this scan: a verify scan
@@ -78,7 +87,7 @@ func (w *Worker) controlsContext(scan *db.Scan, skill *db.Skill) (*skillContextC
 	// relative to the audit scan that produced it, denormalised onto the row.
 	file := findingnorm.FindingPath(finding.SubPath, finding.Location)
 	if file == "" {
-		return &skillContextControls{UnavailableWhy: controlsNoLocation}, nil
+		return &skillContextControls{UnavailableWhy: controlsNoLocation}
 	}
 
 	matched := model.MatchPath(file)
@@ -86,5 +95,5 @@ func (w *Worker) controlsContext(scan *db.Scan, skill *db.Skill) (*skillContextC
 		FindingFile: file,
 		Matched:     matched,
 		IDs:         threatmodel.IDs(matched),
-	}, nil
+	}
 }

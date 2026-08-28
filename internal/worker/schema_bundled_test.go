@@ -239,7 +239,8 @@ func TestBundledSchemas_compileAndAcceptSamples(t *testing.T) {
 			    "reproduces_three_of_three":{"verdict":"pass","method":"run three times","evidence":"3/3","counterevidence":"","proof_gap":"","confidence":"high"},
 			    "claimed_failure_class":{"verdict":"pass","method":"trace","evidence":"panic","counterevidence":"","proof_gap":"","confidence":"high"},
 			    "public_interface_to_first_party_sink":{"verdict":"pass","method":"stack","evidence":"public API to parser.go","counterevidence":"","proof_gap":"","confidence":"high"},
-			    "deterministic":{"verdict":"pass","method":"compare","evidence":"same site","counterevidence":"","proof_gap":"","confidence":"high"}}}`,
+			    "deterministic":{"verdict":"pass","method":"compare","evidence":"same site","counterevidence":"","proof_gap":"","confidence":"high"},
+			    "control_bypass":{"matched_controls":["web-authz"],"assessments":[{"control_id":"web-authz","disposition":"bypassed","evidence":"attempts reach the handler without authentication"}]}}}`,
 		},
 		{
 			"../../skills/verify/schema.json",
@@ -255,7 +256,8 @@ func TestBundledSchemas_compileAndAcceptSamples(t *testing.T) {
 			    "reproduces_three_of_three":{"verdict":"fail","method":"run three times","evidence":"0/3","counterevidence":"","proof_gap":"","confidence":"high"},
 			    "claimed_failure_class":{"verdict":"fail","method":"trace","evidence":"no failure","counterevidence":"","proof_gap":"","confidence":"high"},
 			    "public_interface_to_first_party_sink":{"verdict":"pass","method":"stack","evidence":"public API reached guard","counterevidence":"","proof_gap":"","confidence":"high"},
-			    "deterministic":{"verdict":"pass","method":"compare","evidence":"same guard in 3/3","counterevidence":"","proof_gap":"","confidence":"high"}}}`,
+			    "deterministic":{"verdict":"pass","method":"compare","evidence":"same guard in 3/3","counterevidence":"","proof_gap":"","confidence":"high"},
+			    "control_bypass":{"matched_controls":[],"assessments":[],"unavailable_reason":"the repository threat model could not be read"}}}`,
 		},
 		{
 			"../../skills/verify/schema.json",
@@ -271,7 +273,8 @@ func TestBundledSchemas_compileAndAcceptSamples(t *testing.T) {
 			    "reproduces_three_of_three":{"verdict":"not_attempted","method":"preflight","evidence":"external reach","counterevidence":"","proof_gap":"execution","confidence":"high"},
 			    "claimed_failure_class":{"verdict":"not_attempted","method":"preflight","evidence":"external reach","counterevidence":"","proof_gap":"execution","confidence":"high"},
 			    "public_interface_to_first_party_sink":{"verdict":"not_attempted","method":"preflight","evidence":"external reach","counterevidence":"","proof_gap":"execution","confidence":"high"},
-			    "deterministic":{"verdict":"not_attempted","method":"preflight","evidence":"external reach","counterevidence":"","proof_gap":"execution","confidence":"high"}}}`,
+			    "deterministic":{"verdict":"not_attempted","method":"preflight","evidence":"external reach","counterevidence":"","proof_gap":"execution","confidence":"high"},
+			    "control_bypass":{"matched_controls":[],"assessments":[]}}}`,
 		},
 		{
 			"../../skills/reattack/schema.json",
@@ -599,7 +602,8 @@ func TestBundledSchemas_rejectBadShapes(t *testing.T) {
 			    "reproduces_three_of_three":{"verdict":"fail","method":"run","evidence":"2/3","counterevidence":"","proof_gap":"","confidence":"high"},
 			    "claimed_failure_class":{"verdict":"pass","method":"trace","evidence":"x","counterevidence":"","proof_gap":"","confidence":"high"},
 			    "public_interface_to_first_party_sink":{"verdict":"pass","method":"trace","evidence":"x","counterevidence":"","proof_gap":"","confidence":"high"},
-			    "deterministic":{"verdict":"fail","method":"compare","evidence":"flaky","counterevidence":"","proof_gap":"","confidence":"high"}}}`,
+			    "deterministic":{"verdict":"fail","method":"compare","evidence":"flaky","counterevidence":"","proof_gap":"","confidence":"high"},
+			    "control_bypass":{"matched_controls":[],"assessments":[]}}}`,
 			"/attempts/2/outcome"},
 		{"../../skills/verify/schema.json",
 			`{"status":"not_attempted","attack_tree":{"goal":"Trigger panic","root_id":"AT1","verdict":"not_attempted","nodes":[
@@ -613,7 +617,8 @@ func TestBundledSchemas_rejectBadShapes(t *testing.T) {
 			    "reproduces_three_of_three":{"verdict":"not_attempted","method":"setup","evidence":"failed","counterevidence":"","proof_gap":"runtime","confidence":"low"},
 			    "claimed_failure_class":{"verdict":"not_attempted","method":"setup","evidence":"failed","counterevidence":"","proof_gap":"runtime","confidence":"low"},
 			    "public_interface_to_first_party_sink":{"verdict":"not_attempted","method":"setup","evidence":"failed","counterevidence":"","proof_gap":"runtime","confidence":"low"},
-			    "deterministic":{"verdict":"not_attempted","method":"setup","evidence":"failed","counterevidence":"","proof_gap":"runtime","confidence":"low"}}}`,
+			    "deterministic":{"verdict":"not_attempted","method":"setup","evidence":"failed","counterevidence":"","proof_gap":"runtime","confidence":"low"},
+			    "control_bypass":{"matched_controls":[],"assessments":[]}}}`,
 			"/attack_tree/nodes/0/status"},
 		{"../../skills/reattack/schema.json",
 			`{"outcome":"inconclusive","variants":[{"name":"v1","input":"a","valid":true,"outcome":"blocked","same_bug_class":true,"same_sink":true,"failure_class":"","sink":"parser.go:42","evidence":"blocked"}],"benign_control":{"input":"","reached_sink":false,"crashed":false,"evidence":"harness unavailable"},"notes":""}`,
@@ -869,6 +874,10 @@ func TestVerifySchema_rejectsAttackTreeVerdictContradictions(t *testing.T) {
 			"claimed_failure_class":                criterion("pass"),
 			"public_interface_to_first_party_sink": criterion("pass"),
 			"deterministic":                        criterion("pass"),
+			"control_bypass": map[string]any{
+				"matched_controls": []any{},
+				"assessments":      []any{},
+			},
 		},
 	}
 	tests := []struct {
@@ -902,6 +911,38 @@ func TestVerifySchema_rejectsAttackTreeVerdictContradictions(t *testing.T) {
 				tree["blockers"] = []any{"length guard"}
 			},
 			wantErr: "/attack_tree",
+		},
+		{
+			name: "confirmed with held control",
+			mutate: func(report map[string]any) {
+				report["criteria"].(map[string]any)["control_bypass"] = map[string]any{
+					"matched_controls": []any{"web-authz"},
+					"assessments": []any{map[string]any{
+						"control_id": "web-authz", "disposition": "held", "evidence": "router rejected the request",
+					}},
+				}
+			},
+			wantErr: "/criteria/control_bypass",
+		},
+		{
+			name: "missing control bypass gate",
+			mutate: func(report map[string]any) {
+				delete(report["criteria"].(map[string]any), "control_bypass")
+			},
+			wantErr: "/criteria",
+		},
+		{
+			name: "unavailable control resolution with matched IDs",
+			mutate: func(report map[string]any) {
+				report["criteria"].(map[string]any)["control_bypass"] = map[string]any{
+					"matched_controls": []any{"web-authz"},
+					"assessments": []any{map[string]any{
+						"control_id": "web-authz", "disposition": "bypassed", "evidence": "attempt bypassed router",
+					}},
+					"unavailable_reason": "the repository threat model could not be read",
+				}
+			},
+			wantErr: "/criteria/control_bypass",
 		},
 	}
 

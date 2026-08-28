@@ -1,6 +1,6 @@
 ---
 name: verify
-description: Re-run a finding's reproduction against current HEAD, test its attack tree, and grade its evidence with a deterministic five-part rubric.
+description: Re-run a finding's reproduction against current HEAD, test its attack tree, grade five fixed evidence criteria, and account for every matched design control.
 license: MIT
 compatibility: Needs network access to the scrutineer API (http://host:port/api). Expects the finding's reproduction instructions to be runnable against ./src with commonly available tooling.
 metadata:
@@ -28,7 +28,7 @@ The only reproduction material inherited from the original scan is the finding's
 
 Read `./context.json`, then fetch `GET {api_base}/findings/{finding_id}` with `Authorization: Bearer {token}`. The response includes the finding's title, CWE, locations, trace, boundary, validation, and reachability narrative.
 
-If `finding_id` is missing or the fetch fails, emit `status: not_attempted`. Create an `attack_tree` with one `goal` root whose verdict and node status are `not_attempted`, create three `attempts` entries with `outcome: not_attempted`, and set all five criterion verdicts to `not_attempted`. In each evidence field state the concrete reason the target could not be loaded. A broken harness is not a negative result.
+If `finding_id` is missing or the fetch fails, emit `status: not_attempted`. Create an `attack_tree` with one `goal` root whose verdict and node status are `not_attempted`, create three `attempts` entries with `outcome: not_attempted`, set all five scored criterion verdicts to `not_attempted`, and set every matched control disposition to `not_attempted`. In each evidence field state the concrete reason the target could not be loaded. A broken harness is not a negative result.
 
 ## Preflight
 
@@ -91,7 +91,7 @@ For each attempt record:
 
 Use `not_attempted` when execution never reached the target entry point because the build failed, a dependency/runtime was missing, the command was unavailable, or the harness died first. Such a run remains retryable. `not_reproduced` is valid only when evidence proves the public entry point and relevant target path ran without triggering the claim.
 
-## Grade the five criteria
+## Grade the five scored criteria
 
 Every criterion records `verdict`, `method`, `evidence`, `counterevidence`, `proof_gap`, and `confidence`. Use an empty string for counterevidence or proof_gap only when there genuinely is none.
 
@@ -105,7 +105,7 @@ Every criterion records `verdict`, `method`, `evidence`, `counterevidence`, `pro
 
 ## Choose the overall status
 
-- `confirmed`: all three attempts reproduced, all five criteria passed, and the attack-tree verdict is `reachable`.
+- `confirmed`: all three attempts reproduced, all five scored criteria passed, the attack-tree verdict is `reachable`, and every matched control was either bypassed with concrete evidence or shown not to apply.
 - `fixed`: all three attempts reached the relevant current code without reproducing, source evidence identifies the guard, sanitiser, or refactor that stopped the original behavior, and the attack-tree verdict is `blocked`. Cite the blocker in both `attack_tree.blockers` and `notes`.
 - `inconclusive`: execution occurred but was flaky, produced a different class, did not establish a public path/first-party sink, or left conflicting evidence.
 - `not_attempted`: no meaningful attempt reached the target because setup, build, runtime, or harness preparation failed. The attack-tree verdict is `not_attempted`. Prefix environment failures in `notes` with `env-blocked:`.
@@ -141,7 +141,15 @@ A control is a **claim by the threat model's author**, not a proof and not a ver
 - **`matched` is empty**: the model declares controls but none claims this file. Worth one line in `notes` — an unprotected path is a weaker prior for `fixed`.
 - **`unavailable_reason` is set**: the model could not be read (or the finding has no usable path). Treat it as no information at all, not as "nothing protects this", and pass the reason through to `notes` so the operator can fix the model.
 
-The block is absent entirely when the repository declares no controls. That is the normal case; do not mention it.
+Record the result under `criteria.control_bypass`. Copy `scrutineer.controls.ids` exactly into `matched_controls`, preserving no extra IDs, and emit exactly one assessment per matched ID:
+
+- `bypassed`: execution demonstrated that the control did not stop the attack. Cite the attempt output and the violated assumption.
+- `held`: source and execution evidence show that the control enforced its claim and blocked the attack path.
+- `not_applicable`: concrete evidence shows that the glob-matched control does not govern the exercised entry point or path. Explain why.
+- `unresolved`: neither bypass nor enforcement could be established. State the missing proof. This disposition forces the overall status to `inconclusive`.
+- `not_attempted`: evaluation never reached the target. Use this only with overall `deferred` or `not_attempted`.
+
+`confirmed` permits only `bypassed` and `not_applicable`. `fixed` permits `bypassed`, `held`, and `not_applicable`, but not an unresolved control. The block is absent entirely when the repository declares no controls; in that normal case still emit `control_bypass` with empty `matched_controls` and `assessments` arrays. When `scrutineer.controls.unavailable_reason` is set, also emit empty arrays, copy that exact value into `control_bypass.unavailable_reason`, and include it in `notes`. Do not emit `unavailable_reason` when the controls block is absent or resolution succeeded.
 
 ## Output
 
@@ -176,7 +184,8 @@ Write `./report.json` matching `./schema.json`. Example:
     "reproduces_three_of_three": {"verdict": "pass", "method": "three isolated processes", "evidence": "3/3 attempts reproduced", "counterevidence": "", "proof_gap": "", "confidence": "high"},
     "claimed_failure_class": {"verdict": "pass", "method": "compared ASan class with finding", "evidence": "all attempts report heap-buffer-overflow", "counterevidence": "", "proof_gap": "", "confidence": "high"},
     "public_interface_to_first_party_sink": {"verdict": "pass", "method": "inspected stack and caller", "evidence": "public parse_document reaches src/parser.c:418", "counterevidence": "", "proof_gap": "", "confidence": "high"},
-    "deterministic": {"verdict": "pass", "method": "compared attempt traces", "evidence": "same input, class, and crash site in 3/3", "counterevidence": "", "proof_gap": "", "confidence": "high"}
+    "deterministic": {"verdict": "pass", "method": "compared attempt traces", "evidence": "same input, class, and crash site in 3/3", "counterevidence": "", "proof_gap": "", "confidence": "high"},
+    "control_bypass": {"matched_controls": [], "assessments": []}
   },
   "reproducer": "verbatim script and command",
   "evidence": "combined relevant output",
@@ -184,4 +193,4 @@ Write `./report.json` matching `./schema.json`. Example:
 }
 ```
 
-Scrutineer computes the score from passed criteria; do not emit a score. It stores the complete report as an append-only verification record keyed to this finding and scan, while preserving the existing lifecycle behavior: `confirmed` moves `new` to `enriched`, `fixed` on the default branch moves the finding to `fixed`, and all other statuses leave it unchanged. If the report remains internally inconsistent after Scrutineer's repair attempt, the evidence is retained as `ungraded` with no score and cannot change the finding lifecycle.
+Scrutineer computes the score from the five scored criteria; `control_bypass` is a non-scored gate. Do not emit a score. It stores the complete report as an append-only verification record keyed to this finding and scan, while preserving the existing lifecycle behavior: `confirmed` moves `new` to `enriched`, `fixed` on the default branch moves the finding to `fixed`, and all other statuses leave it unchanged. The worker compares `matched_controls` and `unavailable_reason` with the host-resolved context staged in `context.json`; omitted, added, duplicated, unresolved, or invented control state makes the report ungraded and prevents a lifecycle change. Historical verification rows without `control_bypass` remain readable.

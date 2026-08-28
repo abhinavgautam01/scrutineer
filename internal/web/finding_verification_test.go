@@ -22,6 +22,7 @@ func TestLoadFindingVerificationViewsToleratesUngradedRow(t *testing.T) {
 	s.DB.Create(&finding)
 
 	report := completeVerificationReport()
+	report.Criteria.ControlBypass.UnavailableReason = "the repository threat model could not be read"
 	validReport, err := json.Marshal(report)
 	if err != nil {
 		t.Fatal(err)
@@ -66,6 +67,9 @@ func TestLoadFindingVerificationViewsToleratesUngradedRow(t *testing.T) {
 	if views[1].ID != graded.ID || views[1].ScoreLabel != "100%" || !views[1].HasRubric {
 		t.Errorf("graded view = %+v", views[1])
 	}
+	if views[1].ControlBypass == nil || views[1].ControlBypass.UnavailableReason != report.Criteria.ControlBypass.UnavailableReason {
+		t.Errorf("graded control bypass = %+v, want unavailable reason", views[1].ControlBypass)
+	}
 }
 
 func completeVerificationReport() verification.Report {
@@ -101,6 +105,10 @@ func completeVerificationReport() verification.Report {
 			ClaimedFailureClass:             criterion,
 			PublicInterfaceToFirstPartySink: criterion,
 			Deterministic:                   criterion,
+			ControlBypass: &verification.ControlBypass{
+				MatchedControls: []string{},
+				Assessments:     []verification.ControlAssessment{},
+			},
 		},
 	}
 }

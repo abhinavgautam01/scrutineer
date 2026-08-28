@@ -4,12 +4,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 )
 
 const (
 	attemptCount       = 3
 	criterionCount     = 5
 	attackTreeMaxNodes = 64
+
+	controlBypassed      = "bypassed"
+	controlHeld          = "held"
+	controlNotApplicable = "not_applicable"
+	controlUnresolved    = "unresolved"
+	controlNotAttempted  = "not_attempted"
 )
 
 // ErrMissingRubric identifies reports produced by the pre-rubric verify skill.
@@ -79,14 +87,34 @@ type Criterion struct {
 	Confidence      string `json:"confidence"`
 }
 
-// Criteria is deliberately fixed-shape: every verification grades the same
-// five properties and cannot silently omit a difficult row.
+// Criteria keeps the five scored properties fixed-shape. ControlBypass is a
+// non-scored gate and is optional only so historical rows remain readable.
 type Criteria struct {
-	PoCWellFormed                   Criterion `json:"poc_well_formed"`
-	ReproducesThreeOfThree          Criterion `json:"reproduces_three_of_three"`
-	ClaimedFailureClass             Criterion `json:"claimed_failure_class"`
-	PublicInterfaceToFirstPartySink Criterion `json:"public_interface_to_first_party_sink"`
-	Deterministic                   Criterion `json:"deterministic"`
+	PoCWellFormed                   Criterion      `json:"poc_well_formed"`
+	ReproducesThreeOfThree          Criterion      `json:"reproduces_three_of_three"`
+	ClaimedFailureClass             Criterion      `json:"claimed_failure_class"`
+	PublicInterfaceToFirstPartySink Criterion      `json:"public_interface_to_first_party_sink"`
+	Deterministic                   Criterion      `json:"deterministic"`
+	ControlBypass                   *ControlBypass `json:"control_bypass,omitempty"`
+}
+
+// ControlBypass is a non-scored verification gate over the design controls
+// that the host matched to the finding. It is optional in the Go model so
+// verification rows created before this field existed remain readable;
+// schema.json requires it for newly generated reports.
+type ControlBypass struct {
+	MatchedControls   []string            `json:"matched_controls"`
+	Assessments       []ControlAssessment `json:"assessments"`
+	UnavailableReason string              `json:"unavailable_reason,omitempty"`
+}
+
+// ControlAssessment records what happened to one matched design control.
+// Evidence is required for every disposition, including why a control does
+// not apply or why its state could not be established.
+type ControlAssessment struct {
+	ControlID   string `json:"control_id"`
+	Disposition string `json:"disposition"`
+	Evidence    string `json:"evidence"`
 }
 
 // NamedCriterion supplies stable display labels without making the report
@@ -125,9 +153,121 @@ func (r Report) Validate() error {
 		seen[attempt.Number] = true
 	}
 	if r.AttackTree == nil {
+		return r.validateControlBypass()
+	}
+	if err := r.validateAttackTree(); err != nil {
+		return err
+	}
+	return r.validateControlBypass()
+}
+
+func (r Report) validateControlBypass() error {
+	gate := r.Criteria.ControlBypass
+	if gate == nil {
 		return nil
 	}
-	return r.validateAttackTree()
+	if err := gate.validate(); err != nil {
+		return err
+	}
+	return validateControlBypassStatus(r.Status, gate.Assessments)
+}
+
+func (gate ControlBypass) validate() error {
+	if gate.UnavailableReason != "" {
+		if strings.TrimSpace(gate.UnavailableReason) == "" {
+			return errors.New("criteria.control_bypass.unavailable_reason is empty")
+		}
+		if len(gate.MatchedControls) != 0 || len(gate.Assessments) != 0 {
+			return errors.New("criteria.control_bypass with unavailable_reason requires empty matched_controls and assessments")
+		}
+	}
+	matched := make(map[string]struct{}, len(gate.MatchedControls))
+	for i, id := range gate.MatchedControls {
+		if strings.TrimSpace(id) == "" {
+			return fmt.Errorf("criteria.control_bypass.matched_controls[%d] is empty", i)
+		}
+		if _, exists := matched[id]; exists {
+			return fmt.Errorf("criteria.control_bypass.matched_controls[%d] %q is not unique", i, id)
+		}
+		matched[id] = struct{}{}
+	}
+
+	assessed := make(map[string]struct{}, len(gate.Assessments))
+	for i, assessment := range gate.Assessments {
+		if strings.TrimSpace(assessment.ControlID) == "" {
+			return fmt.Errorf("criteria.control_bypass.assessments[%d].control_id is empty", i)
+		}
+		if strings.TrimSpace(assessment.Evidence) == "" {
+			return fmt.Errorf("criteria.control_bypass.assessments[%d].evidence is empty", i)
+		}
+		if _, exists := matched[assessment.ControlID]; !exists {
+			return fmt.Errorf("criteria.control_bypass.assessments[%d] names unmatched control %q", i, assessment.ControlID)
+		}
+		if _, exists := assessed[assessment.ControlID]; exists {
+			return fmt.Errorf("criteria.control_bypass.assessments[%d] repeats control %q", i, assessment.ControlID)
+		}
+		assessed[assessment.ControlID] = struct{}{}
+		if !controlDispositionValid(assessment.Disposition) {
+			return fmt.Errorf("criteria.control_bypass.assessments[%d].disposition %q is invalid", i, assessment.Disposition)
+		}
+	}
+	for _, id := range gate.MatchedControls {
+		if _, exists := assessed[id]; !exists {
+			return fmt.Errorf("criteria.control_bypass has no assessment for matched control %q", id)
+		}
+	}
+
+	return nil
+}
+
+func validateControlBypassStatus(status string, assessments []ControlAssessment) error {
+	for _, assessment := range assessments {
+		switch status {
+		case "confirmed":
+			if assessment.Disposition != controlBypassed && assessment.Disposition != controlNotApplicable {
+				return fmt.Errorf("verify status confirmed requires control %q to be bypassed or not_applicable, got %q", assessment.ControlID, assessment.Disposition)
+			}
+		case "fixed":
+			if assessment.Disposition == controlUnresolved || assessment.Disposition == controlNotAttempted {
+				return fmt.Errorf("verify status fixed requires a resolved assessment for control %q, got %q", assessment.ControlID, assessment.Disposition)
+			}
+		case "deferred", "not_attempted":
+			if assessment.Disposition != controlNotAttempted {
+				return fmt.Errorf("verify status %s requires control %q to be not_attempted, got %q", status, assessment.ControlID, assessment.Disposition)
+			}
+		}
+	}
+	return nil
+}
+
+func controlDispositionValid(disposition string) bool {
+	switch disposition {
+	case controlBypassed, controlHeld, controlNotApplicable, controlUnresolved, controlNotAttempted:
+		return true
+	default:
+		return false
+	}
+}
+
+// ValidateControlContext proves that the model accounted for exactly the
+// controls, or the resolution failure, that the host staged for this finding.
+// JSON Schema cannot compare report contents with context.json, so live
+// ingestion calls this after ordinary validation.
+func (r Report) ValidateControlContext(expected []string, unavailableReason string) error {
+	if r.Criteria == nil || r.Criteria.ControlBypass == nil {
+		return errors.New("verify report requires criteria.control_bypass")
+	}
+	if got := r.Criteria.ControlBypass.UnavailableReason; got != unavailableReason {
+		return fmt.Errorf("criteria.control_bypass.unavailable_reason %q does not match host-resolved reason %q", got, unavailableReason)
+	}
+	want := slices.Clone(expected)
+	got := slices.Clone(r.Criteria.ControlBypass.MatchedControls)
+	slices.Sort(want)
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		return fmt.Errorf("criteria.control_bypass.matched_controls %v do not match host-resolved controls %v", got, want)
+	}
+	return nil
 }
 
 func (r Report) validateAttackTree() error {

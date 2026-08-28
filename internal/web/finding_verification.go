@@ -14,11 +14,12 @@ const verificationPercentScale = 100
 
 type findingVerificationView struct {
 	db.FindingVerification
-	ScoreLabel string
-	HasRubric  bool
-	Criteria   []verification.NamedCriterion
-	Attempts   []verification.Attempt
-	AttackTree *verification.AttackTree
+	ScoreLabel    string
+	HasRubric     bool
+	Criteria      []verification.NamedCriterion
+	Attempts      []verification.Attempt
+	AttackTree    *verification.AttackTree
+	ControlBypass *verification.ControlBypass
 }
 
 func loadFindingVerificationViews(gdb *gorm.DB, findingID uint) ([]findingVerificationView, error) {
@@ -35,6 +36,7 @@ func loadFindingVerificationViews(gdb *gorm.DB, findingID uint) ([]findingVerifi
 			view.Criteria = report.Criteria.List()
 			view.Attempts = report.Attempts
 			view.AttackTree = report.AttackTree
+			view.ControlBypass = report.Criteria.ControlBypass
 			if row.Score != nil {
 				view.ScoreLabel = fmt.Sprintf("%.0f%%", *row.Score*verificationPercentScale)
 			}

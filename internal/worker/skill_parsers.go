@@ -937,6 +937,19 @@ func (w *Worker) parseVerifyOutput(scan *db.Scan, report string, emit func(Event
 	if err := w.DB.First(&f, *scan.FindingID).Error; err != nil {
 		return fmt.Errorf("load finding %d: %w", *scan.FindingID, err)
 	}
+	if rubric != nil {
+		var expectedControlIDs []string
+		var unavailableReason string
+		if controls := resolveFindingControls(scan.Repository.ThreatModel, f); controls != nil {
+			expectedControlIDs = controls.IDs
+			unavailableReason = controls.UnavailableWhy
+		}
+		if err := rubric.ValidateControlContext(expectedControlIDs, unavailableReason); err != nil {
+			gradingError = err.Error()
+			rubric = nil
+			score = nil
+		}
+	}
 	nextStatus, err := verifyNextStatus(f, scan, result, gradingError)
 	if err != nil {
 		return err
@@ -1111,6 +1124,16 @@ func verifyNote(result verifyOutput, rubric *verification.Report, score *float64
 		}
 		for _, named := range rubric.Criteria.List() {
 			fmt.Fprintf(&b, "criterion: %s = %s\n", named.Name, named.Criterion.Verdict)
+		}
+		gate := rubric.Criteria.ControlBypass
+		if len(gate.MatchedControls) > 0 || gate.UnavailableReason != "" {
+			fmt.Fprintf(&b, "control bypass: %d matched\n", len(gate.MatchedControls))
+			if gate.UnavailableReason != "" {
+				fmt.Fprintf(&b, "control resolution unavailable: %s\n", gate.UnavailableReason)
+			}
+			for _, assessment := range gate.Assessments {
+				fmt.Fprintf(&b, "control: %s = %s: %s\n", assessment.ControlID, assessment.Disposition, assessment.Evidence)
+			}
 		}
 	}
 	if result.Preflight.Classification != "" {
