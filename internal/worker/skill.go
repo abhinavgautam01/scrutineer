@@ -14,6 +14,7 @@ import (
 	"github.com/alpha-omega-security/harness"
 	"gorm.io/gorm"
 
+	"scrutineer/internal/coverage"
 	"scrutineer/internal/db"
 	"scrutineer/internal/repoconfig"
 	"scrutineer/internal/skills"
@@ -424,6 +425,20 @@ func (w *Worker) parseSkillOutput(skill *db.Skill, scan *db.Scan, report string,
 			}
 		}
 	}
+	if err := w.parseSkillOutputKind(skill, scan, report, emit); err != nil {
+		return err
+	}
+	if scan.RescanMode != db.ScanRescanModeDiff {
+		return nil
+	}
+	claim, hasClaim, err := extractSkillCoverageClaim(report)
+	if err != nil || !hasClaim {
+		return err
+	}
+	return applySkillCoverageClaim(scan, claim)
+}
+
+func (w *Worker) parseSkillOutputKind(skill *db.Skill, scan *db.Scan, report string, emit func(Event)) error {
 	switch skill.OutputKind {
 	case "findings":
 		return w.parseFindingsOutput(skill, scan, report, emit)
@@ -1366,7 +1381,7 @@ func stageContextWithInputs(
 			HeadCommit:          scan.Commit,
 			DiffFile:            "diff.patch",
 			ChangedFilesFile:    "changed_files.json",
-			CoverageMetadataKey: "coverage",
+			CoverageMetadataKey: coverage.ReportMetadataKey,
 		}
 		if scan.DiffBaseScanID != nil {
 			rc.BaseScanID = *scan.DiffBaseScanID
