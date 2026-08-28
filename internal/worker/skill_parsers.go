@@ -1068,9 +1068,6 @@ func decodeVerifyOutput(report string) (verifyOutput, *verification.Report, *flo
 	if err != nil {
 		return result, nil, nil, err.Error(), nil
 	}
-	if rubric.Criteria.ControlBypass == nil {
-		return result, &rubric, nil, "", nil
-	}
 	score := rubric.Score()
 	return result, &rubric, &score, "", nil
 }
