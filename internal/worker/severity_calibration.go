@@ -17,17 +17,17 @@ const controlSeverityCap = "Medium"
 // untouched.
 type findingSeverityCalibration struct {
 	Severity   string
+	Maximum    string
 	Caps       []string
 	Incomplete bool
 	Evaluated  bool
 }
 
 func calibrateControlSeverity(
-	current string,
 	controls *skillContextControls,
 	gate *verification.ControlBypass,
 ) findingSeverityCalibration {
-	result := findingSeverityCalibration{Severity: current, Evaluated: true}
+	result := findingSeverityCalibration{Evaluated: true}
 	if controls == nil {
 		return result
 	}
@@ -69,23 +69,19 @@ func calibrateControlSeverity(
 			continue
 		}
 		result.Caps = append(result.Caps, reason)
-		result.Severity = capFindingSeverity(result.Severity, controlSeverityCap)
+		result.Maximum = controlSeverityCap
 	}
 
 	slices.Sort(result.Caps)
-	if len(result.Caps) > 0 && !knownFindingSeverity(current) {
-		result.Incomplete = true
-	}
 	return result
 }
 
-func capFindingSeverity(current, maximum string) string {
-	if !knownFindingSeverity(current) || !db.SeverityAtLeast(current, maximum) {
-		return current
+func (calibration findingSeverityCalibration) withSeverity(severity string) findingSeverityCalibration {
+	calibration.Severity = severity
+	if !slices.Contains(db.SeverityLevels, severity) {
+		calibration.Incomplete = true
+	} else if calibration.Maximum != "" && db.SeverityAtLeast(severity, calibration.Maximum) {
+		calibration.Severity = calibration.Maximum
 	}
-	return maximum
-}
-
-func knownFindingSeverity(severity string) bool {
-	return slices.Contains(db.SeverityLevels, severity)
+	return calibration
 }

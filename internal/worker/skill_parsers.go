@@ -937,7 +937,7 @@ func (w *Worker) parseVerifyOutput(scan *db.Scan, report string, emit func(Event
 	if err := w.DB.First(&f, *scan.FindingID).Error; err != nil {
 		return fmt.Errorf("load finding %d: %w", *scan.FindingID, err)
 	}
-	calibration := findingSeverityCalibration{Severity: f.Severity}
+	calibration := findingSeverityCalibration{}
 	if rubric != nil {
 		var controls *skillContextControls
 		var expectedControlIDs []string
@@ -951,15 +951,14 @@ func (w *Worker) parseVerifyOutput(scan *db.Scan, report string, emit func(Event
 			rubric = nil
 			score = nil
 		} else {
-			calibration = calibrateControlSeverity(f.Severity, controls, rubric.Criteria.ControlBypass)
+			calibration = calibrateControlSeverity(controls, rubric.Criteria.ControlBypass)
 		}
 	}
 	nextStatus, err := verifyNextStatus(f, scan, result, gradingError)
 	if err != nil {
 		return err
 	}
-	note := verifyNote(result, rubric, score, gradingError, calibration)
-	if err := w.recordVerifyOutput(scan, f, result.Status, report, note, score, nextStatus, calibration); err != nil {
+	if err := w.recordVerifyOutput(scan, f, result, report, rubric, score, gradingError, nextStatus, calibration); err != nil {
 		return err
 	}
 
@@ -1173,8 +1172,11 @@ func verifyNote(
 func (w *Worker) recordVerifyOutput(
 	scan *db.Scan,
 	f db.Finding,
-	status, report, note string,
+	result verifyOutput,
+	report string,
+	rubric *verification.Report,
 	score *float64,
+	gradingError string,
 	nextStatus db.FindingLifecycle,
 	calibration findingSeverityCalibration,
 ) error {
@@ -1193,11 +1195,13 @@ func (w *Worker) recordVerifyOutput(
 			}
 		}
 		if calibration.Evaluated {
-			if calibration.Severity != f.Severity {
-				if err := db.WriteFindingField(tx, f.ID, "severity", calibration.Severity, db.SourceSystem, verifySkillName); err != nil {
-					return fmt.Errorf("apply severity cap: %w", err)
-				}
+			effectiveSeverity, err := db.ApplyFindingSeverityCap(
+				tx, f.ID, calibration.Maximum, db.SourceSystem, verifySkillName,
+			)
+			if err != nil {
+				return fmt.Errorf("apply severity cap: %w", err)
 			}
+			calibration = calibration.withSeverity(effectiveSeverity)
 			if err := tx.Model(&db.Finding{}).Where("id = ?", f.ID).Updates(map[string]any{
 				"severity_caps":                   strings.Join(calibration.Caps, "\n"),
 				"severity_calibration_incomplete": calibration.Incomplete,
@@ -1208,13 +1212,14 @@ func (w *Worker) recordVerifyOutput(
 		row := db.FindingVerification{
 			FindingID: f.ID,
 			ScanID:    scan.ID,
-			Status:    status,
+			Status:    result.Status,
 			Score:     score,
 			Report:    report,
 		}
 		if err := tx.Create(&row).Error; err != nil {
 			return fmt.Errorf("record verification: %w", err)
 		}
+		note := verifyNote(result, rubric, score, gradingError, calibration)
 		if _, err := db.AddFindingNote(tx, f.ID, note, "verify"); err != nil {
 			return fmt.Errorf("record verify note: %w", err)
 		}

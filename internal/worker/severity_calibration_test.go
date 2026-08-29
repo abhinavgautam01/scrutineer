@@ -65,6 +65,10 @@ func TestCalibrateControlSeverity(t *testing.T) {
 			wantSeverity: "UNKNOWN", wantCaps: 1, wantIncomplete: true,
 		},
 		{
+			name: "unknown severity without cap is incomplete", severity: "UNKNOWN",
+			wantSeverity: "UNKNOWN", wantIncomplete: true,
+		},
+		{
 			name: "unavailable controls are incomplete", severity: "Critical",
 			controls:     &skillContextControls{UnavailableWhy: "model unavailable"},
 			gate:         &verification.ControlBypass{UnavailableReason: "model unavailable"},
@@ -73,7 +77,7 @@ func TestCalibrateControlSeverity(t *testing.T) {
 		{name: "no controls is authoritative", severity: "High", wantSeverity: "High"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := calibrateControlSeverity(tc.severity, tc.controls, tc.gate)
+			got := calibrateControlSeverity(tc.controls, tc.gate).withSeverity(tc.severity)
 			if !got.Evaluated || got.Severity != tc.wantSeverity || len(got.Caps) != tc.wantCaps || got.Incomplete != tc.wantIncomplete {
 				t.Fatalf("calibration = %+v, want severity=%q caps=%d incomplete=%t", got, tc.wantSeverity, tc.wantCaps, tc.wantIncomplete)
 			}
@@ -180,6 +184,53 @@ func TestParseVerifyUngradedReportPreservesSeverityCalibration(t *testing.T) {
 	gdb.Where("finding_id = ?", finding.ID).First(&row)
 	if row.Score != nil {
 		t.Fatalf("ungraded verification score = %v, want nil", row.Score)
+	}
+}
+
+func TestRecordVerifyOutputAppliesCapToLatestSeverity(t *testing.T) {
+	gdb, err := db.Open(filepath.Join(t.TempDir(), "severity-cap-latest.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := db.Repository{URL: "https://example.com/x", Name: "x"}
+	gdb.Create(&repo)
+	prior := db.Scan{RepositoryID: repo.ID, Kind: JobSkill, Status: db.ScanDone}
+	gdb.Create(&prior)
+	finding := db.Finding{ScanID: prior.ID, RepositoryID: repo.ID, Title: "x", Severity: "Critical"}
+	gdb.Create(&finding)
+	scan := db.Scan{RepositoryID: repo.ID, FindingID: new(finding.ID), SkillName: verifySkillName}
+	gdb.Create(&scan)
+
+	report := verificationReport(t, "inconclusive", func(report *verification.Report) {
+		report.Criteria.ControlBypass = calibrationGate("web-authz", "held")
+	})
+	result, rubric, score, gradingError, err := decodeVerifyOutput(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calibration := calibrateControlSeverity(
+		calibrationControls(threatmodel.Control{ID: "web-authz", Kind: threatmodel.KindAuthorization}),
+		rubric.Criteria.ControlBypass,
+	)
+
+	staleFinding := finding
+	if err := gdb.Model(&db.Finding{}).Where("id = ?", finding.ID).Update("severity", "Low").Error; err != nil {
+		t.Fatal(err)
+	}
+	w := &Worker{DB: gdb, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if err := w.recordVerifyOutput(&scan, staleFinding, result, report, rubric, score, gradingError, "", calibration); err != nil {
+		t.Fatal(err)
+	}
+
+	var got db.Finding
+	gdb.First(&got, finding.ID)
+	if got.Severity != "Low" {
+		t.Fatalf("latest lower severity was raised to %q", got.Severity)
+	}
+	var severityHistory int64
+	gdb.Model(&db.FindingHistory{}).Where("finding_id = ? AND field = ?", finding.ID, "severity").Count(&severityHistory)
+	if severityHistory != 0 {
+		t.Fatalf("severity history rows = %d, want 0", severityHistory)
 	}
 }
 

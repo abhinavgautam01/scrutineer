@@ -119,6 +119,52 @@ func WriteFindingField(gdb *gorm.DB, findingID uint, field, newValue string, sou
 	})
 }
 
+// ApplyFindingSeverityCap lowers a finding to maximum when its latest stored
+// severity is higher. It never raises a lower severity and leaves unknown
+// severities unchanged. Returning the effective value lets callers derive
+// calibration state from the same retry-protected read that decided the write.
+// An empty maximum performs only that read.
+func ApplyFindingSeverityCap(
+	gdb *gorm.DB,
+	findingID uint,
+	maximum string,
+	source FindingSource,
+	by string,
+) (string, error) {
+	if maximum != "" && rank(SeverityLevels, maximum) == 0 {
+		return "", fmt.Errorf("severity cap %q is invalid", maximum)
+	}
+
+	var effective string
+	err := retryFindingWrite(gdb, findingID, func(tx *gorm.DB) error {
+		var f Finding
+		if err := tx.First(&f, findingID).Error; err != nil {
+			return fmt.Errorf("load finding %d: %w", findingID, err)
+		}
+		effective = f.Severity
+		if maximum == "" || rank(SeverityLevels, f.Severity) == 0 || !SeverityAtLeast(f.Severity, maximum) {
+			return nil
+		}
+		effective = maximum
+		if f.Severity == maximum {
+			return nil
+		}
+		if err := conditionalFindingUpdate(tx, f.ID, "severity", f.Severity, maximum); err != nil {
+			return fmt.Errorf("update severity: %w", err)
+		}
+		return tx.Create(&FindingHistory{
+			FindingID: f.ID,
+			Field:     "severity",
+			OldValue:  f.Severity,
+			NewValue:  maximum,
+			Source:    source,
+			By:        by,
+			CreatedAt: time.Now(),
+		}).Error
+	})
+	return effective, err
+}
+
 // UpsertFindingDependent records the current exposure verdict for one
 // finding/dependent pair. The pair has a database unique index, so using the
 // same conflict target as that index makes concurrent writers update the row

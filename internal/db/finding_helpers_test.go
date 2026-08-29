@@ -70,6 +70,60 @@ func TestSeverityAtLeast(t *testing.T) {
 	}
 }
 
+func TestApplyFindingSeverityCap(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		severity    string
+		maximum     string
+		want        string
+		wantHistory int64
+	}{
+		{name: "critical is capped", severity: "Critical", maximum: "Medium", want: "Medium", wantHistory: 1},
+		{name: "equal severity is unchanged", severity: "Medium", maximum: "Medium", want: "Medium"},
+		{name: "lower severity is never raised", severity: "Low", maximum: "Medium", want: "Low"},
+		{name: "unknown severity is unchanged", severity: "UNKNOWN", maximum: "Medium", want: "UNKNOWN"},
+		{name: "empty cap only reads", severity: "High", want: "High"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gdb := newTestDB(t)
+			finding := seedFinding(t, gdb)
+			if err := gdb.Model(&Finding{}).Where("id = ?", finding.ID).Update("severity", tc.severity).Error; err != nil {
+				t.Fatal(err)
+			}
+
+			got, err := ApplyFindingSeverityCap(gdb, finding.ID, tc.maximum, SourceSystem, "verify")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("effective severity = %q, want %q", got, tc.want)
+			}
+			var refreshed Finding
+			if err := gdb.First(&refreshed, finding.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if refreshed.Severity != tc.want {
+				t.Fatalf("stored severity = %q, want %q", refreshed.Severity, tc.want)
+			}
+			var historyCount int64
+			if err := gdb.Model(&FindingHistory{}).Where("finding_id = ? AND field = ?", finding.ID, severityField).Count(&historyCount).Error; err != nil {
+				t.Fatal(err)
+			}
+			if historyCount != tc.wantHistory {
+				t.Fatalf("history rows = %d, want %d", historyCount, tc.wantHistory)
+			}
+		})
+	}
+}
+
+func TestApplyFindingSeverityCapRejectsInvalidMaximum(t *testing.T) {
+	gdb := newTestDB(t)
+	finding := seedFinding(t, gdb)
+	if _, err := ApplyFindingSeverityCap(gdb, finding.ID, "UNKNOWN", SourceSystem, "verify"); err == nil {
+		t.Fatal("expected invalid severity cap to fail")
+	}
+}
+
 func TestValidDependentCampaignStatus(t *testing.T) {
 	for _, status := range append([]DependentCampaignStatus{""}, DependentCampaignStatuses...) {
 		if !ValidDependentCampaignStatus(status) {
