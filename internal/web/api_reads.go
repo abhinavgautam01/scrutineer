@@ -14,6 +14,8 @@ import (
 const (
 	repositoryReadDefaultLimit = 200
 	repositoryReadMaxLimit     = 1000
+	severityCapsKey            = "severity_caps"
+	severityCalibrationKey     = "severity_calibration_incomplete"
 )
 
 // The read endpoints below expose the structured rows scrutineer already
@@ -415,7 +417,7 @@ func (s *Server) apiGetFinding(w http.ResponseWriter, r *http.Request) {
 // blobs it never emits. Keep in sync with findingSummary.
 var findingSummaryColumns = []string{
 	"id", "scan_id", "repository_id", "finding_id", "commit", "sinks", "title",
-	"severity", "status", "cwe", "location", "vid", "affected", "reachability",
+	"severity", "severity_caps", "severity_calibration_incomplete", "status", "cwe", "location", "vid", "affected", "reachability",
 	"quality_tier", "cve_id", "ghsa_id", "cvss_vector", "cvss_score",
 	"fix_version", "fix_commit", "resolution", "assignee", "missed_count",
 	"dup_check", "novelty", "novelty_checked_commit", "novelty_checked_at",
@@ -432,6 +434,8 @@ func findingSummary(f db.Finding) map[string]any {
 		"sinks":                  f.Sinks,
 		"title":                  f.Title,
 		"severity":               f.Severity,
+		severityCapsKey:          f.SeverityCapList(),
+		severityCalibrationKey:   f.SeverityCalibrationIncomplete,
 		statusKey:                string(f.Status),
 		"cwe":                    f.CWE,
 		"location":               f.Location,

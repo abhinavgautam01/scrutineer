@@ -81,6 +81,17 @@ func TestSQLStringLiteral(t *testing.T) {
 	}
 }
 
+func TestFindingSeverityCapList(t *testing.T) {
+	finding := Finding{SeverityCaps: " authz held \n\nsandbox held\n"}
+	want := []string{"authz held", "sandbox held"}
+	if got := finding.SeverityCapList(); !slices.Equal(got, want) {
+		t.Fatalf("SeverityCapList() = %v, want %v", got, want)
+	}
+	if got := (Finding{}).SeverityCapList(); got == nil || len(got) != 0 {
+		t.Fatalf("empty SeverityCapList() = %#v, want non-nil empty list", got)
+	}
+}
+
 func TestSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src.db")

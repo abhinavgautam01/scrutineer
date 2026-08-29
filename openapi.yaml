@@ -1584,6 +1584,8 @@ components:
         sinks:         { type: string, description: Comma-joined sink ids. }
         title:         { type: string }
         severity:      { type: string, enum: [Critical, High, Medium, Low] }
+        severity_caps: { type: array, items: { type: string }, description: "Deterministic reasons that currently cap severity, derived from the latest reconciled verification control assessment." }
+        severity_calibration_incomplete: { type: boolean, description: "True when unknown or unavailable control evidence prevented complete severity calibration; unknown inputs never lower severity." }
         status:        { type: string }
         cwe:           { type: string }
         location:      { type: string }
