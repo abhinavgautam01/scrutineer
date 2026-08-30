@@ -19,33 +19,33 @@ func TestSweepOrphanScanArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	createScan := func(status db.ScanStatus, resumedFrom *uint) db.Scan {
+	createScan := func(scan db.Scan) db.Scan {
 		t.Helper()
-		scan := db.Scan{
-			RepositoryID:      repo.ID,
-			Kind:              JobSkill,
-			Status:            status,
-			ResumedFromScanID: resumedFrom,
-		}
+		scan.RepositoryID = repo.ID
+		scan.Kind = JobSkill
 		if err := gdb.Create(&scan).Error; err != nil {
 			t.Fatal(err)
 		}
 		return scan
 	}
 
-	crashed := createScan(db.ScanRunning, nil)
-	historical := createScan(db.ScanFailed, nil)
-	queuedRoot := createScan(db.ScanFailed, nil)
-	createScan(db.ScanQueued, &queuedRoot.ID)
-	pausedRoot := createScan(db.ScanFailed, nil)
-	createScan(db.ScanPaused, &pausedRoot.ID)
-	queued := createScan(db.ScanQueued, nil)
-	stateOnly := createScan(db.ScanFailed, nil)
+	crashed := createScan(db.Scan{Status: db.ScanRunning, SessionID: "crashed-session"})
+	historical := createScan(db.Scan{Status: db.ScanFailed})
+	maxTurns := createScan(db.Scan{
+		Status: db.ScanDone, SessionID: "max-turns-session", MaxTurnsHit: true,
+	})
+	queuedRoot := createScan(db.Scan{Status: db.ScanFailed})
+	createScan(db.Scan{Status: db.ScanQueued, ResumedFromScanID: &queuedRoot.ID})
+	pausedRoot := createScan(db.Scan{Status: db.ScanFailed})
+	createScan(db.Scan{Status: db.ScanPaused, ResumedFromScanID: &pausedRoot.ID})
+	queued := createScan(db.Scan{Status: db.ScanQueued})
+	stateOnly := createScan(db.Scan{Status: db.ScanFailed, SessionID: "state-only-session"})
 
 	w := &Worker{DB: gdb, DataDir: t.TempDir()}
 	withArtifacts := []uint{
 		crashed.ID,
 		historical.ID,
+		maxTurns.ID,
 		queuedRoot.ID,
 		pausedRoot.ID,
 		queued.ID,
@@ -67,14 +67,16 @@ func TestSweepOrphanScanArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if removed != 2 {
-		t.Fatalf("removed = %d, want 2", removed)
+	if removed != 3 {
+		t.Fatalf("removed = %d, want 3", removed)
 	}
 
-	for _, id := range []uint{crashed.ID, historical.ID} {
+	for _, id := range []uint{crashed.ID, historical.ID, maxTurns.ID} {
 		assertPathMissing(t, w.workRoot(id))
-		assertPathMissing(t, w.harnessStateDirID(id))
 	}
+	assertPathExists(t, w.harnessStateDirID(crashed.ID))
+	assertPathExists(t, w.harnessStateDirID(maxTurns.ID))
+	assertPathMissing(t, w.harnessStateDirID(historical.ID))
 	for _, id := range []uint{queuedRoot.ID, pausedRoot.ID, queued.ID} {
 		assertPathExists(t, w.workRoot(id))
 		assertPathExists(t, w.harnessStateDirID(id))
@@ -82,6 +84,40 @@ func TestSweepOrphanScanArtifacts(t *testing.T) {
 	assertPathExists(t, w.harnessStateDirID(stateOnly.ID))
 	assertPathExists(t, filepath.Join(w.DataDir, "scan-not-an-id"))
 	assertPathExists(t, filepath.Join(w.DataDir, "scan-9999"))
+}
+
+func TestSweepOrphanScanArtifactsRemovesNonResumableState(t *testing.T) {
+	gdb, err := db.Open(filepath.Join(t.TempDir(), "sweep.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := db.Repository{URL: "https://example.com/repo", Name: "repo"}
+	if err := gdb.Create(&repo).Error; err != nil {
+		t.Fatal(err)
+	}
+	scan := db.Scan{
+		RepositoryID: repo.ID,
+		Kind:         JobSkill,
+		Status:       db.ScanCancelled,
+		SessionID:    "not-resumable",
+	}
+	if err := gdb.Create(&scan).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	w := &Worker{DB: gdb, DataDir: t.TempDir()}
+	writeScanArtifact(t, w.workRoot(scan.ID))
+	writeScanArtifact(t, w.harnessStateDirID(scan.ID))
+	removed, err := w.sweepOrphanScanArtifacts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1", removed)
+	}
+	for _, path := range []string{w.workRoot(scan.ID), w.harnessStateDirID(scan.ID)} {
+		assertPathMissing(t, path)
+	}
 }
 
 func TestSweepOrphanScanArtifactsMissingRootIsNoop(t *testing.T) {

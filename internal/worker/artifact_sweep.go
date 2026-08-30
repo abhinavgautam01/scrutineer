@@ -13,7 +13,8 @@ import (
 // sweepOrphanScanArtifacts removes workspaces left behind when a process exits
 // before finalizeScan reaches its terminal cleanup. A workspace that still
 // backs an active resume must survive so the resumed harness can find its
-// source tree and session store.
+// source tree and session store. A resumable terminal scan can shed its stale
+// workspace, but keeps the harness state needed by a future retry.
 func (w *Worker) sweepOrphanScanArtifacts() (int, error) {
 	if w.DB == nil || w.DataDir == "" {
 		return 0, nil
@@ -33,7 +34,7 @@ func (w *Worker) sweepOrphanScanArtifacts() (int, error) {
 		if !ok {
 			continue
 		}
-		reap, err := w.scanArtifactsReapable(scanID)
+		reap, preserveState, err := w.scanArtifactSweepDecision(scanID)
 		if err != nil {
 			sweepErr = errors.Join(sweepErr, err)
 			continue
@@ -41,8 +42,14 @@ func (w *Worker) sweepOrphanScanArtifacts() (int, error) {
 		if !reap {
 			continue
 		}
-		if err := w.RemoveScanArtifacts(scanID); err != nil {
-			sweepErr = errors.Join(sweepErr, fmt.Errorf("remove scan %d artifacts: %w", scanID, err))
+		var removeErr error
+		if preserveState {
+			removeErr = os.RemoveAll(w.workRoot(scanID))
+		} else {
+			removeErr = w.RemoveScanArtifacts(scanID)
+		}
+		if removeErr != nil {
+			sweepErr = errors.Join(sweepErr, fmt.Errorf("remove scan %d artifacts: %w", scanID, removeErr))
 			continue
 		}
 		removed++
@@ -65,20 +72,22 @@ func scanWorkspaceEntryID(entry os.DirEntry) (uint, bool) {
 	return uint(id), true
 }
 
-func (w *Worker) scanArtifactsReapable(scanID uint) (bool, error) {
+func (w *Worker) scanArtifactSweepDecision(scanID uint) (reap, preserveState bool, err error) {
 	var scan struct {
-		ID     uint
-		Status db.ScanStatus
+		ID          uint
+		Status      db.ScanStatus
+		SessionID   string
+		MaxTurnsHit bool
 	}
 	if err := w.DB.Model(&db.Scan{}).
-		Select("id, status").
+		Select("id, status, session_id, max_turns_hit").
 		Where("id = ?", scanID).
 		Limit(1).
 		Find(&scan).Error; err != nil {
-		return false, fmt.Errorf("load scan %d for artifact sweep: %w", scanID, err)
+		return false, false, fmt.Errorf("load scan %d for artifact sweep: %w", scanID, err)
 	}
 	if scan.ID == 0 || !scan.Status.Terminal() {
-		return false, nil
+		return false, false, nil
 	}
 
 	var activeResumes int64
@@ -89,7 +98,12 @@ func (w *Worker) scanArtifactsReapable(scanID uint) (bool, error) {
 			db.ScanPaused,
 		}).
 		Count(&activeResumes).Error; err != nil {
-		return false, fmt.Errorf("check scan %d resume references: %w", scanID, err)
+		return false, false, fmt.Errorf("check scan %d resume references: %w", scanID, err)
 	}
-	return activeResumes == 0, nil
+	if activeResumes > 0 {
+		return false, false, nil
+	}
+
+	resumable := scan.Status == db.ScanFailed || (scan.Status == db.ScanDone && scan.MaxTurnsHit)
+	return true, resumable && scan.SessionID != "", nil
 }
