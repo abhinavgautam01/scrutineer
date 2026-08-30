@@ -569,6 +569,11 @@ func (w *Worker) clearSessionStore(scan *db.Scan) {
 func (w *Worker) Register(q *queue.Queue) {
 	w.Queue = q
 	w.migrateLegacyState()
+	if removed, err := w.sweepOrphanScanArtifacts(); err != nil {
+		w.Log.Warn("orphan scan artifact sweep failed", "removed", removed, "err", err)
+	} else if removed > 0 {
+		w.Log.Info("removed orphan scan artifacts", "count", removed)
+	}
 	q.Register(JobSkill, w.wrap(w.doSkill))
 	q.Register(JobExposure, w.wrap(w.doExposure))
 	w.scheduleNextAccountResume()
