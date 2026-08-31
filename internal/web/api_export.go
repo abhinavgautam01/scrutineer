@@ -321,6 +321,7 @@ type sharingFinding struct {
 	BreakingChangeRationale string `json:"breaking_change_rationale,omitempty"`
 	DupCheck                string `json:"dup_check,omitempty"`
 	DisclosureDraft         string `json:"disclosure_draft,omitempty"`
+	DisclosureTitle         string `json:"disclosure_title,omitempty"`
 	SuggestedRecipients     string `json:"suggested_recipients,omitempty"`
 	ExploitedInWild         string `json:"exploited_in_wild,omitempty"`
 	ExploitedInWildEvidence string `json:"exploited_in_wild_evidence,omitempty"`
@@ -441,6 +442,7 @@ func (s *Server) apiExportRepoBundle(w http.ResponseWriter, r *http.Request, rep
 			sf.BreakingChangeRationale = f.BreakingChangeRationale
 			sf.DupCheck = f.DupCheck
 			sf.DisclosureDraft = f.DisclosureDraft
+			sf.DisclosureTitle = f.DisclosureTitle
 			sf.SuggestedRecipients = f.SuggestedRecipients
 			sf.ExploitedInWild = f.ExploitedInWild
 			sf.ExploitedInWildEvidence = f.ExploitedInWildEvidence
@@ -792,6 +794,7 @@ func findingExport(f db.Finding) map[string]any {
 		"fix_commit":           f.FixCommit,
 		"resolution":           string(f.Resolution),
 		"disclosure_draft":     f.DisclosureDraft,
+		"disclosure_title":     f.DisclosureTitle,
 		"suggested_recipients": f.SuggestedRecipients,
 		"assignee":             f.Assignee,
 		"trace":                f.Trace,
