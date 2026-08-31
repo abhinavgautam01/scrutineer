@@ -366,8 +366,7 @@ func (s *Server) scanRetry(w http.ResponseWriter, r *http.Request) {
 // since claude was the only backend before the column existed and the local
 // runner is claude-only.
 func (s *Server) resumeOpts(scan db.Scan) (sessionID string, resumeOf *uint) {
-	resumableStatus := scan.Status == db.ScanFailed || (scan.Status == db.ScanDone && scan.MaxTurnsHit)
-	if !resumableStatus || scan.SessionID == "" {
+	if !scan.Resumable() {
 		return "", nil
 	}
 	scanBackend := scan.Backend

@@ -94,12 +94,7 @@ func scanArtifactEntryID(entry os.DirEntry) (uint, bool) {
 }
 
 func (w *Worker) scanArtifactSweepDecision(scanID uint) (reap, preserveState bool, err error) {
-	var scan struct {
-		ID          uint
-		Status      db.ScanStatus
-		SessionID   string
-		MaxTurnsHit bool
-	}
+	var scan db.Scan
 	if err := w.DB.Model(&db.Scan{}).
 		Select("id, status, session_id, max_turns_hit").
 		Where("id = ?", scanID).
@@ -128,6 +123,5 @@ func (w *Worker) scanArtifactSweepDecision(scanID uint) (reap, preserveState boo
 		return true, false, nil
 	}
 
-	resumable := scan.Status == db.ScanFailed || (scan.Status == db.ScanDone && scan.MaxTurnsHit)
-	return true, resumable && scan.SessionID != "", nil
+	return true, scan.Resumable(), nil
 }
