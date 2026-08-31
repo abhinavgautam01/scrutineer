@@ -106,7 +106,6 @@ func TestSweepOrphanScanArtifactsRemovesNonResumableState(t *testing.T) {
 	}
 
 	w := &Worker{DB: gdb, DataDir: t.TempDir()}
-	writeScanArtifact(t, w.workRoot(scan.ID))
 	writeScanArtifact(t, w.harnessStateDirID(scan.ID))
 	removed, err := w.sweepOrphanScanArtifacts()
 	if err != nil {
@@ -115,9 +114,28 @@ func TestSweepOrphanScanArtifactsRemovesNonResumableState(t *testing.T) {
 	if removed != 1 {
 		t.Fatalf("removed = %d, want 1", removed)
 	}
-	for _, path := range []string{w.workRoot(scan.ID), w.harnessStateDirID(scan.ID)} {
-		assertPathMissing(t, path)
+	assertPathMissing(t, w.harnessStateDirID(scan.ID))
+}
+
+func TestSweepOrphanScanArtifactsRemovesMissingScanRow(t *testing.T) {
+	gdb, err := db.Open(filepath.Join(t.TempDir(), "sweep.db"))
+	if err != nil {
+		t.Fatal(err)
 	}
+	w := &Worker{DB: gdb, DataDir: t.TempDir()}
+	const missingScanID = 404
+	writeScanArtifact(t, w.workRoot(missingScanID))
+	writeScanArtifact(t, w.harnessStateDirID(missingScanID))
+
+	removed, err := w.sweepOrphanScanArtifacts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1", removed)
+	}
+	assertPathMissing(t, w.workRoot(missingScanID))
+	assertPathMissing(t, w.harnessStateDirID(missingScanID))
 }
 
 func TestSweepOrphanScanArtifactsMissingRootIsNoop(t *testing.T) {

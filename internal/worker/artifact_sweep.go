@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -19,27 +20,30 @@ func (w *Worker) sweepOrphanScanArtifacts() (int, error) {
 	if w.DB == nil || w.DataDir == "" {
 		return 0, nil
 	}
-	entries, err := os.ReadDir(w.DataDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return 0, nil
+	workspaceIDs, workspaceErr := scanArtifactIDs(w.DataDir)
+	stateIDs, stateErr := scanArtifactIDs(filepath.Join(w.DataDir, harnessStateDirName))
+	candidates := make(map[uint]bool, len(workspaceIDs)+len(stateIDs))
+	for scanID := range workspaceIDs {
+		candidates[scanID] = true
+	}
+	for scanID := range stateIDs {
+		if _, ok := candidates[scanID]; !ok {
+			candidates[scanID] = false
 		}
-		return 0, fmt.Errorf("read scan workspace root: %w", err)
 	}
 
 	var removed int
-	var sweepErr error
-	for _, entry := range entries {
-		scanID, ok := scanWorkspaceEntryID(entry)
-		if !ok {
-			continue
-		}
+	sweepErr := errors.Join(workspaceErr, stateErr)
+	for scanID, hasWorkspace := range candidates {
 		reap, preserveState, err := w.scanArtifactSweepDecision(scanID)
 		if err != nil {
 			sweepErr = errors.Join(sweepErr, err)
 			continue
 		}
 		if !reap {
+			continue
+		}
+		if preserveState && !hasWorkspace {
 			continue
 		}
 		var removeErr error
@@ -57,7 +61,24 @@ func (w *Worker) sweepOrphanScanArtifacts() (int, error) {
 	return removed, sweepErr
 }
 
-func scanWorkspaceEntryID(entry os.DirEntry) (uint, bool) {
+func scanArtifactIDs(root string) (map[uint]struct{}, error) {
+	ids := make(map[uint]struct{})
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ids, nil
+		}
+		return ids, fmt.Errorf("read scan artifact root %s: %w", root, err)
+	}
+	for _, entry := range entries {
+		if scanID, ok := scanArtifactEntryID(entry); ok {
+			ids[scanID] = struct{}{}
+		}
+	}
+	return ids, nil
+}
+
+func scanArtifactEntryID(entry os.DirEntry) (uint, bool) {
 	if !entry.IsDir() {
 		return 0, false
 	}
@@ -86,7 +107,7 @@ func (w *Worker) scanArtifactSweepDecision(scanID uint) (reap, preserveState boo
 		Find(&scan).Error; err != nil {
 		return false, false, fmt.Errorf("load scan %d for artifact sweep: %w", scanID, err)
 	}
-	if scan.ID == 0 || !scan.Status.Terminal() {
+	if scan.ID != 0 && !scan.Status.Terminal() {
 		return false, false, nil
 	}
 
@@ -102,6 +123,9 @@ func (w *Worker) scanArtifactSweepDecision(scanID uint) (reap, preserveState boo
 	}
 	if activeResumes > 0 {
 		return false, false, nil
+	}
+	if scan.ID == 0 {
+		return true, false, nil
 	}
 
 	resumable := scan.Status == db.ScanFailed || (scan.Status == db.ScanDone && scan.MaxTurnsHit)
