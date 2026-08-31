@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"slices"
 
-	"scrutineer/internal/db"
 	"scrutineer/internal/threatmodel"
 	"scrutineer/internal/verification"
 )
@@ -16,7 +15,6 @@ const controlSeverityCap = "Medium"
 // no-cap result from an ungraded report that must leave the prior projection
 // untouched.
 type findingSeverityCalibration struct {
-	Severity   string
 	Maximum    string
 	Caps       []string
 	Incomplete bool
@@ -74,14 +72,4 @@ func calibrateControlSeverity(
 
 	slices.Sort(result.Caps)
 	return result
-}
-
-func (calibration findingSeverityCalibration) withSeverity(severity string) findingSeverityCalibration {
-	calibration.Severity = severity
-	if !slices.Contains(db.SeverityLevels, severity) {
-		calibration.Incomplete = true
-	} else if calibration.Maximum != "" && db.SeverityAtLeast(severity, calibration.Maximum) {
-		calibration.Severity = calibration.Maximum
-	}
-	return calibration
 }

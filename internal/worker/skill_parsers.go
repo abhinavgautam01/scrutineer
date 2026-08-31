@@ -1195,13 +1195,18 @@ func (w *Worker) recordVerifyOutput(
 			}
 		}
 		if calibration.Evaluated {
-			effectiveSeverity, err := db.ApplyFindingSeverityCap(
+			effectiveSeverity, err := db.ReconcileFindingSeverityCap(
 				tx, f.ID, calibration.Maximum, db.SourceSystem, verifySkillName,
 			)
 			if err != nil {
-				return fmt.Errorf("apply severity cap: %w", err)
+				return fmt.Errorf("reconcile severity cap: %w", err)
 			}
-			calibration = calibration.withSeverity(effectiveSeverity)
+			if !db.SeverityAtLeast(effectiveSeverity, "Low") {
+				calibration.Incomplete = true
+				calibration.Caps = nil
+			} else if calibration.Maximum != "" && !db.SeverityAtLeast(effectiveSeverity, calibration.Maximum) {
+				calibration.Caps = nil
+			}
 			if err := tx.Model(&db.Finding{}).Where("id = ?", f.ID).Updates(map[string]any{
 				"severity_caps":                   strings.Join(calibration.Caps, "\n"),
 				"severity_calibration_incomplete": calibration.Incomplete,

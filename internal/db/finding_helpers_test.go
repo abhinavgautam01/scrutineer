@@ -70,7 +70,7 @@ func TestSeverityAtLeast(t *testing.T) {
 	}
 }
 
-func TestApplyFindingSeverityCap(t *testing.T) {
+func TestReconcileFindingSeverityCap(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		severity    string
@@ -91,7 +91,7 @@ func TestApplyFindingSeverityCap(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			got, err := ApplyFindingSeverityCap(gdb, finding.ID, tc.maximum, SourceSystem, "verify")
+			got, err := ReconcileFindingSeverityCap(gdb, finding.ID, tc.maximum, SourceSystem, "verify")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -116,10 +116,64 @@ func TestApplyFindingSeverityCap(t *testing.T) {
 	}
 }
 
-func TestApplyFindingSeverityCapRejectsInvalidMaximum(t *testing.T) {
+func TestReconcileFindingSeverityCapRestoresLatestOwnedWrite(t *testing.T) {
 	gdb := newTestDB(t)
 	finding := seedFinding(t, gdb)
-	if _, err := ApplyFindingSeverityCap(gdb, finding.ID, "UNKNOWN", SourceSystem, "verify"); err == nil {
+	if err := gdb.Model(&Finding{}).Where("id = ?", finding.ID).Update("severity", "Critical").Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReconcileFindingSeverityCap(gdb, finding.ID, "Medium", SourceSystem, "verify"); err != nil {
+		t.Fatal(err)
+	}
+	if err := gdb.Model(&Finding{}).Where("id = ?", finding.ID).Update("severity_caps", "authorization held").Error; err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ReconcileFindingSeverityCap(gdb, finding.ID, "", SourceSystem, "verify")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "Critical" {
+		t.Fatalf("effective severity = %q, want Critical", got)
+	}
+	var history []FindingHistory
+	if err := gdb.Where("finding_id = ? AND field = ?", finding.ID, severityField).Order("id").Find(&history).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 2 || history[1].OldValue != "Medium" || history[1].NewValue != "Critical" {
+		t.Fatalf("severity history = %+v", history)
+	}
+}
+
+func TestReconcileFindingSeverityCapPreservesLaterSeverityWrite(t *testing.T) {
+	gdb := newTestDB(t)
+	finding := seedFinding(t, gdb)
+	if err := gdb.Model(&Finding{}).Where("id = ?", finding.ID).Update("severity", "Critical").Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReconcileFindingSeverityCap(gdb, finding.ID, "Medium", SourceSystem, "verify"); err != nil {
+		t.Fatal(err)
+	}
+	if err := gdb.Model(&Finding{}).Where("id = ?", finding.ID).Update("severity_caps", "authorization held").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteFindingField(gdb, finding.ID, severityField, "Low", SourceAnalyst, "reviewer"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ReconcileFindingSeverityCap(gdb, finding.ID, "", SourceSystem, "verify")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "Low" {
+		t.Fatalf("effective severity = %q, want Low", got)
+	}
+}
+
+func TestReconcileFindingSeverityCapRejectsInvalidMaximum(t *testing.T) {
+	gdb := newTestDB(t)
+	finding := seedFinding(t, gdb)
+	if _, err := ReconcileFindingSeverityCap(gdb, finding.ID, "UNKNOWN", SourceSystem, "verify"); err == nil {
 		t.Fatal("expected invalid severity cap to fail")
 	}
 }

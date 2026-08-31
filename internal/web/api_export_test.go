@@ -1332,7 +1332,8 @@ func TestExportFindings_carriesDBFields(t *testing.T) {
 	s.DB.Create(&db.Finding{
 		ScanID: scan.ID, RepositoryID: repo.ID, Commit: "abc123", SubPath: "core",
 		Fingerprint: "fp-1", LastSeenScanID: scan.ID, LastSeenCommit: "abc123", SeenCount: 3,
-		FindingID: "F1", Title: "boom", Severity: sevHigh, Status: db.FindingTriaged,
+		FindingID: "F1", Title: "boom", Severity: sevHigh, SeverityCaps: "authorization held",
+		SeverityCalibrationIncomplete: true, Status: db.FindingTriaged,
 		VID:   "VID-aaaa-bbbb-cccc-dddd-eeee-ffff",
 		Trace: "t", Boundary: "b", Validation: "v", PriorArt: "p", Reach: "r", Rating: "x",
 		DisclosureDraft: "d",
@@ -1350,7 +1351,7 @@ func TestExportFindings_carriesDBFields(t *testing.T) {
 	want := []string{
 		"id", "scan_id", "repository_id", "commit", "sub_path",
 		"fingerprint", "last_seen_scan_id", "last_seen_commit", "seen_count", "vid",
-		"finding_id", "sinks", "title", "severity", "status", "cwe", "location", "affected",
+		"finding_id", "sinks", "title", "severity", "severity_caps", "severity_calibration_incomplete", "status", "cwe", "location", "affected",
 		"reachability", "quality_tier",
 		"cve_id", "cvss_vector", "cvss_score", "fix_version", "fix_commit",
 		"resolution", "disclosure_draft", "disclosure_title", "suggested_recipients", "assignee",
@@ -1361,6 +1362,12 @@ func TestExportFindings_carriesDBFields(t *testing.T) {
 		if _, ok := rows[0][k]; !ok {
 			t.Errorf("missing key %q in finding export", k)
 		}
+	}
+	if caps, ok := rows[0]["severity_caps"].([]any); !ok || len(caps) != 1 || caps[0] != "authorization held" {
+		t.Errorf("severity_caps = %#v, want one exported cap", rows[0]["severity_caps"])
+	}
+	if rows[0]["severity_calibration_incomplete"] != true {
+		t.Errorf("severity_calibration_incomplete = %#v, want true", rows[0]["severity_calibration_incomplete"])
 	}
 }
 
