@@ -18,7 +18,7 @@ import (
 func TestCalibrateControlSeverity(t *testing.T) {
 	authz := threatmodel.Control{ID: "authz", Kind: threatmodel.KindAuthorization}
 	sandbox := threatmodel.Control{ID: "sandbox", Kind: threatmodel.KindSandbox}
-	unknown := threatmodel.Control{ID: "custom", Kind: "hardware-boundary"}
+	rateLimit := threatmodel.Control{ID: "rate-limit", Kind: threatmodel.KindRateLimit}
 
 	for _, tc := range []struct {
 		name           string
@@ -47,9 +47,8 @@ func TestCalibrateControlSeverity(t *testing.T) {
 			wantIncomplete: true,
 		},
 		{
-			name:     "unknown held control is incomplete",
-			controls: calibrationControls(unknown), gate: calibrationGate("custom", "held"),
-			wantIncomplete: true,
+			name:     "held non-cap control is ignored",
+			controls: calibrationControls(rateLimit), gate: calibrationGate("rate-limit", "held"),
 		},
 		{
 			name:           "unavailable controls are incomplete",
@@ -318,7 +317,14 @@ func TestRecordVerifyOutputAppliesCapToLatestSeverity(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := &Worker{DB: gdb, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	if err := w.recordVerifyOutput(&scan, staleFinding, result, report, rubric, score, gradingError, "", calibration); err != nil {
+	if err := w.recordVerifyOutput(&scan, staleFinding, verifyRecord{
+		result:       result,
+		report:       report,
+		rubric:       rubric,
+		score:        score,
+		gradingError: gradingError,
+		calibration:  calibration,
+	}); err != nil {
 		t.Fatal(err)
 	}
 

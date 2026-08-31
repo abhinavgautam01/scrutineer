@@ -125,7 +125,7 @@ func WriteFindingField(gdb *gorm.DB, findingID uint, field, newValue string, sou
 // from any other source remains authoritative and is never undone.
 //
 // Returning the effective value lets callers derive calibration state from
-// the same retry-protected read that decided the write.
+// the same read that decided the write.
 func ReconcileFindingSeverityCap(
 	gdb *gorm.DB,
 	findingID uint,

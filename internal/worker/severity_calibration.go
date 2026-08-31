@@ -63,7 +63,6 @@ func calibrateControlSeverity(
 		case threatmodel.KindSandbox:
 			reason = fmt.Sprintf("sandbox control %q held; severity capped at %s", control.ID, controlSeverityCap)
 		default:
-			result.Incomplete = true
 			continue
 		}
 		result.Caps = append(result.Caps, reason)

@@ -215,7 +215,7 @@ One row per vulnerability. Lifecycle columns are mutated through `db.WriteFindin
 | title | text | |
 | severity | text | `Critical`, `High`, `Medium`, `Low`. |
 | severity_caps | text | Newline-delimited deterministic reasons that cap the current severity. Written only from a host-reconciled verification control assessment. |
-| severity_calibration_incomplete | boolean | True when an unknown, unresolved, not-attempted, or unavailable control input prevented complete calibration. Unknown inputs never lower severity. |
+| severity_calibration_incomplete | boolean | True when an unknown severity, unresolved or not-attempted assessment, or unavailable control resolution prevented complete calibration. Unknown inputs never lower severity. |
 | confidence | text | `high`, `medium`, `low`; how certain the audit is. |
 | status | text | Lifecycle state: `new`, `enriched`, `triaged`, `ready`, `reported`, `acknowledged`, `fixed`, `published`, `rejected`, `duplicate`. |
 | cwe | text | e.g. `CWE-352`. Tooltips come from the embedded MITRE catalogue. |

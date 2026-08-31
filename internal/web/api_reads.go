@@ -14,8 +14,6 @@ import (
 const (
 	repositoryReadDefaultLimit = 200
 	repositoryReadMaxLimit     = 1000
-	severityCapsKey            = "severity_caps"
-	severityCalibrationKey     = "severity_calibration_incomplete"
 )
 
 // The read endpoints below expose the structured rows scrutineer already
@@ -426,36 +424,36 @@ var findingSummaryColumns = []string{
 
 func findingSummary(f db.Finding) map[string]any {
 	return map[string]any{
-		"id":                     f.ID,
-		"scan_id":                f.ScanID,
-		"repository_id":          f.RepositoryID,
-		"finding_id":             f.FindingID,
-		"commit":                 f.Commit,
-		"sinks":                  f.Sinks,
-		"title":                  f.Title,
-		"severity":               f.Severity,
-		severityCapsKey:          f.SeverityCapList(),
-		severityCalibrationKey:   f.SeverityCalibrationIncomplete,
-		statusKey:                string(f.Status),
-		"cwe":                    f.CWE,
-		"location":               f.Location,
-		"vid":                    f.VID,
-		"affected":               f.Affected,
-		"reachability":           f.Reachability,
-		"quality_tier":           f.QualityTier,
-		"cve_id":                 f.CVEID,
-		"ghsa_id":                f.GHSAID,
-		"cvss_vector":            f.CVSSVector,
-		"cvss_score":             f.CVSSScore,
-		"fix_version":            f.FixVersion,
-		"fix_commit":             f.FixCommit,
-		"resolution":             string(f.Resolution),
-		"assignee":               f.Assignee,
-		"missed_count":           f.MissedCount,
-		"dup_check":              f.DupCheck,
-		"novelty":                string(f.Novelty),
-		"novelty_checked_commit": f.NoveltyCheckedCommit,
-		"novelty_checked_at":     f.NoveltyCheckedAt,
-		"production_viability":   f.ProductionViability,
+		"id":                              f.ID,
+		"scan_id":                         f.ScanID,
+		"repository_id":                   f.RepositoryID,
+		"finding_id":                      f.FindingID,
+		"commit":                          f.Commit,
+		"sinks":                           f.Sinks,
+		"title":                           f.Title,
+		"severity":                        f.Severity,
+		"severity_caps":                   f.SeverityCapList(),
+		"severity_calibration_incomplete": f.SeverityCalibrationIncomplete,
+		statusKey:                         string(f.Status),
+		"cwe":                             f.CWE,
+		"location":                        f.Location,
+		"vid":                             f.VID,
+		"affected":                        f.Affected,
+		"reachability":                    f.Reachability,
+		"quality_tier":                    f.QualityTier,
+		"cve_id":                          f.CVEID,
+		"ghsa_id":                         f.GHSAID,
+		"cvss_vector":                     f.CVSSVector,
+		"cvss_score":                      f.CVSSScore,
+		"fix_version":                     f.FixVersion,
+		"fix_commit":                      f.FixCommit,
+		"resolution":                      string(f.Resolution),
+		"assignee":                        f.Assignee,
+		"missed_count":                    f.MissedCount,
+		"dup_check":                       f.DupCheck,
+		"novelty":                         string(f.Novelty),
+		"novelty_checked_commit":          f.NoveltyCheckedCommit,
+		"novelty_checked_at":              f.NoveltyCheckedAt,
+		"production_viability":            f.ProductionViability,
 	}
 }
