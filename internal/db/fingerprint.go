@@ -3,6 +3,7 @@ package db
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strings"
 
 	"gorm.io/gorm"
@@ -66,8 +67,9 @@ func normaliseLocation(loc string) string {
 // BackfillFindingFingerprints fills Finding.Fingerprint for rows created
 // before the column existed, joining through Scan for skill_name. It does
 // not merge existing duplicates; it just sets the column so future scans
-// dedupe against them. Safe to call on every startup.
-func BackfillFindingFingerprints(gdb *gorm.DB) {
+// dedupe against them. The transaction prevents a failed row update from
+// leaving a partially completed backfill. Safe to call on every startup.
+func BackfillFindingFingerprints(gdb *gorm.DB) error {
 	type row struct {
 		ID        uint
 		SubPath   string
@@ -76,20 +78,28 @@ func BackfillFindingFingerprints(gdb *gorm.DB) {
 		Title     string
 		SkillName string
 	}
-	var rows []row
-	gdb.Raw(`
-		SELECT f.id, f.sub_path, f.cwe, f.location, f.title, s.skill_name
-		FROM findings f JOIN scans s ON s.id = f.scan_id
-		WHERE f.fingerprint IS NULL OR f.fingerprint = ''
-	`).Scan(&rows)
-	for _, r := range rows {
-		fp := FingerprintFinding(r.SkillName, r.SubPath, r.CWE, r.Location, r.Title)
-		gdb.Model(&Finding{}).Where("id = ?", r.ID).
-			Updates(map[string]any{
-				"fingerprint":       fp,
-				"last_seen_scan_id": gorm.Expr("COALESCE(NULLIF(last_seen_scan_id, 0), scan_id)"),
-				"last_seen_commit":  gorm.Expr(`COALESCE(NULLIF(last_seen_commit, ''), "commit")`),
-				"seen_count":        gorm.Expr("CASE WHEN seen_count = 0 THEN 1 ELSE seen_count END"),
-			})
-	}
+	return gdb.Transaction(func(tx *gorm.DB) error {
+		var rows []row
+		if err := tx.Raw(`
+			SELECT f.id, f.sub_path, f.cwe, f.location, f.title, s.skill_name
+			FROM findings f JOIN scans s ON s.id = f.scan_id
+			WHERE f.fingerprint IS NULL OR f.fingerprint = ''
+			ORDER BY f.id
+		`).Scan(&rows).Error; err != nil {
+			return fmt.Errorf("select findings for fingerprint backfill: %w", err)
+		}
+		for _, r := range rows {
+			fp := FingerprintFinding(r.SkillName, r.SubPath, r.CWE, r.Location, r.Title)
+			if err := tx.Model(&Finding{}).Where("id = ?", r.ID).
+				Updates(map[string]any{
+					"fingerprint":       fp,
+					"last_seen_scan_id": gorm.Expr("COALESCE(NULLIF(last_seen_scan_id, 0), scan_id)"),
+					"last_seen_commit":  gorm.Expr(`COALESCE(NULLIF(last_seen_commit, ''), "commit")`),
+					"seen_count":        gorm.Expr("CASE WHEN seen_count = 0 THEN 1 ELSE seen_count END"),
+				}).Error; err != nil {
+				return fmt.Errorf("update fingerprint for finding %d: %w", r.ID, err)
+			}
+		}
+		return nil
+	})
 }

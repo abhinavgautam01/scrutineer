@@ -617,7 +617,9 @@ func run(log *slog.Logger) error {
 	}
 	db.BackfillFindings(gdb)
 	db.BackfillFindingRepository(gdb)
-	db.BackfillFindingFingerprints(gdb)
+	if err := db.BackfillFindingFingerprints(gdb); err != nil {
+		return fmt.Errorf("backfill finding fingerprints: %w", err)
+	}
 	db.BackfillStatusPriority(gdb)
 	worker.BackfillRepoDiskUsage(gdb, f.dataDir)
 	if err := db.SeedDefaultLabels(gdb); err != nil {
