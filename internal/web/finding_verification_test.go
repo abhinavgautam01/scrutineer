@@ -70,6 +70,9 @@ func TestLoadFindingVerificationViewsToleratesUngradedRow(t *testing.T) {
 	if views[1].ControlBypass == nil || views[1].ControlBypass.UnavailableReason != report.Criteria.ControlBypass.UnavailableReason {
 		t.Errorf("graded control bypass = %+v, want unavailable reason", views[1].ControlBypass)
 	}
+	if len(views[1].Prerequisites) != 5 || views[1].Prerequisites[0].Assessment.Value != "remote_unauthenticated" {
+		t.Errorf("graded prerequisites = %+v", views[1].Prerequisites)
+	}
 }
 
 func completeVerificationReport() verification.Report {
@@ -93,6 +96,13 @@ func completeVerificationReport() verification.Report {
 				{ID: "AT3", ParentID: &entryPoint, Kind: "sink", Description: "Reach parser sink", Status: "satisfied", Evidence: "parser.go:42"},
 			},
 			Blockers: []string{},
+		},
+		SeverityPrerequisites: &verification.SeverityPrerequisites{
+			AttackerPosition:   verification.PrerequisiteValue{Value: "remote_unauthenticated", Evidence: "public API accepts remote input"},
+			UserInteraction:    verification.PrerequisiteValue{Value: "none", Evidence: "request processing needs no victim action"},
+			OutcomeDeterminism: verification.PrerequisiteValue{Value: "deterministic", Evidence: "3/3 attempts reach the same sink"},
+			Impact:             verification.PrerequisiteValue{Value: "code_execution_or_equivalent", Evidence: "attempts execute attacker-controlled code"},
+			ExistingCapability: verification.PrerequisiteValue{Value: "none", Evidence: "attacker starts without host access"},
 		},
 		Attempts: []verification.Attempt{
 			{Number: 1, Outcome: "reproduced", Evidence: "same panic", FailureClass: "panic", CrashSite: "parser.go:42"},

@@ -25,6 +25,7 @@ func completeReport() Report {
 			},
 			Blockers: []string{},
 		},
+		SeverityPrerequisites: testSeverityPrerequisites("remote_unauthenticated"),
 		Attempts: []Attempt{
 			{Number: 1, Outcome: "reproduced", Evidence: "boom", FailureClass: "panic", CrashSite: "parser.go:42"},
 			{Number: 2, Outcome: "reproduced", Evidence: "boom", FailureClass: "panic", CrashSite: "parser.go:42"},
@@ -38,6 +39,16 @@ func completeReport() Report {
 			Deterministic:                   criterion,
 			ControlBypass:                   &ControlBypass{MatchedControls: []string{}, Assessments: []ControlAssessment{}},
 		},
+	}
+}
+
+func testSeverityPrerequisites(attackerPosition string) *SeverityPrerequisites {
+	return &SeverityPrerequisites{
+		AttackerPosition:   PrerequisiteValue{Value: attackerPosition, Evidence: "public API accepts remote input"},
+		UserInteraction:    PrerequisiteValue{Value: "none", Evidence: "request processing needs no victim action"},
+		OutcomeDeterminism: PrerequisiteValue{Value: "deterministic", Evidence: "3/3 attempts reach the same sink"},
+		Impact:             PrerequisiteValue{Value: "code_execution_or_equivalent", Evidence: "attempts execute attacker-controlled code"},
+		ExistingCapability: PrerequisiteValue{Value: "none", Evidence: "attacker starts without host access"},
 	}
 }
 
@@ -100,6 +111,83 @@ func TestParseAcceptsPriorRubricWithoutControlBypass(t *testing.T) {
 	}
 	if parsed.Criteria.ControlBypass != nil {
 		t.Fatalf("control bypass = %+v, want nil", parsed.Criteria.ControlBypass)
+	}
+}
+
+func TestParseAcceptsPriorRubricWithoutSeverityPrerequisites(t *testing.T) {
+	report := completeReport()
+	report.SeverityPrerequisites = nil
+	raw, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.SeverityPrerequisites != nil {
+		t.Fatalf("severity prerequisites = %+v, want nil", parsed.SeverityPrerequisites)
+	}
+}
+
+func TestReportValidateSeverityPrerequisites(t *testing.T) {
+	tests := []struct {
+		name   string
+		status string
+		edit   func(*SeverityPrerequisites)
+		want   string
+	}{
+		{
+			name: "invalid value",
+			edit: func(p *SeverityPrerequisites) { p.AttackerPosition.Value = "internet" },
+			want: `attacker_position.value "internet" is invalid`,
+		},
+		{
+			name: "empty evidence",
+			edit: func(p *SeverityPrerequisites) { p.Impact.Evidence = " " },
+			want: "impact.evidence is empty",
+		},
+		{
+			name:   "active report cannot skip",
+			status: "confirmed",
+			edit:   func(p *SeverityPrerequisites) { p.UserInteraction.Value = "not_attempted" },
+			want:   "does not permit severity_prerequisites.user_interaction.value not_attempted",
+		},
+		{
+			name:   "not attempted report must skip every row",
+			status: "not_attempted",
+			want:   "requires severity_prerequisites.attacker_position.value not_attempted",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			report := completeReport()
+			if tc.status != "" {
+				report.Status = tc.status
+			}
+			if tc.edit != nil {
+				tc.edit(report.SeverityPrerequisites)
+			}
+			if err := report.validateSeverityPrerequisites(); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("validateSeverityPrerequisites() = %v, want error containing %q", err, tc.want)
+			}
+		})
+	}
+
+	report := completeReport()
+	report.Status = "not_attempted"
+	for _, row := range []*PrerequisiteValue{
+		&report.SeverityPrerequisites.AttackerPosition,
+		&report.SeverityPrerequisites.UserInteraction,
+		&report.SeverityPrerequisites.OutcomeDeterminism,
+		&report.SeverityPrerequisites.Impact,
+		&report.SeverityPrerequisites.ExistingCapability,
+	} {
+		row.Value = "not_attempted"
+		row.Evidence = "setup failed before evaluation"
+	}
+	if err := report.validateSeverityPrerequisites(); err != nil {
+		t.Fatal(err)
 	}
 }
 

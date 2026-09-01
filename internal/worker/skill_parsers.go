@@ -951,7 +951,7 @@ func (w *Worker) parseVerifyOutput(scan *db.Scan, report string, emit func(Event
 			rubric = nil
 			score = nil
 		} else {
-			calibration = calibrateControlSeverity(controls, rubric.Criteria.ControlBypass)
+			calibration = calibrateFindingSeverity(controls, rubric.Criteria.ControlBypass, rubric.SeverityPrerequisites)
 		}
 	}
 	nextStatus, err := verifyNextStatus(f, scan, result, gradingError)
@@ -1079,6 +1079,9 @@ func decodeVerifyOutput(report string) (verifyOutput, *verification.Report, *flo
 	if err != nil {
 		return result, nil, nil, err.Error(), nil
 	}
+	if rubric.SeverityPrerequisites == nil {
+		return result, nil, nil, "verify report requires severity_prerequisites", nil
+	}
 	score := rubric.Score()
 	return result, &rubric, &score, "", nil
 }
@@ -1139,6 +1142,7 @@ func verifyNote(
 				fmt.Fprintf(&b, "attack blocker: %s\n", blocker)
 			}
 		}
+		writeSeverityPrerequisites(&b, rubric.SeverityPrerequisites)
 		for _, named := range rubric.Criteria.List() {
 			fmt.Fprintf(&b, "criterion: %s = %s\n", named.Name, named.Criterion.Verdict)
 		}
@@ -1175,6 +1179,16 @@ func verifyNote(
 		fmt.Fprintf(&b, "\n%s\n", strings.TrimSpace(result.Notes))
 	}
 	return b.String()
+}
+
+func writeSeverityPrerequisites(b *strings.Builder, prerequisites *verification.SeverityPrerequisites) {
+	if prerequisites == nil {
+		return
+	}
+	for _, prerequisite := range prerequisites.List() {
+		fmt.Fprintf(b, "severity prerequisite: %s = %s: %s\n", prerequisite.Name,
+			prerequisite.Assessment.Value, prerequisite.Assessment.Evidence)
+	}
 }
 
 type verifyRecord struct {

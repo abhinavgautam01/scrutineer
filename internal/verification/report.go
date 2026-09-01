@@ -27,14 +27,15 @@ var ErrMissingRubric = errors.New("verify report has no grading rubric")
 
 // Report is the structured output of the verify skill.
 type Report struct {
-	Status     string      `json:"status"`
-	Preflight  *Preflight  `json:"preflight,omitempty"`
-	AttackTree *AttackTree `json:"attack_tree,omitempty"`
-	Attempts   []Attempt   `json:"attempts"`
-	Criteria   *Criteria   `json:"criteria,omitempty"`
-	Reproducer string      `json:"reproducer,omitempty"`
-	Evidence   string      `json:"evidence,omitempty"`
-	Notes      string      `json:"notes,omitempty"`
+	Status                string                 `json:"status"`
+	Preflight             *Preflight             `json:"preflight,omitempty"`
+	AttackTree            *AttackTree            `json:"attack_tree,omitempty"`
+	SeverityPrerequisites *SeverityPrerequisites `json:"severity_prerequisites,omitempty"`
+	Attempts              []Attempt              `json:"attempts"`
+	Criteria              *Criteria              `json:"criteria,omitempty"`
+	Reproducer            string                 `json:"reproducer,omitempty"`
+	Evidence              string                 `json:"evidence,omitempty"`
+	Notes                 string                 `json:"notes,omitempty"`
 }
 
 // Preflight records whether the supplied reproduction is safe to execute in
@@ -65,6 +66,43 @@ type AttackTreeNode struct {
 	Description string  `json:"description"`
 	Status      string  `json:"status"`
 	Evidence    string  `json:"evidence"`
+}
+
+// SeverityPrerequisites records the evidence-backed inputs used by the host's
+// deterministic severity-cap rules. It is optional in the Go model so stored
+// verification reports written before the contract was introduced remain
+// readable; schema.json and live ingestion require it for new reports.
+type SeverityPrerequisites struct {
+	AttackerPosition   PrerequisiteValue `json:"attacker_position"`
+	UserInteraction    PrerequisiteValue `json:"user_interaction"`
+	OutcomeDeterminism PrerequisiteValue `json:"outcome_determinism"`
+	Impact             PrerequisiteValue `json:"impact"`
+	ExistingCapability PrerequisiteValue `json:"existing_capability"`
+}
+
+// PrerequisiteValue pairs one closed classification with the concrete source
+// or runtime evidence that supports it. Unknown and not_attempted still require
+// evidence naming the proof gap or the reason evaluation could not start.
+type PrerequisiteValue struct {
+	Value    string `json:"value"`
+	Evidence string `json:"evidence"`
+}
+
+// NamedPrerequisite supplies stable display labels for verification history.
+type NamedPrerequisite struct {
+	Name       string
+	Assessment PrerequisiteValue
+}
+
+// List returns the fixed prerequisite rows in report order.
+func (p SeverityPrerequisites) List() []NamedPrerequisite {
+	return []NamedPrerequisite{
+		{Name: "Attacker position", Assessment: p.AttackerPosition},
+		{Name: "User interaction", Assessment: p.UserInteraction},
+		{Name: "Outcome determinism", Assessment: p.OutcomeDeterminism},
+		{Name: "Impact", Assessment: p.Impact},
+		{Name: "Existing capability", Assessment: p.ExistingCapability},
+	}
 }
 
 // Attempt records one of the three independent reproduction attempts.
@@ -152,13 +190,64 @@ func (r Report) Validate() error {
 		}
 		seen[attempt.Number] = true
 	}
-	if r.AttackTree == nil {
-		return r.validateControlBypass()
+	if r.AttackTree != nil {
+		if err := r.validateAttackTree(); err != nil {
+			return err
+		}
 	}
-	if err := r.validateAttackTree(); err != nil {
+	if err := r.validateControlBypass(); err != nil {
 		return err
 	}
-	return r.validateControlBypass()
+	return r.validateSeverityPrerequisites()
+}
+
+func (r Report) validateSeverityPrerequisites() error {
+	assessment := r.SeverityPrerequisites
+	if assessment == nil {
+		return nil
+	}
+	fields := []struct {
+		name    string
+		value   PrerequisiteValue
+		allowed map[string]bool
+	}{
+		{"attacker_position", assessment.AttackerPosition, map[string]bool{
+			"remote_unauthenticated": true, "remote_authenticated": true,
+			"internal_authenticated": true, "local": true, "host_shell": true,
+			"long_term_physical": true, "unknown": true, controlNotAttempted: true,
+		}},
+		{"user_interaction", assessment.UserInteraction, map[string]bool{
+			"none": true, "required": true, "unknown": true, controlNotAttempted: true,
+		}},
+		{"outcome_determinism", assessment.OutcomeDeterminism, map[string]bool{
+			"deterministic": true, "probabilistic_llm": true, "unknown": true, controlNotAttempted: true,
+		}},
+		{"impact", assessment.Impact, map[string]bool{
+			"code_execution_or_equivalent": true, "privilege_escalation": true,
+			"sensitive_data_access": true, "availability": true, "other": true,
+			"unknown": true, controlNotAttempted: true,
+		}},
+		{"existing_capability", assessment.ExistingCapability, map[string]bool{
+			"none": true, "less_than_outcome": true, "support_channel_equivalent": true,
+			"equivalent_or_greater": true, "unknown": true, controlNotAttempted: true,
+		}},
+	}
+	notAttemptedStatus := r.Status == "deferred" || r.Status == controlNotAttempted
+	for _, field := range fields {
+		if !field.allowed[field.value.Value] {
+			return fmt.Errorf("severity_prerequisites.%s.value %q is invalid", field.name, field.value.Value)
+		}
+		if strings.TrimSpace(field.value.Evidence) == "" {
+			return fmt.Errorf("severity_prerequisites.%s.evidence is empty", field.name)
+		}
+		if notAttemptedStatus && field.value.Value != controlNotAttempted {
+			return fmt.Errorf("verify status %s requires severity_prerequisites.%s.value not_attempted", r.Status, field.name)
+		}
+		if !notAttemptedStatus && field.value.Value == controlNotAttempted {
+			return fmt.Errorf("verify status %s does not permit severity_prerequisites.%s.value not_attempted", r.Status, field.name)
+		}
+	}
+	return nil
 }
 
 func (r Report) validateControlBypass() error {

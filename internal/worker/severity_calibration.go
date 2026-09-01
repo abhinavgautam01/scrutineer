@@ -10,6 +10,13 @@ import (
 
 const controlSeverityCap = "Medium"
 
+const (
+	severityRankLow = iota + 1
+	severityRankMedium
+	severityRankHigh
+	severityRankCritical
+)
+
 // findingSeverityCalibration is the host-derived projection produced from a
 // reconciled control-bypass gate. Evaluated distinguishes an authoritative
 // no-cap result from an ungraded report that must leave the prior projection
@@ -71,4 +78,99 @@ func calibrateControlSeverity(
 
 	slices.Sort(result.Caps)
 	return result
+}
+
+func calibrateFindingSeverity(
+	controls *skillContextControls,
+	gate *verification.ControlBypass,
+	prerequisites *verification.SeverityPrerequisites,
+) findingSeverityCalibration {
+	control := calibrateControlSeverity(controls, gate)
+	prerequisite := calibratePrerequisiteSeverity(prerequisites)
+	result := findingSeverityCalibration{
+		Maximum:    stricterSeverityMaximum(control.Maximum, prerequisite.Maximum),
+		Caps:       append(control.Caps, prerequisite.Caps...),
+		Incomplete: control.Incomplete || prerequisite.Incomplete,
+		Evaluated:  control.Evaluated && prerequisite.Evaluated,
+	}
+	slices.Sort(result.Caps)
+	return result
+}
+
+func calibratePrerequisiteSeverity(
+	prerequisites *verification.SeverityPrerequisites,
+) findingSeverityCalibration {
+	result := findingSeverityCalibration{Evaluated: true}
+	if prerequisites == nil {
+		result.Incomplete = true
+		return result
+	}
+
+	values := prerequisites.List()
+	for _, value := range values {
+		if value.Assessment.Value == "unknown" || value.Assessment.Value == "not_attempted" {
+			result.Incomplete = true
+		}
+	}
+
+	addCap := func(maximum, reason string) {
+		result.Maximum = stricterSeverityMaximum(result.Maximum, maximum)
+		result.Caps = append(result.Caps, reason)
+	}
+
+	switch prerequisites.AttackerPosition.Value {
+	case "host_shell":
+		addCap("Low", "attacker already requires a host shell; severity forced to Low")
+	case "long_term_physical":
+		addCap("Low", "attacker already requires long-term physical access; severity forced to Low")
+	case "local":
+		addCap("Medium", "attack vector is local-only; severity capped at Medium")
+	}
+	if prerequisites.ExistingCapability.Value == "equivalent_or_greater" {
+		addCap("Low", "attacker already has a capability equivalent to or greater than the claimed outcome; severity forced to Low")
+	}
+	if prerequisites.AttackerPosition.Value == "internal_authenticated" &&
+		prerequisites.ExistingCapability.Value == "support_channel_equivalent" {
+		addCap("Medium", "authenticated internal attacker already has an equivalent support channel; severity capped at Medium")
+	}
+	if prerequisites.OutcomeDeterminism.Value == "probabilistic_llm" {
+		addCap("High", "outcome depends on probabilistic LLM behavior; severity capped at High")
+	}
+
+	// Critical is reserved for unauthenticated, no-interaction remote code
+	// execution or an equivalent effect. A known contrary input caps it at High;
+	// unknown inputs only mark calibration incomplete above.
+	if knownAndNot(prerequisites.AttackerPosition.Value, "remote_unauthenticated") {
+		addCap("High", "attacker position is not remote unauthenticated; severity capped at High")
+	}
+	if prerequisites.UserInteraction.Value == "required" {
+		addCap("High", "attack requires user interaction; severity capped at High")
+	}
+	if knownAndNot(prerequisites.Impact.Value, "code_execution_or_equivalent") {
+		addCap("High", "impact is not code execution or equivalent; severity capped at High")
+	}
+
+	slices.Sort(result.Caps)
+	return result
+}
+
+func knownAndNot(value, required string) bool {
+	return value != required && value != "unknown" && value != "not_attempted"
+}
+
+func stricterSeverityMaximum(left, right string) string {
+	if left == "" {
+		return right
+	}
+	if right == "" {
+		return left
+	}
+	rank := map[string]int{
+		"Low": severityRankLow, "Medium": severityRankMedium,
+		"High": severityRankHigh, "Critical": severityRankCritical,
+	}
+	if rank[right] < rank[left] {
+		return right
+	}
+	return left
 }

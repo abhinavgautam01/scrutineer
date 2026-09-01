@@ -113,6 +113,18 @@ Every criterion records `verdict`, `method`, `evidence`, `counterevidence`, `pro
 
 For resource-exhaustion findings, a timeout or memory limit is confirmation only when that is the claimed class and the evidence ties it to the expected first-party path. An unrelated setup hang, compiler OOM, or test-runner timeout is not confirmation.
 
+## Classify severity prerequisites
+
+Record the minimum attacker capability and the claimed effect under `severity_prerequisites`. Every row needs concrete source or runtime evidence. Use `unknown` when active verification cannot establish a value; name the proof gap in `evidence`. Unknown values never justify lowering severity. Use `not_attempted` for every row only when the overall status is `deferred` or `not_attempted`.
+
+- `attacker_position`: choose `remote_unauthenticated`, `remote_authenticated`, `internal_authenticated`, `local`, `host_shell`, `long_term_physical`, `unknown`, or `not_attempted`. Choose the strongest capability the attacker must already possess before exercising the supplied path; do not call a shell-only helper remotely reachable.
+- `user_interaction`: choose `none`, `required`, `unknown`, or `not_attempted`. Service processing initiated by the attacker is `none`; a separate victim action is `required`.
+- `outcome_determinism`: choose `deterministic`, `probabilistic_llm`, `unknown`, or `not_attempted`. Use `probabilistic_llm` only when the claimed security effect depends on a model producing a favorable nondeterministic response, not merely because an LLM helped discover the bug.
+- `impact`: choose `code_execution_or_equivalent`, `privilege_escalation`, `sensitive_data_access`, `availability`, `other`, `unknown`, or `not_attempted`. Classify the demonstrated effect, not the worst outcome mentioned in the finding prose.
+- `existing_capability`: choose `none`, `less_than_outcome`, `support_channel_equivalent`, `equivalent_or_greater`, `unknown`, or `not_attempted`. `support_channel_equivalent` means an authenticated internal user could already request the same data or operation through an established support path. `equivalent_or_greater` means the prerequisites already give the attacker the claimed effect or something stronger.
+
+Scrutineer applies deterministic caps from these values after verification. A required host shell, long-term physical access, or equivalent-or-greater existing capability forces Low; a local-only vector or an internal authenticated user with an equivalent support channel caps at Medium; a probabilistic LLM outcome caps at High. Critical is reserved for remote unauthenticated, no-interaction code execution or an equivalent effect. Do not emit a cap or adjusted severity yourself.
+
 ## Declared controls
 
 `scrutineer.controls` in `./context.json` lists the threat-model controls whose `protects.paths` cover this finding's file. The host resolved the match before the container started — the globs are repository-root-relative and a subpath-scoped scan reports locations relative to its sub-folder, so re-deriving the match here would get it wrong. Match the ids, do not recompute them.
@@ -174,6 +186,13 @@ Write `./report.json` matching `./schema.json`. Example:
     ],
     "blockers": []
   },
+  "severity_prerequisites": {
+    "attacker_position": {"value": "remote_unauthenticated", "evidence": "include/parser.h:31 exposes parse_document to callers handling remote documents"},
+    "user_interaction": {"value": "none", "evidence": "the attacker-supplied document is parsed as part of request handling"},
+    "outcome_determinism": {"value": "deterministic", "evidence": "the same input reaches the same memory corruption in attempts 1-3"},
+    "impact": {"value": "code_execution_or_equivalent", "evidence": "attempts 1-3 demonstrate an attacker-controlled out-of-bounds write"},
+    "existing_capability": {"value": "none", "evidence": "the public parser path requires no prior host or account access"}
+  },
   "attempts": [
     {"number": 1, "outcome": "reproduced", "evidence": "exit 1; stack trace reaches parser.c:418", "failure_class": "heap-buffer-overflow", "crash_site": "src/parser.c:418"},
     {"number": 2, "outcome": "reproduced", "evidence": "exit 1; same ASan trace", "failure_class": "heap-buffer-overflow", "crash_site": "src/parser.c:418"},
@@ -193,4 +212,4 @@ Write `./report.json` matching `./schema.json`. Example:
 }
 ```
 
-Scrutineer computes the score from the five scored criteria; `control_bypass` is a non-scored gate. Do not emit a score. It stores the complete report as an append-only verification record keyed to this finding and scan, while preserving the existing lifecycle behavior: `confirmed` moves `new` to `enriched`, `fixed` on the default branch moves the finding to `fixed`, and all other statuses leave it unchanged. The worker compares `matched_controls` and `unavailable_reason` with the host-resolved context staged in `context.json`; omitted, added, duplicated, unresolved, or invented control state makes the report ungraded and prevents a lifecycle change. Historical verification rows without `control_bypass` remain readable.
+Scrutineer computes the score from the five scored criteria; `control_bypass` is a non-scored gate and `severity_prerequisites` is a non-scored calibration input. Do not emit a score or adjusted severity. It stores the complete report as an append-only verification record keyed to this finding and scan, while preserving the existing lifecycle behavior: `confirmed` moves `new` to `enriched`, `fixed` on the default branch moves the finding to `fixed`, and all other statuses leave it unchanged. The worker compares `matched_controls` and `unavailable_reason` with the host-resolved context staged in `context.json`; omitted, added, duplicated, unresolved, or invented control state makes the report ungraded and prevents a lifecycle change. Missing or invalid prerequisite classifications likewise make a new report ungraded. Historical verification rows without `control_bypass` or `severity_prerequisites` remain readable.

@@ -214,8 +214,8 @@ One row per vulnerability. Lifecycle columns are mutated through `db.WriteFindin
 | sinks | text | Comma-joined sink IDs. Links to the threat model tab. |
 | title | text | |
 | severity | text | `Critical`, `High`, `Medium`, `Low`. |
-| severity_caps | text | Newline-delimited deterministic reasons that cap the current severity. Written only from a host-reconciled verification control assessment. |
-| severity_calibration_incomplete | boolean | True when an unknown severity, unresolved or not-attempted assessment, or unavailable control resolution prevented complete calibration. Unknown inputs never lower severity. |
+| severity_caps | text | Newline-delimited deterministic reasons that cap the current severity. Written from host-reconciled verification controls and typed, evidence-backed attacker prerequisites. |
+| severity_calibration_incomplete | boolean | True when an unknown severity, unknown or not-attempted prerequisite, unresolved control assessment, or unavailable control resolution prevented complete calibration. Unknown inputs never lower severity. |
 | confidence | text | `high`, `medium`, `low`; how certain the audit is. |
 | status | text | Lifecycle state: `new`, `enriched`, `triaged`, `ready`, `reported`, `acknowledged`, `fixed`, `published`, `rejected`, `duplicate`. |
 | cwe | text | e.g. `CWE-352`. Tooltips come from the embedded MITRE catalogue. |
@@ -311,7 +311,7 @@ findings that already have a row here.
 
 ## finding_verifications
 
-Append-only grading records produced by finding-scoped `verify` scans. The complete rubric report remains immutable in `report`; `status` and `score` are promoted for display and filtering. The finding page derives its current verification result from the newest row rather than overwriting prior runs. Current reports also contain a non-scored control-bypass gate whose IDs and optional resolution-failure reason are checked against the context resolved by the host for that finding.
+Append-only grading records produced by finding-scoped `verify` scans. The complete rubric report remains immutable in `report`; `status` and `score` are promoted for display and filtering. The finding page derives its current verification result from the newest row rather than overwriting prior runs. Current reports also contain a non-scored control-bypass gate whose IDs and optional resolution-failure reason are checked against the context resolved by the host for that finding, plus typed severity prerequisites used by deterministic calibration rules.
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -320,7 +320,7 @@ Append-only grading records produced by finding-scoped `verify` scans. The compl
 | scan_id | integer | The verify scan that produced this record. Unique with `finding_id`. |
 | status | text | `confirmed`, `fixed`, `inconclusive`, `deferred`, or `not_attempted`. |
 | score | real, nullable | Fraction of the five rubric criteria that passed, from `0.0` to `1.0`. Null for legacy pre-rubric reports and reports that remain internally inconsistent after repair. |
-| report | text | Complete structured JSON report, including the attack-tree goal, evidenced path nodes, reachability verdict, concrete blockers, three attempts, five scored criteria, and per-control bypass assessments. Reports written before attack-tree or control-bypass support remain readable. |
+| report | text | Complete structured JSON report, including the attack-tree goal, evidenced path nodes, reachability verdict, concrete blockers, typed severity prerequisites, three attempts, five scored criteria, and per-control bypass assessments. Reports written before attack-tree, control-bypass or prerequisite support remain readable. |
 | created_at | datetime | |
 
 ## finding_attack_paths
