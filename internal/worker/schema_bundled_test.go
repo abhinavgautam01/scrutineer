@@ -972,6 +972,13 @@ func TestVerifySchema_rejectsAttackTreeVerdictContradictions(t *testing.T) {
 			wantErr: "/severity_prerequisites/attacker_position",
 		},
 		{
+			name: "active report cannot skip prerequisite",
+			mutate: func(report map[string]any) {
+				report["severity_prerequisites"].(map[string]any)["user_interaction"].(map[string]any)["value"] = "not_attempted"
+			},
+			wantErr: "/severity_prerequisites/user_interaction/value",
+		},
+		{
 			name: "unavailable control resolution with matched IDs",
 			mutate: func(report map[string]any) {
 				report["criteria"].(map[string]any)["control_bypass"] = map[string]any{

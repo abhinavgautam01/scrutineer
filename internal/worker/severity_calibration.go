@@ -141,13 +141,13 @@ func calibratePrerequisiteSeverity(
 	// execution or an equivalent effect. A known contrary input caps it at High;
 	// unknown inputs only mark calibration incomplete above.
 	if knownAndNot(prerequisites.AttackerPosition.Value, "remote_unauthenticated") {
-		addCap("High", "attacker position is not remote unauthenticated; severity capped at High")
+		addCap("High", "attacker position is not remote unauthenticated; Critical requires an unauthenticated remote attacker")
 	}
 	if prerequisites.UserInteraction.Value == "required" {
-		addCap("High", "attack requires user interaction; severity capped at High")
+		addCap("High", "attack requires user interaction; Critical requires no user interaction")
 	}
 	if knownAndNot(prerequisites.Impact.Value, "code_execution_or_equivalent") {
-		addCap("High", "impact is not code execution or equivalent; severity capped at High")
+		addCap("High", "impact is not code execution or equivalent; Critical requires code execution or an equivalent effect")
 	}
 
 	slices.Sort(result.Caps)

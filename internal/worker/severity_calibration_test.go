@@ -154,6 +154,23 @@ func TestCalibrateFindingSeverityChoosesStrictestCap(t *testing.T) {
 	}
 }
 
+func TestCalibratePrerequisiteSeverityCriticalReasonsDoNotClaimEffectiveMaximum(t *testing.T) {
+	prerequisites := defaultSeverityPrerequisites()
+	prerequisites.AttackerPosition.Value = "host_shell"
+	prerequisites.UserInteraction.Value = "required"
+	prerequisites.Impact.Value = "sensitive_data_access"
+
+	got := calibratePrerequisiteSeverity(prerequisites)
+	if got.Maximum != "Low" {
+		t.Fatalf("maximum = %q, want Low", got.Maximum)
+	}
+	for _, reason := range got.Caps {
+		if strings.Contains(reason, "severity capped at High") {
+			t.Errorf("cap reason %q misstates the effective maximum", reason)
+		}
+	}
+}
+
 func slicesContainSubstring(values []string, substring string) bool {
 	for _, value := range values {
 		if strings.Contains(value, substring) {

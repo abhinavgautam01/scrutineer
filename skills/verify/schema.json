@@ -367,9 +367,27 @@
         "impact": { "properties": { "value": { "const": "not_attempted" } } },
         "existing_capability": { "properties": { "value": { "const": "not_attempted" } } }
       }
+    },
+    "attemptedSeverityPrerequisites": {
+      "type": "object",
+      "properties": {
+        "attacker_position": { "properties": { "value": { "not": { "const": "not_attempted" } } } },
+        "user_interaction": { "properties": { "value": { "not": { "const": "not_attempted" } } } },
+        "outcome_determinism": { "properties": { "value": { "not": { "const": "not_attempted" } } } },
+        "impact": { "properties": { "value": { "not": { "const": "not_attempted" } } } },
+        "existing_capability": { "properties": { "value": { "not": { "const": "not_attempted" } } } }
+      }
     }
   },
   "allOf": [
+    {
+      "if": { "properties": { "status": { "enum": ["confirmed", "fixed", "inconclusive"] } }, "required": ["status"] },
+      "then": {
+        "properties": {
+          "severity_prerequisites": { "$ref": "#/$defs/attemptedSeverityPrerequisites" }
+        }
+      }
+    },
     {
       "if": { "properties": { "status": { "const": "deferred" } }, "required": ["status"] },
       "then": {
