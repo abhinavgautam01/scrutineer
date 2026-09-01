@@ -821,17 +821,16 @@ func TestStatusPriority_sortOrder(t *testing.T) {
 func TestScanResumable(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		scan *Scan
+		scan Scan
 		want bool
 	}{
-		{name: "failed with session", scan: &Scan{Status: ScanFailed, SessionID: "session"}, want: true},
-		{name: "done at max turns with session", scan: &Scan{Status: ScanDone, MaxTurnsHit: true, SessionID: "session"}, want: true},
-		{name: "failed without session", scan: &Scan{Status: ScanFailed}},
-		{name: "done at max turns without session", scan: &Scan{Status: ScanDone, MaxTurnsHit: true}},
-		{name: "ordinary done with session", scan: &Scan{Status: ScanDone, SessionID: "session"}},
-		{name: "cancelled with session", scan: &Scan{Status: ScanCancelled, SessionID: "session"}},
-		{name: "running with session", scan: &Scan{Status: ScanRunning, SessionID: "session"}},
-		{name: "nil scan", scan: nil},
+		{name: "failed with session", scan: Scan{Status: ScanFailed, SessionID: "session"}, want: true},
+		{name: "done at max turns with session", scan: Scan{Status: ScanDone, MaxTurnsHit: true, SessionID: "session"}, want: true},
+		{name: "failed without session", scan: Scan{Status: ScanFailed}},
+		{name: "done at max turns without session", scan: Scan{Status: ScanDone, MaxTurnsHit: true}},
+		{name: "ordinary done with session", scan: Scan{Status: ScanDone, SessionID: "session"}},
+		{name: "cancelled with session", scan: Scan{Status: ScanCancelled, SessionID: "session"}},
+		{name: "running with session", scan: Scan{Status: ScanRunning, SessionID: "session"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.scan.Resumable(); got != tc.want {

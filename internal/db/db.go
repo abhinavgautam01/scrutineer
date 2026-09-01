@@ -422,8 +422,8 @@ type Scan struct {
 // Resumable reports whether a retry can reuse this scan's harness session and
 // workspace state. Failed scans and partial successful scans that exhausted
 // their turn budget are resumable only when the harness recorded a session.
-func (s *Scan) Resumable() bool {
-	if s == nil || s.SessionID == "" {
+func (s Scan) Resumable() bool {
+	if s.SessionID == "" {
 		return false
 	}
 	return s.Status == ScanFailed || (s.Status == ScanDone && s.MaxTurnsHit)
