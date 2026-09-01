@@ -22,7 +22,7 @@ func TestAPIListFindings_summaryColumnsCoverEveryField(t *testing.T) {
 	seeded := db.Finding{
 		ScanID: scan.ID, RepositoryID: repo.ID,
 		FindingID: "F1", Commit: "abcdef1", Sinks: "S1",
-		Title: "OS command injection", Severity: "High", Status: db.FindingEnriched,
+		Title: "OS command injection", Severity: "Medium", SeverityCaps: "authorization control held", SeverityCalibrationIncomplete: true, Status: db.FindingEnriched,
 		CWE: "CWE-78", Location: "main.go:12", VID: "vid-1", Affected: ">=1.0,<1.4",
 		Reachability: "reachable", QualityTier: "tier-1",
 		CVEID: "CVE-2026-1", GHSAID: "GHSA-xxxx", CVSSVector: "CVSS:3.1/AV:N",

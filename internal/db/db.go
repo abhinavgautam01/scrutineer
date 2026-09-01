@@ -810,14 +810,20 @@ type Finding struct {
 	// used for dedup: a VID changes whenever the function's bytes change.
 	VID string `gorm:"column:vid;index"`
 
-	FindingID  string // e.g. F1, F2 within the report
-	Sinks      string // comma-joined sink IDs
-	Title      string
-	Severity   string           `gorm:"index"`
-	Confidence string           `gorm:"index"` // high/medium/low; how certain the audit is
-	Status     FindingLifecycle `gorm:"index;default:new"`
-	CWE        string
-	Location   string
+	FindingID string // e.g. F1, F2 within the report
+	Sinks     string // comma-joined sink IDs
+	Title     string
+	Severity  string `gorm:"index"`
+	// SeverityCaps is the newline-delimited set of deterministic cap reasons
+	// applied by the latest authoritative verification. Unknown calibration
+	// inputs never lower Severity; SeverityCalibrationIncomplete records that
+	// an analyst still needs to resolve them.
+	SeverityCaps                  string `gorm:"type:text"`
+	SeverityCalibrationIncomplete bool
+	Confidence                    string           `gorm:"index"` // high/medium/low; how certain the audit is
+	Status                        FindingLifecycle `gorm:"index;default:new"`
+	CWE                           string
+	Location                      string
 	// Locations is the newline-joined set of file:line positions for
 	// findings that represent one rule firing many times (#191). The
 	// first entry is duplicated in Location for the fingerprint and the
@@ -1020,6 +1026,18 @@ func (f Finding) LocationList() []string {
 		out[i] = strings.TrimSpace(out[i])
 	}
 	return out
+}
+
+// SeverityCapList splits the current deterministic severity-cap projection
+// into display/API entries.
+func (f Finding) SeverityCapList() []string {
+	caps := make([]string, 0)
+	for line := range strings.SplitSeq(f.SeverityCaps, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			caps = append(caps, line)
+		}
+	}
+	return caps
 }
 
 // ExtraLocationCount is the number of grouped match positions beyond the

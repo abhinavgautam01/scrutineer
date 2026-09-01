@@ -119,6 +119,83 @@ func WriteFindingField(gdb *gorm.DB, findingID uint, field, newValue string, sou
 	})
 }
 
+// ReconcileFindingSeverityCap lowers a finding to maximum when its latest
+// stored severity is higher. When an active cap is removed, it restores the
+// value changed by the latest system-owned cap write. A later severity write
+// from any other source remains authoritative and is never undone.
+//
+// Returning the effective value lets callers derive calibration state from
+// the same read that decided the write.
+func ReconcileFindingSeverityCap(
+	gdb *gorm.DB,
+	findingID uint,
+	maximum string,
+	source FindingSource,
+	by string,
+) (string, error) {
+	if maximum != "" && rank(SeverityLevels, maximum) == 0 {
+		return "", fmt.Errorf("severity cap %q is invalid", maximum)
+	}
+
+	var effective string
+	err := retryFindingWrite(gdb, findingID, func(tx *gorm.DB) error {
+		var f Finding
+		if err := tx.First(&f, findingID).Error; err != nil {
+			return fmt.Errorf("load finding %d: %w", findingID, err)
+		}
+		effective = f.Severity
+		if maximum == "" {
+			if f.SeverityCaps == "" {
+				return nil
+			}
+			var latest FindingHistory
+			err := tx.Where("finding_id = ? AND field = ?", f.ID, "severity").Order("id DESC").First(&latest).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil
+			}
+			if err != nil {
+				return fmt.Errorf("load latest severity history: %w", err)
+			}
+			if latest.Source != source || latest.By != by || latest.NewValue != f.Severity || rank(SeverityLevels, latest.OldValue) == 0 {
+				return nil
+			}
+			effective = latest.OldValue
+			if err := conditionalFindingUpdate(tx, f.ID, "severity", f.Severity, effective); err != nil {
+				return fmt.Errorf("restore severity: %w", err)
+			}
+			return tx.Create(&FindingHistory{
+				FindingID: f.ID,
+				Field:     "severity",
+				OldValue:  f.Severity,
+				NewValue:  effective,
+				Source:    source,
+				By:        by,
+				CreatedAt: time.Now(),
+			}).Error
+		}
+		if rank(SeverityLevels, f.Severity) == 0 || !SeverityAtLeast(f.Severity, maximum) {
+			return nil
+		}
+		effective = maximum
+		if f.Severity == maximum {
+			return nil
+		}
+		if err := conditionalFindingUpdate(tx, f.ID, "severity", f.Severity, maximum); err != nil {
+			return fmt.Errorf("update severity: %w", err)
+		}
+		return tx.Create(&FindingHistory{
+			FindingID: f.ID,
+			Field:     "severity",
+			OldValue:  f.Severity,
+			NewValue:  maximum,
+			Source:    source,
+			By:        by,
+			CreatedAt: time.Now(),
+		}).Error
+	})
+	return effective, err
+}
+
 // UpsertFindingDependent records the current exposure verdict for one
 // finding/dependent pair. The pair has a database unique index, so using the
 // same conflict target as that index makes concurrent writers update the row
