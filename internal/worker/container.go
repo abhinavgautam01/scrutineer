@@ -650,11 +650,36 @@ func (d ContainerRunner) injectProfileGuide(profile, absWork string, emit func(E
 		emit(Event{Kind: KindText, Text: "profile guide: read " + guide + ": " + err.Error()})
 		return
 	}
-	if err := os.WriteFile(target, data, profileGuideFileMode); err != nil {
+	if err := replaceWorkspaceFile(target, data, profileGuideFileMode); err != nil {
 		emit(Event{Kind: KindText, Text: "profile guide: write " + target + ": " + err.Error()})
 		return
 	}
 	emit(Event{Kind: KindText, Text: "profile guide: " + guide + " -> /work/" + name})
+}
+
+// replaceWorkspaceFile unlinks an existing workspace entry, then creates its
+// replacement exclusively through a directory-scoped root. A runner that left
+// a symlink behind cannot redirect the write, and a concurrent replant makes
+// the create fail instead of being followed.
+func replaceWorkspaceFile(path string, data []byte, mode os.FileMode) error {
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	name := filepath.Base(path)
+	if err := root.Remove(name); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // SkillDir delegates to the harness so the worker stages SKILL.md

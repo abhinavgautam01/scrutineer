@@ -112,7 +112,7 @@ func (c *ChatRunner) RunTurn(ctx context.Context, conv *db.Conversation, userMes
 	if err != nil {
 		return ChatTurnResult{}, err
 	}
-	if err := os.WriteFile(filepath.Join(workRoot, chatSnapshotFile), []byte(snapshot), filePerm); err != nil {
+	if err := replaceWorkspaceFile(filepath.Join(workRoot, chatSnapshotFile), []byte(snapshot), filePerm); err != nil {
 		return ChatTurnResult{}, fmt.Errorf("stage snapshot: %w", err)
 	}
 
