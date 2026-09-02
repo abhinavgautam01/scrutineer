@@ -144,7 +144,7 @@ func TestBackfillFindingFingerprintsReturnsSelectionError(t *testing.T) {
 	}
 }
 
-func TestBackfillFindingFingerprintsRollsBackOnUpdateError(t *testing.T) {
+func TestBackfillFindingFingerprintsPreservesCompletedRowsOnUpdateError(t *testing.T) {
 	gdb, err := Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -196,9 +196,30 @@ func TestBackfillFindingFingerprintsRollsBackOnUpdateError(t *testing.T) {
 	if err := gdb.Order("id").Find(&got, []uint{findings[0].ID, findings[1].ID}).Error; err != nil {
 		t.Fatal(err)
 	}
+	if len(got) != 2 {
+		t.Fatalf("findings = %d, want 2", len(got))
+	}
+	wantFirst := FingerprintFinding(scan.SkillName, findings[0].SubPath, findings[0].CWE, findings[0].Location, findings[0].Title)
+	if got[0].Fingerprint != wantFirst || got[0].LastSeenScanID != scan.ID || got[0].LastSeenCommit != scan.Commit || got[0].SeenCount != 1 {
+		t.Errorf("first finding was not preserved after second update failed: %+v", got[0])
+	}
+	if got[1].Fingerprint != "" || got[1].LastSeenScanID != 0 || got[1].LastSeenCommit != "" || got[1].SeenCount != 0 {
+		t.Errorf("failed finding was unexpectedly backfilled: %+v", got[1])
+	}
+
+	if err := BackfillFindingFingerprints(gdb); err != nil {
+		t.Fatalf("retry backfill: %v", err)
+	}
+	got = nil
+	if err := gdb.Order("id").Find(&got, []uint{findings[0].ID, findings[1].ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("findings after retry = %d, want 2", len(got))
+	}
 	for _, finding := range got {
-		if finding.Fingerprint != "" || finding.LastSeenScanID != 0 || finding.LastSeenCommit != "" || finding.SeenCount != 0 {
-			t.Errorf("finding %d changed despite rollback: %+v", finding.ID, finding)
+		if finding.Fingerprint == "" || finding.LastSeenScanID != scan.ID || finding.LastSeenCommit != scan.Commit || finding.SeenCount != 1 {
+			t.Errorf("finding %d not complete after retry: %+v", finding.ID, finding)
 		}
 	}
 }
