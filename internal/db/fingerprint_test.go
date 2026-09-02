@@ -4,15 +4,17 @@ import "testing"
 
 func TestNormaliseLocation(t *testing.T) {
 	cases := map[string]string{
-		"src/users.rb:42":                "src/users.rb",
-		"src/users.rb:42:7":              "src/users.rb",
-		"src/users.rb":                   "src/users.rb",
-		"./src/users.rb:1":               "src/users.rb",
-		"  Src/Users.rb:10  ":            "src/users.rb",
-		"C:\\project\\src\\main.go:42":   "c:\\project\\src\\main.go",
-		"C:\\project\\src\\main.go:42:7": "c:\\project\\src\\main.go",
-		"C:\\project\\src\\main.go":      "c:\\project\\src\\main.go",
-		"":                               "",
+		"src/users.rb:42":                 "src/users.rb",
+		"src/users.rb:42:7":               "src/users.rb",
+		"src/users.rb:12-34":              "src/users.rb",
+		"src/users.rb":                    "src/users.rb",
+		"./src/users.rb:1":                "src/users.rb",
+		"  Src/Users.rb:10  ":             "src/users.rb",
+		"C:\\project\\src\\main.go:42":    "c:\\project\\src\\main.go",
+		"C:\\project\\src\\main.go:42:7":  "c:\\project\\src\\main.go",
+		"C:\\project\\src\\main.go:12-34": "c:\\project\\src\\main.go",
+		"C:\\project\\src\\main.go":       "c:\\project\\src\\main.go",
+		"":                                "",
 	}
 	for in, want := range cases {
 		if got := normaliseLocation(in); got != want {
@@ -26,6 +28,10 @@ func TestFingerprintFinding(t *testing.T) {
 
 	if base != FingerprintFinding("security-deep-dive", "", "CWE-89", "src/users.rb:77", "SQLi rephrased") {
 		t.Errorf("line drift / title change must not change fingerprint")
+	}
+	if FingerprintFinding("security-deep-dive", "", "CWE-89", "src/users.rb:12-34", "SQLi") !=
+		FingerprintFinding("security-deep-dive", "", "CWE-89", "src/users.rb:14-36", "SQLi") {
+		t.Errorf("range drift must not change fingerprint")
 	}
 	if base != FingerprintFinding("Security-Deep-Dive", "", "cwe-89", "./SRC/users.rb", "x") {
 		t.Errorf("skill/cwe/location case must not change fingerprint")

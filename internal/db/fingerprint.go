@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"gorm.io/gorm"
+
+	"scrutineer/internal/findingnorm"
 )
 
 // FingerprintFinding returns a stable hash for deduplicating the same
@@ -37,28 +39,17 @@ func FingerprintFinding(skillName, subPath, cwe, location, title string) string 
 	return hex.EncodeToString(h[:])
 }
 
-// normaliseLocation reduces "path/to/file.go:42:7" to "path/to/file.go".
-// A leading "./" is stripped so "./src/x.go" and "src/x.go" agree.
+// normaliseLocation strips line, line:column, and line-range suffixes from a
+// location. A leading "./" is stripped so "./src/x.go" and "src/x.go" agree.
 func normaliseLocation(loc string) string {
 	loc = strings.TrimSpace(loc)
 	loc = strings.TrimPrefix(loc, "./")
 	for {
 		i := strings.LastIndexByte(loc, ':')
-		if i <= 0 {
+		if i <= 0 || !findingnorm.IsPositionalSuffix(loc[i+1:]) {
 			break
 		}
-		isNum := true
-		for _, c := range loc[i+1:] {
-			if c < '0' || c > '9' {
-				isNum = false
-				break
-			}
-		}
-		if isNum && len(loc[i+1:]) > 0 {
-			loc = loc[:i]
-		} else {
-			break
-		}
+		loc = loc[:i]
 	}
 	return strings.ToLower(loc)
 }

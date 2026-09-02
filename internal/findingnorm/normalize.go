@@ -13,7 +13,7 @@ func LocationFile(loc string) string {
 	loc = strings.TrimSpace(strings.Split(strings.TrimSpace(loc), "\n")[0])
 	for {
 		i := strings.LastIndexByte(loc, ':')
-		if i < 0 || !allDigits(loc[i+1:]) {
+		if i < 0 || !IsPositionalSuffix(loc[i+1:]) {
 			break
 		}
 		loc = loc[:i]
@@ -39,6 +39,16 @@ func HasParentPathSegment(p string) bool {
 		}
 	}
 	return false
+}
+
+// IsPositionalSuffix reports whether s is a line ("42") or line range
+// ("10-20") used as the final component of a finding location.
+func IsPositionalSuffix(s string) bool {
+	start, end, isRange := strings.Cut(s, "-")
+	if isRange {
+		return allDigits(start) && allDigits(end)
+	}
+	return allDigits(start)
 }
 
 func allDigits(s string) bool {
