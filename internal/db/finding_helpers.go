@@ -24,8 +24,9 @@ const GHSAIDPattern = `(?i)GHSA(-[0-9a-z]{4}){3}`
 var ghsaIDRE = regexp.MustCompile("^" + GHSAIDPattern + "$")
 
 const (
-	findingWriteMaxAttempts = 5
-	sqliteBusyCode          = 5
+	findingWriteMaxAttempts  = 5
+	findingCapHistoryMaxRows = 20
+	sqliteBusyCode           = 5
 )
 
 var errFindingWriteConflict = errors.New("finding changed concurrently")
@@ -152,7 +153,7 @@ func ReconcileFindingSeverityCap(
 		baseline := f.Severity
 		if f.SeverityCaps != "" {
 			var history []FindingHistory
-			if err := tx.Where("finding_id = ? AND field = ?", f.ID, "severity").Order("id DESC").Find(&history).Error; err != nil {
+			if err := tx.Where("finding_id = ? AND field = ?", f.ID, "severity").Order("id DESC").Limit(findingCapHistoryMaxRows).Find(&history).Error; err != nil {
 				return fmt.Errorf("load severity history: %w", err)
 			}
 			for _, entry := range history {

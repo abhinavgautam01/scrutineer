@@ -73,28 +73,29 @@ func TestCalibratePrerequisiteSeverity(t *testing.T) {
 		edit           func(*verification.SeverityPrerequisites)
 		wantMaximum    string
 		wantReason     string
+		wantCaps       int
 		wantIncomplete bool
 	}{
 		{name: "critical prerequisites leave severity uncapped"},
 		{
 			name:        "host shell forces low",
 			edit:        func(p *verification.SeverityPrerequisites) { p.AttackerPosition.Value = "host_shell" },
-			wantMaximum: "Low", wantReason: "already requires a host shell",
+			wantMaximum: "Low", wantReason: "already requires a host shell", wantCaps: 1,
 		},
 		{
 			name:        "long term physical access forces low",
 			edit:        func(p *verification.SeverityPrerequisites) { p.AttackerPosition.Value = "long_term_physical" },
-			wantMaximum: "Low", wantReason: "long-term physical access",
+			wantMaximum: "Low", wantReason: "long-term physical access", wantCaps: 1,
 		},
 		{
 			name:        "local vector caps medium",
 			edit:        func(p *verification.SeverityPrerequisites) { p.AttackerPosition.Value = "local" },
-			wantMaximum: "Medium", wantReason: "local-only",
+			wantMaximum: "Medium", wantReason: "local-only", wantCaps: 1,
 		},
 		{
 			name:        "probabilistic LLM caps high",
 			edit:        func(p *verification.SeverityPrerequisites) { p.OutcomeDeterminism.Value = "probabilistic_llm" },
-			wantMaximum: "High", wantReason: "probabilistic LLM",
+			wantMaximum: "High", wantReason: "probabilistic LLM", wantCaps: 1,
 		},
 		{
 			name: "internal support-equivalent access caps medium",
@@ -102,22 +103,22 @@ func TestCalibratePrerequisiteSeverity(t *testing.T) {
 				p.AttackerPosition.Value = "internal_authenticated"
 				p.ExistingCapability.Value = "support_channel_equivalent"
 			},
-			wantMaximum: "Medium", wantReason: "equivalent support channel",
+			wantMaximum: "Medium", wantReason: "equivalent support channel", wantCaps: 1,
 		},
 		{
 			name:        "equivalent existing capability forces low",
 			edit:        func(p *verification.SeverityPrerequisites) { p.ExistingCapability.Value = "equivalent_or_greater" },
-			wantMaximum: "Low", wantReason: "equivalent to or greater",
+			wantMaximum: "Low", wantReason: "equivalent to or greater", wantCaps: 1,
 		},
 		{
 			name:        "required interaction disqualifies critical",
 			edit:        func(p *verification.SeverityPrerequisites) { p.UserInteraction.Value = "required" },
-			wantMaximum: "High", wantReason: "requires user interaction",
+			wantMaximum: "High", wantReason: "requires user interaction", wantCaps: 1,
 		},
 		{
 			name:        "non RCE impact disqualifies critical",
 			edit:        func(p *verification.SeverityPrerequisites) { p.Impact.Value = "sensitive_data_access" },
-			wantMaximum: "High", wantReason: "not code execution",
+			wantMaximum: "High", wantReason: "not code execution", wantCaps: 1,
 		},
 		{
 			name:           "unknown never caps",
@@ -131,8 +132,8 @@ func TestCalibratePrerequisiteSeverity(t *testing.T) {
 				tc.edit(prerequisites)
 			}
 			got := calibratePrerequisiteSeverity(prerequisites)
-			if !got.Evaluated || got.Maximum != tc.wantMaximum || got.Incomplete != tc.wantIncomplete {
-				t.Fatalf("calibration = %+v, want maximum=%q incomplete=%t", got, tc.wantMaximum, tc.wantIncomplete)
+			if !got.Evaluated || got.Maximum != tc.wantMaximum || len(got.Caps) != tc.wantCaps || got.Incomplete != tc.wantIncomplete {
+				t.Fatalf("calibration = %+v, want maximum=%q caps=%d incomplete=%t", got, tc.wantMaximum, tc.wantCaps, tc.wantIncomplete)
 			}
 			if tc.wantReason != "" && !slicesContainSubstring(got.Caps, tc.wantReason) {
 				t.Fatalf("caps = %v, want reason containing %q", got.Caps, tc.wantReason)

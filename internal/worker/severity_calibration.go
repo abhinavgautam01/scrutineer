@@ -4,18 +4,12 @@ import (
 	"fmt"
 	"slices"
 
+	"scrutineer/internal/db"
 	"scrutineer/internal/threatmodel"
 	"scrutineer/internal/verification"
 )
 
 const controlSeverityCap = "Medium"
-
-const (
-	severityRankLow = iota + 1
-	severityRankMedium
-	severityRankHigh
-	severityRankCritical
-)
 
 // findingSeverityCalibration is the host-derived projection produced from a
 // reconciled control-bypass gate. Evaluated distinguishes an authoritative
@@ -118,13 +112,17 @@ func calibratePrerequisiteSeverity(
 		result.Caps = append(result.Caps, reason)
 	}
 
+	attackerPositionCapped := false
 	switch prerequisites.AttackerPosition.Value {
 	case "host_shell":
 		addCap("Low", "attacker already requires a host shell; severity forced to Low")
+		attackerPositionCapped = true
 	case "long_term_physical":
 		addCap("Low", "attacker already requires long-term physical access; severity forced to Low")
+		attackerPositionCapped = true
 	case "local":
 		addCap("Medium", "attack vector is local-only; severity capped at Medium")
+		attackerPositionCapped = true
 	}
 	if prerequisites.ExistingCapability.Value == "equivalent_or_greater" {
 		addCap("Low", "attacker already has a capability equivalent to or greater than the claimed outcome; severity forced to Low")
@@ -132,6 +130,7 @@ func calibratePrerequisiteSeverity(
 	if prerequisites.AttackerPosition.Value == "internal_authenticated" &&
 		prerequisites.ExistingCapability.Value == "support_channel_equivalent" {
 		addCap("Medium", "authenticated internal attacker already has an equivalent support channel; severity capped at Medium")
+		attackerPositionCapped = true
 	}
 	if prerequisites.OutcomeDeterminism.Value == "probabilistic_llm" {
 		addCap("High", "outcome depends on probabilistic LLM behavior; severity capped at High")
@@ -140,7 +139,7 @@ func calibratePrerequisiteSeverity(
 	// Critical is reserved for unauthenticated, no-interaction remote code
 	// execution or an equivalent effect. A known contrary input caps it at High;
 	// unknown inputs only mark calibration incomplete above.
-	if knownAndNot(prerequisites.AttackerPosition.Value, "remote_unauthenticated") {
+	if !attackerPositionCapped && knownAndNot(prerequisites.AttackerPosition.Value, "remote_unauthenticated") {
 		addCap("High", "attacker position is not remote unauthenticated; Critical requires an unauthenticated remote attacker")
 	}
 	if prerequisites.UserInteraction.Value == "required" {
@@ -158,19 +157,12 @@ func knownAndNot(value, required string) bool {
 	return value != required && value != "unknown" && value != "not_attempted"
 }
 
-func stricterSeverityMaximum(left, right string) string {
-	if left == "" {
-		return right
+func stricterSeverityMaximum(a, b string) string {
+	if b == "" {
+		return a
 	}
-	if right == "" {
-		return left
+	if a == "" || db.SeverityAtLeast(a, b) {
+		return b
 	}
-	rank := map[string]int{
-		"Low": severityRankLow, "Medium": severityRankMedium,
-		"High": severityRankHigh, "Critical": severityRankCritical,
-	}
-	if rank[right] < rank[left] {
-		return right
-	}
-	return left
+	return a
 }
