@@ -67,6 +67,173 @@ func TestCalibrateControlSeverity(t *testing.T) {
 	}
 }
 
+func TestCalibratePrerequisiteSeverity(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		edit           func(*verification.SeverityPrerequisites)
+		wantMaximum    string
+		wantReason     string
+		wantCaps       int
+		wantIncomplete bool
+	}{
+		{name: "critical prerequisites leave severity uncapped"},
+		{
+			name:        "host shell forces low",
+			edit:        func(p *verification.SeverityPrerequisites) { p.AttackerPosition.Value = "host_shell" },
+			wantMaximum: "Low", wantReason: "already requires a host shell", wantCaps: 1,
+		},
+		{
+			name:        "long term physical access forces low",
+			edit:        func(p *verification.SeverityPrerequisites) { p.AttackerPosition.Value = "long_term_physical" },
+			wantMaximum: "Low", wantReason: "long-term physical access", wantCaps: 1,
+		},
+		{
+			name:        "local vector caps medium",
+			edit:        func(p *verification.SeverityPrerequisites) { p.AttackerPosition.Value = "local" },
+			wantMaximum: "Medium", wantReason: "local-only", wantCaps: 1,
+		},
+		{
+			name:        "probabilistic LLM caps high",
+			edit:        func(p *verification.SeverityPrerequisites) { p.OutcomeDeterminism.Value = "probabilistic_llm" },
+			wantMaximum: "High", wantReason: "probabilistic LLM", wantCaps: 1,
+		},
+		{
+			name: "internal support-equivalent access caps medium",
+			edit: func(p *verification.SeverityPrerequisites) {
+				p.AttackerPosition.Value = "internal_authenticated"
+				p.ExistingCapability.Value = "support_channel_equivalent"
+			},
+			wantMaximum: "Medium", wantReason: "equivalent support channel", wantCaps: 1,
+		},
+		{
+			name:        "equivalent existing capability forces low",
+			edit:        func(p *verification.SeverityPrerequisites) { p.ExistingCapability.Value = "equivalent_or_greater" },
+			wantMaximum: "Low", wantReason: "equivalent to or greater", wantCaps: 1,
+		},
+		{
+			name:        "required interaction disqualifies critical",
+			edit:        func(p *verification.SeverityPrerequisites) { p.UserInteraction.Value = "required" },
+			wantMaximum: "High", wantReason: "requires user interaction", wantCaps: 1,
+		},
+		{
+			name:        "non RCE impact disqualifies critical",
+			edit:        func(p *verification.SeverityPrerequisites) { p.Impact.Value = "sensitive_data_access" },
+			wantMaximum: "High", wantReason: "not code execution", wantCaps: 1,
+		},
+		{
+			name:           "unknown never caps",
+			edit:           func(p *verification.SeverityPrerequisites) { p.AttackerPosition.Value = "unknown" },
+			wantIncomplete: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prerequisites := defaultSeverityPrerequisites()
+			if tc.edit != nil {
+				tc.edit(prerequisites)
+			}
+			got := calibratePrerequisiteSeverity(prerequisites)
+			if !got.Evaluated || got.Maximum != tc.wantMaximum || len(got.Caps) != tc.wantCaps || got.Incomplete != tc.wantIncomplete {
+				t.Fatalf("calibration = %+v, want maximum=%q caps=%d incomplete=%t", got, tc.wantMaximum, tc.wantCaps, tc.wantIncomplete)
+			}
+			if tc.wantReason != "" && !slicesContainSubstring(got.Caps, tc.wantReason) {
+				t.Fatalf("caps = %v, want reason containing %q", got.Caps, tc.wantReason)
+			}
+		})
+	}
+}
+
+func TestCalibrateFindingSeverityChoosesStrictestCap(t *testing.T) {
+	prerequisites := defaultSeverityPrerequisites()
+	prerequisites.OutcomeDeterminism.Value = "probabilistic_llm"
+	got := calibrateFindingSeverity(
+		calibrationControls(threatmodel.Control{ID: "authz", Kind: threatmodel.KindAuthorization}),
+		calibrationGate("authz", "held"),
+		prerequisites,
+	)
+	if got.Maximum != "Medium" || len(got.Caps) != 2 || got.Incomplete || !got.Evaluated {
+		t.Fatalf("calibration = %+v, want combined Medium cap", got)
+	}
+}
+
+func TestCalibratePrerequisiteSeverityCriticalReasonsDoNotClaimEffectiveMaximum(t *testing.T) {
+	prerequisites := defaultSeverityPrerequisites()
+	prerequisites.AttackerPosition.Value = "host_shell"
+	prerequisites.UserInteraction.Value = "required"
+	prerequisites.Impact.Value = "sensitive_data_access"
+
+	got := calibratePrerequisiteSeverity(prerequisites)
+	if got.Maximum != "Low" {
+		t.Fatalf("maximum = %q, want Low", got.Maximum)
+	}
+	for _, reason := range got.Caps {
+		if strings.Contains(reason, "severity capped at High") {
+			t.Errorf("cap reason %q misstates the effective maximum", reason)
+		}
+	}
+}
+
+func slicesContainSubstring(values []string, substring string) bool {
+	for _, value := range values {
+		if strings.Contains(value, substring) {
+			return true
+		}
+	}
+	return false
+}
+
+func defaultSeverityPrerequisites() *verification.SeverityPrerequisites {
+	return &verification.SeverityPrerequisites{
+		AttackerPosition:   verification.PrerequisiteValue{Value: "remote_unauthenticated", Evidence: "public endpoint"},
+		UserInteraction:    verification.PrerequisiteValue{Value: "none", Evidence: "request alone triggers"},
+		OutcomeDeterminism: verification.PrerequisiteValue{Value: "deterministic", Evidence: "3/3 attempts"},
+		Impact:             verification.PrerequisiteValue{Value: "code_execution_or_equivalent", Evidence: "code execution observed"},
+		ExistingCapability: verification.PrerequisiteValue{Value: "none", Evidence: "no prior access"},
+	}
+}
+
+func TestParseVerifyAppliesPrerequisiteSeverityCap(t *testing.T) {
+	gdb, err := db.Open(filepath.Join(t.TempDir(), "prerequisite-severity-cap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := db.Repository{URL: "https://example.com/x", Name: "x"}
+	if err := gdb.Create(&repo).Error; err != nil {
+		t.Fatal(err)
+	}
+	prior := db.Scan{RepositoryID: repo.ID, Kind: JobSkill, Status: db.ScanDone}
+	if err := gdb.Create(&prior).Error; err != nil {
+		t.Fatal(err)
+	}
+	finding := db.Finding{ScanID: prior.ID, RepositoryID: repo.ID, Title: "local helper execution", Severity: "Critical", Status: db.FindingNew}
+	if err := gdb.Create(&finding).Error; err != nil {
+		t.Fatal(err)
+	}
+	scan := db.Scan{RepositoryID: repo.ID, Repository: repo, FindingID: new(finding.ID), SkillName: verifySkillName}
+	if err := gdb.Create(&scan).Error; err != nil {
+		t.Fatal(err)
+	}
+	report := verificationReport(t, "confirmed", func(report *verification.Report) {
+		report.SeverityPrerequisites.AttackerPosition.Value = "host_shell"
+		report.SeverityPrerequisites.AttackerPosition.Evidence = "the public helper is reachable only after opening a shell"
+	})
+	w := &Worker{DB: gdb, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if err := w.parseVerifyOutput(&scan, report, func(Event) {}); err != nil {
+		t.Fatal(err)
+	}
+
+	var got db.Finding
+	if err := gdb.First(&got, finding.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Severity != "Low" || got.SeverityCalibrationIncomplete || !strings.Contains(got.SeverityCaps, "host shell") {
+		t.Fatalf("finding calibration = severity %q caps %q incomplete %t", got.Severity, got.SeverityCaps, got.SeverityCalibrationIncomplete)
+	}
+	notes := findingNotes(gdb, finding.ID)
+	if len(notes) != 1 || !strings.Contains(notes[0].Body, "severity prerequisite: Attacker position = host_shell") {
+		t.Fatalf("verify notes = %+v", notes)
+	}
+}
+
 func TestParseVerifyRemovesInactiveSeverityCapReasons(t *testing.T) {
 	for _, severity := range []string{"Low", "UNKNOWN"} {
 		t.Run(severity, func(t *testing.T) {

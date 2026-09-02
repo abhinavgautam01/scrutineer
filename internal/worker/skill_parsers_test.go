@@ -857,6 +857,13 @@ func verificationReport(t *testing.T, status string, edit func(*verification.Rep
 			},
 			Blockers: []string{},
 		},
+		SeverityPrerequisites: &verification.SeverityPrerequisites{
+			AttackerPosition:   verification.PrerequisiteValue{Value: "remote_unauthenticated", Evidence: "public API accepts remote input"},
+			UserInteraction:    verification.PrerequisiteValue{Value: "none", Evidence: "request processing needs no victim action"},
+			OutcomeDeterminism: verification.PrerequisiteValue{Value: "deterministic", Evidence: "3/3 attempts reach the same sink"},
+			Impact:             verification.PrerequisiteValue{Value: "code_execution_or_equivalent", Evidence: "attempts execute attacker-controlled code"},
+			ExistingCapability: verification.PrerequisiteValue{Value: "none", Evidence: "attacker starts without host access"},
+		},
 		Attempts: []verification.Attempt{
 			{Number: 1, Outcome: "reproduced", Evidence: "boom", FailureClass: "panic", CrashSite: "parser.go:42"},
 			{Number: 2, Outcome: "reproduced", Evidence: "boom", FailureClass: "panic", CrashSite: "parser.go:42"},
@@ -917,6 +924,16 @@ func verificationReport(t *testing.T, status string, edit func(*verification.Rep
 				MatchedControls: []string{},
 				Assessments:     []verification.ControlAssessment{},
 			},
+		}
+		for _, prerequisite := range []*verification.PrerequisiteValue{
+			&report.SeverityPrerequisites.AttackerPosition,
+			&report.SeverityPrerequisites.UserInteraction,
+			&report.SeverityPrerequisites.OutcomeDeterminism,
+			&report.SeverityPrerequisites.Impact,
+			&report.SeverityPrerequisites.ExistingCapability,
+		} {
+			prerequisite.Value = "not_attempted"
+			prerequisite.Evidence = "setup failed before evaluation"
 		}
 	}
 	if edit != nil {
@@ -1185,6 +1202,33 @@ func TestParseVerify_storesLiveReportWithoutControlBypassUngraded(t *testing.T) 
 	notes := findingNotes(gdb, f.ID)
 	if len(notes) != 1 || !strings.Contains(notes[0].Body, "verify report requires criteria.control_bypass") {
 		t.Fatalf("notes = %+v, want missing control-bypass validation reason", notes)
+	}
+}
+
+func TestParseVerify_storesLiveReportWithoutSeverityPrerequisitesUngraded(t *testing.T) {
+	var report verification.Report
+	if err := json.Unmarshal([]byte(confirmedVerificationReport(t)), &report); err != nil {
+		t.Fatal(err)
+	}
+	report.SeverityPrerequisites = nil
+	raw, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, gdb := runSkillWithFinding(t, "verify", string(raw), db.FindingNew)
+	if f.Status != db.FindingNew {
+		t.Fatalf("status = %s, want new: an ungraded report must not change lifecycle", f.Status)
+	}
+	var row db.FindingVerification
+	if err := gdb.Where("finding_id = ?", f.ID).First(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if row.Status != "confirmed" || row.Score != nil || row.Report != string(raw) {
+		t.Fatalf("ungraded verification = %+v", row)
+	}
+	notes := findingNotes(gdb, f.ID)
+	if len(notes) != 1 || !strings.Contains(notes[0].Body, "verify report requires severity_prerequisites") {
+		t.Fatalf("notes = %+v, want missing prerequisite validation reason", notes)
 	}
 }
 

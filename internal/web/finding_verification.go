@@ -20,6 +20,7 @@ type findingVerificationView struct {
 	Attempts      []verification.Attempt
 	AttackTree    *verification.AttackTree
 	ControlBypass *verification.ControlBypass
+	Prerequisites []verification.NamedPrerequisite
 }
 
 func loadFindingVerificationViews(gdb *gorm.DB, findingID uint) ([]findingVerificationView, error) {
@@ -37,6 +38,9 @@ func loadFindingVerificationViews(gdb *gorm.DB, findingID uint) ([]findingVerifi
 			view.Attempts = report.Attempts
 			view.AttackTree = report.AttackTree
 			view.ControlBypass = report.Criteria.ControlBypass
+			if report.SeverityPrerequisites != nil {
+				view.Prerequisites = report.SeverityPrerequisites.List()
+			}
 			if row.Score != nil {
 				view.ScoreLabel = fmt.Sprintf("%.0f%%", *row.Score*verificationPercentScale)
 			}

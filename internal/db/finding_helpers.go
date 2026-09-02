@@ -24,8 +24,9 @@ const GHSAIDPattern = `(?i)GHSA(-[0-9a-z]{4}){3}`
 var ghsaIDRE = regexp.MustCompile("^" + GHSAIDPattern + "$")
 
 const (
-	findingWriteMaxAttempts = 5
-	sqliteBusyCode          = 5
+	findingWriteMaxAttempts  = 5
+	findingCapHistoryMaxRows = 20
+	sqliteBusyCode           = 5
 )
 
 var errFindingWriteConflict = errors.New("finding changed concurrently")
@@ -123,10 +124,11 @@ func WriteFindingField(gdb *gorm.DB, findingID uint, field, newValue string, sou
 	})
 }
 
-// ReconcileFindingSeverityCap lowers a finding to maximum when its latest
-// stored severity is higher. When an active cap is removed, it restores the
-// value changed by the latest system-owned cap write. A later severity write
-// from any other source remains authoritative and is never undone.
+// ReconcileFindingSeverityCap applies maximum to the latest uncapped severity.
+// When a cap is relaxed or removed, it walks the contiguous system-owned cap
+// history back to the last authoritative value before applying the new cap. A
+// later severity write from any other source remains authoritative and is never
+// undone.
 //
 // Returning the effective value lets callers derive calibration state from
 // the same read that decided the write.
@@ -147,51 +149,36 @@ func ReconcileFindingSeverityCap(
 		if err := tx.First(&f, findingID).Error; err != nil {
 			return fmt.Errorf("load finding %d: %w", findingID, err)
 		}
-		effective = f.Severity
-		if maximum == "" {
-			if f.SeverityCaps == "" {
-				return nil
+
+		baseline := f.Severity
+		if f.SeverityCaps != "" {
+			var history []FindingHistory
+			if err := tx.Where("finding_id = ? AND field = ?", f.ID, "severity").Order("id DESC").Limit(findingCapHistoryMaxRows).Find(&history).Error; err != nil {
+				return fmt.Errorf("load severity history: %w", err)
 			}
-			var latest FindingHistory
-			err := tx.Where("finding_id = ? AND field = ?", f.ID, "severity").Order("id DESC").First(&latest).Error
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return nil
+			for _, entry := range history {
+				if entry.Source != source || entry.By != by || entry.NewValue != baseline || rank(SeverityLevels, entry.OldValue) == 0 {
+					break
+				}
+				baseline = entry.OldValue
 			}
-			if err != nil {
-				return fmt.Errorf("load latest severity history: %w", err)
-			}
-			if latest.Source != source || latest.By != by || latest.NewValue != f.Severity || rank(SeverityLevels, latest.OldValue) == 0 {
-				return nil
-			}
-			effective = latest.OldValue
-			if err := conditionalFindingUpdate(tx, f.ID, "severity", f.Severity, effective); err != nil {
-				return fmt.Errorf("restore severity: %w", err)
-			}
-			return tx.Create(&FindingHistory{
-				FindingID: f.ID,
-				Field:     "severity",
-				OldValue:  f.Severity,
-				NewValue:  effective,
-				Source:    source,
-				By:        by,
-				CreatedAt: time.Now(),
-			}).Error
 		}
-		if rank(SeverityLevels, f.Severity) == 0 || !SeverityAtLeast(f.Severity, maximum) {
+
+		effective = baseline
+		if maximum != "" && SeverityAtLeast(baseline, maximum) {
+			effective = maximum
+		}
+		if f.Severity == effective {
 			return nil
 		}
-		effective = maximum
-		if f.Severity == maximum {
-			return nil
-		}
-		if err := conditionalFindingUpdate(tx, f.ID, "severity", f.Severity, maximum); err != nil {
-			return fmt.Errorf("update severity: %w", err)
+		if err := conditionalFindingUpdate(tx, f.ID, "severity", f.Severity, effective); err != nil {
+			return fmt.Errorf("reconcile severity: %w", err)
 		}
 		return tx.Create(&FindingHistory{
 			FindingID: f.ID,
 			Field:     "severity",
 			OldValue:  f.Severity,
-			NewValue:  maximum,
+			NewValue:  effective,
 			Source:    source,
 			By:        by,
 			CreatedAt: time.Now(),

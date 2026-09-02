@@ -145,6 +145,45 @@ func TestReconcileFindingSeverityCapRestoresLatestOwnedWrite(t *testing.T) {
 	}
 }
 
+func TestReconcileFindingSeverityCapRelaxesAcrossOwnedHistory(t *testing.T) {
+	gdb := newTestDB(t)
+	finding := seedFinding(t, gdb)
+	if err := gdb.Model(&Finding{}).Where("id = ?", finding.ID).Update("severity", "Critical").Error; err != nil {
+		t.Fatal(err)
+	}
+
+	steps := []struct {
+		maximum string
+		reason  string
+		want    string
+	}{
+		{maximum: "Low", reason: "host shell", want: "Low"},
+		{maximum: "Medium", reason: "local only", want: "Medium"},
+		{maximum: "High", reason: "user interaction", want: "High"},
+		{maximum: "", reason: "", want: "Critical"},
+	}
+	for _, step := range steps {
+		got, err := ReconcileFindingSeverityCap(gdb, finding.ID, step.maximum, SourceSystem, "verify")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != step.want {
+			t.Fatalf("cap %q produced %q, want %q", step.maximum, got, step.want)
+		}
+		if err := gdb.Model(&Finding{}).Where("id = ?", finding.ID).Update("severity_caps", step.reason).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var history []FindingHistory
+	if err := gdb.Where("finding_id = ? AND field = ?", finding.ID, severityField).Order("id").Find(&history).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 4 || history[0].OldValue != "Critical" || history[3].NewValue != "Critical" {
+		t.Fatalf("severity history = %+v", history)
+	}
+}
+
 func TestReconcileFindingSeverityCapPreservesLaterSeverityWrite(t *testing.T) {
 	gdb := newTestDB(t)
 	finding := seedFinding(t, gdb)

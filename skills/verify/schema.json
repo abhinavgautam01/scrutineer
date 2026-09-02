@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "verify report",
   "type": "object",
-  "required": ["status", "attack_tree", "attempts", "criteria"],
+  "required": ["status", "attack_tree", "severity_prerequisites", "attempts", "criteria"],
   "additionalProperties": false,
   "properties": {
     "status": {
@@ -30,6 +30,9 @@
     },
     "attack_tree": {
       "$ref": "#/$defs/attackTree"
+    },
+    "severity_prerequisites": {
+      "$ref": "#/$defs/severityPrerequisites"
     },
     "attempts": {
       "type": "array",
@@ -168,6 +171,59 @@
         }
       }
     },
+    "severityPrerequisites": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attacker_position", "user_interaction", "outcome_determinism", "impact", "existing_capability"],
+      "properties": {
+        "attacker_position": {
+          "allOf": [
+            { "$ref": "#/$defs/evidencedValue" },
+            { "properties": { "value": { "enum": ["remote_unauthenticated", "remote_authenticated", "internal_authenticated", "local", "host_shell", "long_term_physical", "unknown", "not_attempted"] } } }
+          ],
+          "description": "Minimum attacker position required before exercising the finding. Choose the strongest prerequisite actually required by the supplied path."
+        },
+        "user_interaction": {
+          "allOf": [
+            { "$ref": "#/$defs/evidencedValue" },
+            { "properties": { "value": { "enum": ["none", "required", "unknown", "not_attempted"] } } }
+          ]
+        },
+        "outcome_determinism": {
+          "allOf": [
+            { "$ref": "#/$defs/evidencedValue" },
+            { "properties": { "value": { "enum": ["deterministic", "probabilistic_llm", "unknown", "not_attempted"] } } }
+          ]
+        },
+        "impact": {
+          "allOf": [
+            { "$ref": "#/$defs/evidencedValue" },
+            { "properties": { "value": { "enum": ["code_execution_or_equivalent", "privilege_escalation", "sensitive_data_access", "availability", "other", "unknown", "not_attempted"] } } }
+          ]
+        },
+        "existing_capability": {
+          "allOf": [
+            { "$ref": "#/$defs/evidencedValue" },
+            { "properties": { "value": { "enum": ["none", "less_than_outcome", "support_channel_equivalent", "equivalent_or_greater", "unknown", "not_attempted"] } } }
+          ],
+          "description": "How the claimed outcome compares with capabilities the attacker must already possess."
+        }
+      }
+    },
+    "evidencedValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "evidence"],
+      "properties": {
+        "value": { "type": "string" },
+        "evidence": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "Repository source, runtime evidence, or the concrete proof gap supporting the classification."
+        }
+      }
+    },
     "attempt": {
       "type": "object",
       "additionalProperties": false,
@@ -301,9 +357,37 @@
           }
         }
       }
+    },
+    "notAttemptedSeverityPrerequisites": {
+      "type": "object",
+      "properties": {
+        "attacker_position": { "properties": { "value": { "const": "not_attempted" } } },
+        "user_interaction": { "properties": { "value": { "const": "not_attempted" } } },
+        "outcome_determinism": { "properties": { "value": { "const": "not_attempted" } } },
+        "impact": { "properties": { "value": { "const": "not_attempted" } } },
+        "existing_capability": { "properties": { "value": { "const": "not_attempted" } } }
+      }
+    },
+    "attemptedSeverityPrerequisites": {
+      "type": "object",
+      "properties": {
+        "attacker_position": { "properties": { "value": { "not": { "const": "not_attempted" } } } },
+        "user_interaction": { "properties": { "value": { "not": { "const": "not_attempted" } } } },
+        "outcome_determinism": { "properties": { "value": { "not": { "const": "not_attempted" } } } },
+        "impact": { "properties": { "value": { "not": { "const": "not_attempted" } } } },
+        "existing_capability": { "properties": { "value": { "not": { "const": "not_attempted" } } } }
+      }
     }
   },
   "allOf": [
+    {
+      "if": { "properties": { "status": { "enum": ["confirmed", "fixed", "inconclusive"] } }, "required": ["status"] },
+      "then": {
+        "properties": {
+          "severity_prerequisites": { "$ref": "#/$defs/attemptedSeverityPrerequisites" }
+        }
+      }
+    },
     {
       "if": { "properties": { "status": { "const": "deferred" } }, "required": ["status"] },
       "then": {
@@ -316,6 +400,7 @@
             "items": { "properties": { "outcome": { "const": "not_attempted" } } }
           },
           "criteria": { "$ref": "#/$defs/notAttemptedCriteria" },
+          "severity_prerequisites": { "$ref": "#/$defs/notAttemptedSeverityPrerequisites" },
           "attack_tree": {
             "properties": {
               "verdict": { "const": "not_attempted" },
@@ -333,6 +418,7 @@
             "items": { "properties": { "outcome": { "const": "not_attempted" } } }
           },
           "criteria": { "$ref": "#/$defs/notAttemptedCriteria" },
+          "severity_prerequisites": { "$ref": "#/$defs/notAttemptedSeverityPrerequisites" },
           "attack_tree": {
             "properties": {
               "verdict": { "const": "not_attempted" },
