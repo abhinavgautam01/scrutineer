@@ -74,6 +74,57 @@ func TestPruneToSubPath_missing(t *testing.T) {
 	}
 }
 
+func TestPruneToSubPath_refusesSymlinkedComponent(t *testing.T) {
+	dataDir := t.TempDir()
+	src := filepath.Join(dataDir, "scan-1", "src")
+	writeScopeFile(t, src, "README.md")
+	writeScopeFile(t, dataDir, "keep/index.js")
+	victim := filepath.Join(dataDir, "repo-cache", "cache.db")
+	writeScopeFile(t, dataDir, "repo-cache/cache.db")
+	if err := os.Symlink("../..", filepath.Join(src, "escape")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := pruneToSubPath(src, "escape/keep"); err == nil {
+		t.Error("expected error for a symlinked sub_path component")
+	}
+	present(t, victim)
+	present(t, filepath.Join(src, "README.md"))
+}
+
+func TestPruneToSubPath_refusesTerminalSymlink(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	writeScopeFile(t, src, "README.md")
+	writeScopeFile(t, root, "outside/index.js")
+	if err := os.Symlink("../outside", filepath.Join(src, "linked")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := pruneToSubPath(src, "linked"); err == nil {
+		t.Error("expected error for a symlinked sub_path")
+	}
+	present(t, filepath.Join(root, "outside/index.js"))
+	present(t, filepath.Join(src, "README.md"))
+}
+
+func TestPruneToSubPath_prunesSymlinkedSiblingWithoutFollowing(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	writeScopeFile(t, src, "keep/index.js")
+	writeScopeFile(t, root, "outside/index.js")
+	if err := os.Symlink("../outside", filepath.Join(src, "linked")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := pruneToSubPath(src, "keep"); err != nil {
+		t.Fatal(err)
+	}
+	present(t, filepath.Join(src, "keep/index.js"))
+	gone(t, filepath.Join(src, "linked"))
+	present(t, filepath.Join(root, "outside/index.js"))
+}
+
 func TestScanScopeHard(t *testing.T) {
 	hard := &Worker{SubprojectScope: "hard"}
 	soft := &Worker{SubprojectScope: "soft"}
