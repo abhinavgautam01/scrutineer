@@ -513,12 +513,19 @@ func (d ContainerRunner) buildRunArgsForProvider(absWork, image string, hnet har
 		proxyURL = proxyURLWithHost(d.ProxyURL, hnet.gatewayIP)
 	}
 	if proxyURL != "" {
-		args = append(args,
-			"-e", "HTTPS_PROXY="+proxyURL,
-			"-e", "HTTP_PROXY="+proxyURL,
-			"-e", "ALL_PROXY="+proxyURL,
-			"-e", "NO_PROXY=",
-		)
+		// Set both cases. Podman normally inherits both variants from its
+		// host, and curl prefers lowercase https_proxy over HTTPS_PROXY.
+		// runtimeRunArgs disables that Podman inheritance, while these explicit
+		// assignments also override image-provided proxy variables on every
+		// supported runtime.
+		for _, key := range []string{
+			"HTTPS_PROXY", "https_proxy",
+			"HTTP_PROXY", "http_proxy",
+			"ALL_PROXY", "all_proxy",
+		} {
+			args = append(args, "-e", key+"="+proxyURL)
+		}
+		args = append(args, "-e", "NO_PROXY=", "-e", "no_proxy=")
 	} else if !d.Hardened {
 		args = append(args, "--network", "none")
 	}

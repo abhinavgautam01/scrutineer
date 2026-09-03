@@ -104,8 +104,9 @@ func TestContainerRuntimeEnginePredicates(t *testing.T) {
 
 // TestContainerRuntimeCapabilityFlags is the run-flag parity matrix: for each
 // runtime it pins exactly which Docker/Podman flags apply and how `run` starts.
-// docker and podman are identical; apple diverges only where its CLI lacks the
-// flag (--add-host, --pull never, --security-opt) and adds --progress none.
+// Podman disables automatic host proxy inheritance; apple diverges where its
+// CLI lacks flags (--add-host, --pull never, --security-opt) and adds progress
+// suppression.
 func TestContainerRuntimeCapabilityFlags(t *testing.T) {
 	tests := []struct {
 		name                string
@@ -117,7 +118,7 @@ func TestContainerRuntimeCapabilityFlags(t *testing.T) {
 	}{
 		{"docker zero value", ContainerRuntime{}, true, true, true, []string{"run", "--rm"}},
 		{"docker explicit", ContainerRuntime{Bin: "docker"}, true, true, true, []string{"run", "--rm"}},
-		{"podman", ContainerRuntime{Bin: "podman"}, true, true, true, []string{"run", "--rm"}},
+		{"podman", ContainerRuntime{Bin: "podman"}, true, true, true, []string{"run", "--http-proxy=false", "--rm"}},
 		{"apple", ContainerRuntime{Bin: "apple"}, false, false, false, []string{"run", "--progress", "none", "--rm"}},
 	}
 	for _, tc := range tests {
