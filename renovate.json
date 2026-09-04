@@ -104,6 +104,12 @@
       "postUpdateOptions": ["gomodTidy", "gomodUpdateImportPaths"]
     },
     {
+      "description": "Raising the go directive raises the minimum Go version for every consumer",
+      "matchManagers": ["gomod"],
+      "matchDepTypes": ["golang", "toolchain"],
+      "groupName": "Go language version"
+    },
+    {
       "matchManagers": ["gomod"],
       "matchDepTypes": ["indirect"],
       "enabled": true
