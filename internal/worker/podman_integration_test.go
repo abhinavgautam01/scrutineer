@@ -209,7 +209,7 @@ func runnerImageOrSkip(t *testing.T, rt ContainerRuntime) string {
 // given extra run args and returns trimmed combined output.
 func containerScriptOutput(t *testing.T, rt ContainerRuntime, extra []string, image, script string) string {
 	t.Helper()
-	args := append([]string{"run", "--rm"}, extra...)
+	args := append(runtimeRunArgs(rt, "--rm"), extra...)
 	args = append(args, "--entrypoint", "sh", "--", image, "-c", script)
 	out, _ := exec.Command(runtimeBin(rt), args...).CombinedOutput()
 	return strings.TrimSpace(string(out))

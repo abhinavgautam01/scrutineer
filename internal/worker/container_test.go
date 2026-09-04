@@ -632,6 +632,9 @@ func TestProxySidecarRunArgs(t *testing.T) {
 	}
 	args := d.proxySidecarRunArgs("scrutineer-proxy-7", "scrutineer-hardened-7")
 
+	if len(args) < 2 || !slices.Equal(args[:2], []string{"run", "--http-proxy=false"}) {
+		t.Errorf("podman sidecar must disable host proxy inheritance: %v", args)
+	}
 	// Detached and locked down -- the sidecar runs scrutineer's own trusted code
 	// but gets the same defense-in-depth as the scan container.
 	if !slices.Contains(args, "-d") {

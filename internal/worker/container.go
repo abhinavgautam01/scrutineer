@@ -982,16 +982,16 @@ func (d ContainerRunner) sidecarNetworkIP(name, network string) (string, error) 
 // an unreachable host API lingers long enough for verifyHardenedNetwork to
 // capture its logs.
 func (d ContainerRunner) proxySidecarRunArgs(name, network string) []string {
-	args := []string{
-		"run", "-d",
+	args := runtimeRunArgs(d.Runtime,
+		"-d",
 		"--name", name,
 		"--network", network,
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges",
 		"--read-only",
 		"--tmpfs", "/tmp:rw,noexec,nosuid,size=16m",
-		"--add-host", HostGatewayAlias + ":" + d.Egress.GatewayIP,
-	}
+		"--add-host", HostGatewayAlias+":"+d.Egress.GatewayIP,
+	)
 	for _, e := range EgressSidecarEnv(d.Egress, SidecarListenFirstIface+":"+proxySidecarPort) {
 		args = append(args, "-e", e)
 	}
@@ -1073,8 +1073,9 @@ func VerifyProxyBinary(ctx context.Context, rt ContainerRuntime, image string) e
 	if image == "" || !imageExistsLocally(ctx, rt, image) {
 		return nil
 	}
-	out, err := exec.CommandContext(ctx, runtimeBin(rt), "run", "--rm", "--pull", "never",
-		"--", image, "scrutineer", "proxy", "-h").CombinedOutput()
+	args := runtimeRunArgs(rt, "--rm", "--pull", "never",
+		"--", image, "scrutineer", "proxy", "-h")
+	out, err := exec.CommandContext(ctx, runtimeBin(rt), args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("runner image %q is missing the scrutineer binary required for the "+
 			"hardened egress proxy sidecar (rebuild it from Dockerfile.runner): %w: %s",
