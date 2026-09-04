@@ -266,6 +266,24 @@ func TestValidateOpencodeRejectsHarnessSafetyEnvironment(t *testing.T) {
 	}
 }
 
+func TestValidateOpencodeRejectsManagedProxyEnvironment(t *testing.T) {
+	for _, name := range []string{
+		"HTTPS_PROXY", "https_proxy",
+		"HTTP_PROXY", "http_proxy",
+		"ALL_PROXY", "all_proxy",
+		"NO_PROXY", "no_proxy",
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := ValidateOpencode(Opencode{Providers: map[string]OpencodeProvider{
+				"groq": {PassEnv: []string{name}, EgressAllow: []string{"api.groq.com"}},
+			}})
+			if err == nil || !strings.Contains(err.Error(), "managed by scrutineer") {
+				t.Fatalf("ValidateOpencode error = %v", err)
+			}
+		})
+	}
+}
+
 func TestLoad_noContainerAlias(t *testing.T) {
 	// no_docker is the retained pre-rename alias; Load folds it into NoContainer.
 	aliasOnly, err := Load(write(t, "no_docker: true\n"))

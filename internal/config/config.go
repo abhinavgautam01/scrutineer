@@ -255,10 +255,14 @@ var (
 
 var reservedOpencodePassEnv = map[string]bool{
 	"ALL_PROXY":                     true,
+	"all_proxy":                     true,
 	"HOME":                          true,
 	"HTTP_PROXY":                    true,
+	"http_proxy":                    true,
 	"HTTPS_PROXY":                   true,
+	"https_proxy":                   true,
 	"NO_PROXY":                      true,
+	"no_proxy":                      true,
 	"OPENCODE_AUTH_CONTENT":         true,
 	"OPENCODE_CONFIG_CONTENT":       true,
 	"OPENCODE_CONFIG_DIR":           true,

@@ -1158,7 +1158,7 @@ func (d ContainerRunner) verifyProxySidecarReachable(hn hardenedNet, image strin
 	deadline := time.Now().Add(proxySidecarReadyTimeout)
 	var last string
 	for {
-		out, err := exec.Command(runtimeBin(d.Runtime), sidecarReachArgs(hn.name, hn.proxyEndpoint, image)...).CombinedOutput()
+		out, err := exec.Command(runtimeBin(d.Runtime), sidecarReachArgs(d.Runtime, hn.name, hn.proxyEndpoint, image)...).CombinedOutput()
 		last = strings.TrimSpace(string(out))
 		if err == nil && strings.Contains(last, "REACHED") {
 			return nil
@@ -1233,13 +1233,13 @@ func hardenedProxyReachArgs(rt ContainerRuntime, network, gatewayIP, proxyPort, 
 // answers, e.g. 407 without auth) means the in-network path to the sidecar is
 // open, which by the sidecar's readiness gate also means the host API is
 // reachable through it.
-func sidecarReachArgs(network, endpoint, image string) []string {
+func sidecarReachArgs(rt ContainerRuntime, network, endpoint, image string) []string {
 	target := "http://" + endpoint + "/"
 	script := "curl -s -m 5 -o /dev/null " + target + " && echo REACHED || echo UNREACHABLE"
-	return []string{
-		"run", "--rm", "--cap-drop", "ALL", "--network", network,
+	return runtimeRunArgs(rt,
+		"--rm", "--cap-drop", "ALL", "--network", network,
 		"--entrypoint", "sh", "--", image, "-c", script,
-	}
+	)
 }
 
 // proxyPortFromURL extracts the port from a proxy URL of the shape ProxyURL

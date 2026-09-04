@@ -816,7 +816,10 @@ if [ "$1" = inspect ]; then printf '192.0.2.10\n'; fi
 func TestSidecarReachArgs(t *testing.T) {
 	// Probe (b), sidecar variant: curl the sidecar by IP:port on the --internal
 	// network without relying on its DNS; no --add-host.
-	args := sidecarReachArgs("scrutineer-hardened-7", "10.89.1.2:3128", "img:latest")
+	args := sidecarReachArgs(ContainerRuntime{Bin: runtimePodman}, "scrutineer-hardened-7", "10.89.1.2:3128", "img:latest")
+	if len(args) < 2 || !slices.Equal(args[:2], []string{"run", "--http-proxy=false"}) {
+		t.Errorf("podman reach probe must disable host proxy inheritance: %v", args)
+	}
 	if !hasAdjacent(args, "--network", "scrutineer-hardened-7") {
 		t.Errorf("missing --network: %v", args)
 	}
