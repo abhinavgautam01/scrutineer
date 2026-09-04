@@ -8,24 +8,24 @@ require (
 	filippo.io/age v1.3.1
 	github.com/alpha-omega-security/harness v0.1.12
 	github.com/ecosyste-ms/ecosystems-go v0.4.0
-	github.com/git-pkgs/clone v0.7.1
-	github.com/git-pkgs/clone/gogit v0.1.0
+	github.com/git-pkgs/clone v0.7.3
+	github.com/git-pkgs/clone/gogit v0.1.1
 	github.com/git-pkgs/cwe v0.1.1
-	github.com/git-pkgs/enrichment v0.7.0
-	github.com/git-pkgs/magic v0.2.0
+	github.com/git-pkgs/enrichment v0.7.1
+	github.com/git-pkgs/magic v0.3.1
 	github.com/git-pkgs/pom v0.1.7
-	github.com/git-pkgs/purl v0.1.19
+	github.com/git-pkgs/purl v0.1.20
 	github.com/git-pkgs/sarif v0.1.2
 	github.com/git-pkgs/sbom v0.1.6
-	github.com/git-pkgs/vulns v0.2.2
+	github.com/git-pkgs/vulns v0.2.3
 	github.com/glebarez/sqlite v1.11.0
 	github.com/google/uuid v1.6.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/yuin/goldmark v1.8.5
+	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/crypto v0.55.0
 	golang.org/x/term v0.45.0
-	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/gorm v1.31.2
 	maragu.dev/goqite v0.4.0
 )
@@ -37,9 +37,9 @@ require (
 	github.com/cyphar/filepath-securejoin v0.7.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/git-pkgs/packageurl-go v0.3.1 // indirect
-	github.com/git-pkgs/registries v0.8.1 // indirect
+	github.com/git-pkgs/registries v0.9.1 // indirect
 	github.com/git-pkgs/spdx v0.3.1 // indirect
-	github.com/git-pkgs/vers v0.6.0 // indirect
+	github.com/git-pkgs/vers v0.7.0 // indirect
 	github.com/github/go-spdx/v2 v2.7.0 // indirect
 	github.com/glebarez/go-sqlite v1.23.0 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
@@ -61,6 +61,7 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 	modernc.org/libc v1.75.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect

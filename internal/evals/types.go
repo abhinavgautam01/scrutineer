@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 var scenarioIdentifierRE = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
