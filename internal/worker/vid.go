@@ -3,7 +3,9 @@ package worker
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -160,6 +162,13 @@ func stageVIDFile(sourceRoot, stageRoot *os.Root, path string) error {
 		}
 	}
 	out, err := stageRoot.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, vidStageFileMode)
+	if errors.Is(err, fs.ErrExist) {
+		// The staging directory is private and fresh, so an entry that already
+		// exists is this file under another spelling of its path: two sinks
+		// that differ only in case on a case-insensitive filesystem name the
+		// same source file, and its copy is already in place.
+		return nil
+	}
 	if err != nil {
 		return err
 	}

@@ -78,3 +78,18 @@ func TestReadCappedReport_refusesSymlink(t *testing.T) {
 		}
 	}
 }
+
+func TestReadCappedReport_refusesLinkToWorkspaceFile(t *testing.T) {
+	work := t.TempDir()
+	const token = `{"scrutineer":{"token":"secret-token"}}`
+	if err := os.WriteFile(filepath.Join(work, "context.json"), []byte(token), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report := filepath.Join(work, "report.json")
+	if err := os.Symlink("context.json", report); err != nil {
+		t.Fatal(err)
+	}
+	if got := readCappedReport(report, func(Event) {}); got != "" {
+		t.Errorf("report linked to context.json returned %q, want empty", got)
+	}
+}

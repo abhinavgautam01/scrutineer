@@ -769,3 +769,42 @@ func TestChatRunnerFindingSnapshotCarriesTheAnalysis(t *testing.T) {
 		t.Error("an oversized narrative field must be truncated, not inlined whole")
 	}
 }
+
+func TestEnsureSrc_symlinkedMarkerDoesNotCreateHostFile(t *testing.T) {
+	gdb, repo := chatTestDB(t)
+	conv, err := db.CreateConversation(gdb, repo.ID, nil, "claude-x", "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataDir := t.TempDir()
+	workRoot := chatWorkRoot(dataDir, conv.ID)
+	if err := os.MkdirAll(workRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The agent left the ready marker as a link to a host path that does not
+	// exist yet; a plain WriteFile would create the file there.
+	victim := filepath.Join(dataDir, "host-marker")
+	if err := os.Symlink("../host-marker", filepath.Join(workRoot, chatSrcReadyFile)); err != nil {
+		t.Fatal(err)
+	}
+
+	prepared := 0
+	runner := &chatStubRunner{backend: "claude", resultText: "ok", emitResult: true}
+	cr := &ChatRunner{Runner: runner, DB: gdb, DataDir: dataDir, PrepareSrc: stubPrepareSrc(&prepared)}
+	if _, err := cr.RunTurn(context.Background(), conv, "hi", func(Event) {}); err != nil {
+		t.Fatal(err)
+	}
+	if prepared != 1 {
+		t.Errorf("a linked marker was accepted as a finished clone: prepared=%d, want 1", prepared)
+	}
+	if _, err := os.Lstat(victim); !os.IsNotExist(err) {
+		t.Errorf("marker write followed the link onto the host: lstat err = %v", err)
+	}
+	info, err := os.Lstat(filepath.Join(workRoot, chatSrcReadyFile))
+	if err != nil || !info.Mode().IsRegular() {
+		t.Errorf("marker = %v, %v; want a regular file", info, err)
+	}
+	if !runner.got.SrcReady {
+		t.Error("turn ran without the source marked ready")
+	}
+}
