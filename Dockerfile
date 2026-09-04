@@ -1,4 +1,4 @@
-FROM golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc AS build
+FROM golang:1.27.1-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -16,7 +16,7 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.259
 FROM python:3.14-alpine@sha256:05b2b8b732ecd268fee8727a369f936f022d1321b59befd13c30ede22769dcdc AS python-tools
 RUN pip install --no-cache-dir semgrep==1.167.0 "setuptools<81" bandit==1.9.4
 
-FROM golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc AS go-tools
+FROM golang:1.27.1-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS go-tools
 RUN apk add --no-cache git
 RUN GOBIN=/out go install github.com/git-pkgs/git-pkgs@v0.19.0 && \
     GOBIN=/out go install github.com/git-pkgs/brief/cmd/brief@v0.12.0
@@ -24,7 +24,7 @@ RUN GOBIN=/out go install github.com/git-pkgs/git-pkgs@v0.19.0 && \
 # vid links tree-sitter grammars (C), so unlike the main binary it needs
 # cgo; build-base provides gcc and musl headers, matching the musl-based
 # final image.
-FROM golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc AS vid-build
+FROM golang:1.27.1-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS vid-build
 RUN apk add --no-cache build-base git
 RUN GOBIN=/out CGO_ENABLED=1 go install github.com/andrew/VID/cmd/vid@v0.1.0
 
