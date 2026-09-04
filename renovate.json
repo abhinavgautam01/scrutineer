@@ -125,6 +125,14 @@
       "minimumReleaseAge": "7 days"
     },
     {
+      "description": "Update Go builder image versions before Go modules can require the newer toolchain",
+      "matchManagers": ["dockerfile"],
+      "matchPackageNames": ["golang"],
+      "matchUpdateTypes": ["major", "minor", "patch"],
+      "groupName": "Go Docker images",
+      "minimumReleaseAge": "0 days"
+    },
+    {
       "matchManagers": ["custom.regex"],
       "minimumReleaseAge": "7 days"
     },
