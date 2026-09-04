@@ -43,8 +43,14 @@ func runtimeBin(rt ContainerRuntime) string {
 // stream-json reader only see the container payload.
 func runtimeRunArgs(rt ContainerRuntime, args ...string) []string {
 	out := []string{"run"}
-	if rt.Bin == runtimeApple {
+	switch rt.Bin {
+	case runtimeApple:
 		out = append(out, "--progress", "none")
+	case runtimePodman:
+		// Podman otherwise copies every host proxy variable into the
+		// container. In particular, an inherited lowercase https_proxy takes
+		// precedence over the uppercase provider-scoped proxy below.
+		out = append(out, "--http-proxy=false")
 	}
 	return append(out, args...)
 }

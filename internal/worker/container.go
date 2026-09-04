@@ -513,12 +513,19 @@ func (d ContainerRunner) buildRunArgsForProvider(absWork, image string, hnet har
 		proxyURL = proxyURLWithHost(d.ProxyURL, hnet.gatewayIP)
 	}
 	if proxyURL != "" {
-		args = append(args,
-			"-e", "HTTPS_PROXY="+proxyURL,
-			"-e", "HTTP_PROXY="+proxyURL,
-			"-e", "ALL_PROXY="+proxyURL,
-			"-e", "NO_PROXY=",
-		)
+		// Set both cases. Podman normally inherits both variants from its
+		// host, and curl prefers lowercase https_proxy over HTTPS_PROXY.
+		// runtimeRunArgs disables that Podman inheritance, while these explicit
+		// assignments also override image-provided proxy variables on every
+		// supported runtime.
+		for _, key := range []string{
+			"HTTPS_PROXY", "https_proxy",
+			"HTTP_PROXY", "http_proxy",
+			"ALL_PROXY", "all_proxy",
+		} {
+			args = append(args, "-e", key+"="+proxyURL)
+		}
+		args = append(args, "-e", "NO_PROXY=", "-e", "no_proxy=")
 	} else if !d.Hardened {
 		args = append(args, "--network", "none")
 	}
@@ -975,16 +982,16 @@ func (d ContainerRunner) sidecarNetworkIP(name, network string) (string, error) 
 // an unreachable host API lingers long enough for verifyHardenedNetwork to
 // capture its logs.
 func (d ContainerRunner) proxySidecarRunArgs(name, network string) []string {
-	args := []string{
-		"run", "-d",
+	args := runtimeRunArgs(d.Runtime,
+		"-d",
 		"--name", name,
 		"--network", network,
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges",
 		"--read-only",
 		"--tmpfs", "/tmp:rw,noexec,nosuid,size=16m",
-		"--add-host", HostGatewayAlias + ":" + d.Egress.GatewayIP,
-	}
+		"--add-host", HostGatewayAlias+":"+d.Egress.GatewayIP,
+	)
 	for _, e := range EgressSidecarEnv(d.Egress, SidecarListenFirstIface+":"+proxySidecarPort) {
 		args = append(args, "-e", e)
 	}
@@ -1066,8 +1073,9 @@ func VerifyProxyBinary(ctx context.Context, rt ContainerRuntime, image string) e
 	if image == "" || !imageExistsLocally(ctx, rt, image) {
 		return nil
 	}
-	out, err := exec.CommandContext(ctx, runtimeBin(rt), "run", "--rm", "--pull", "never",
-		"--", image, "scrutineer", "proxy", "-h").CombinedOutput()
+	args := runtimeRunArgs(rt, "--rm", "--pull", "never",
+		"--", image, "scrutineer", "proxy", "-h")
+	out, err := exec.CommandContext(ctx, runtimeBin(rt), args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("runner image %q is missing the scrutineer binary required for the "+
 			"hardened egress proxy sidecar (rebuild it from Dockerfile.runner): %w: %s",
@@ -1150,7 +1158,7 @@ func (d ContainerRunner) verifyProxySidecarReachable(hn hardenedNet, image strin
 	deadline := time.Now().Add(proxySidecarReadyTimeout)
 	var last string
 	for {
-		out, err := exec.Command(runtimeBin(d.Runtime), sidecarReachArgs(hn.name, hn.proxyEndpoint, image)...).CombinedOutput()
+		out, err := exec.Command(runtimeBin(d.Runtime), sidecarReachArgs(d.Runtime, hn.name, hn.proxyEndpoint, image)...).CombinedOutput()
 		last = strings.TrimSpace(string(out))
 		if err == nil && strings.Contains(last, "REACHED") {
 			return nil
@@ -1225,13 +1233,13 @@ func hardenedProxyReachArgs(rt ContainerRuntime, network, gatewayIP, proxyPort, 
 // answers, e.g. 407 without auth) means the in-network path to the sidecar is
 // open, which by the sidecar's readiness gate also means the host API is
 // reachable through it.
-func sidecarReachArgs(network, endpoint, image string) []string {
+func sidecarReachArgs(rt ContainerRuntime, network, endpoint, image string) []string {
 	target := "http://" + endpoint + "/"
 	script := "curl -s -m 5 -o /dev/null " + target + " && echo REACHED || echo UNREACHABLE"
-	return []string{
-		"run", "--rm", "--cap-drop", "ALL", "--network", network,
+	return runtimeRunArgs(rt,
+		"--rm", "--cap-drop", "ALL", "--network", network,
 		"--entrypoint", "sh", "--", image, "-c", script,
-	}
+	)
 }
 
 // proxyPortFromURL extracts the port from a proxy URL of the shape ProxyURL

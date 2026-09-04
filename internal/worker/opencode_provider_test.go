@@ -205,6 +205,7 @@ func TestEnsureOpencodeProviderStateRequiresStoredCredentials(t *testing.T) {
 func TestConfigureOpencodeProviderEgressScopesHostProxyToSelectedProvider(t *testing.T) {
 	d := ContainerRunner{
 		Harness: OpencodeHarness{},
+		Runtime: ContainerRuntime{Bin: runtimePodman},
 		OpencodeProviders: map[string]OpencodeProviderConfig{
 			"groq": {EgressHosts: []string{"api.groq.com", "auth.example.com"}},
 			"kiro": {EgressHosts: []string{"q.us-east-1.amazonaws.com"}},
@@ -236,6 +237,15 @@ func TestConfigureOpencodeProviderEgressScopesHostProxyToSelectedProvider(t *tes
 	}
 	if got.ProxyURL == "" || got.ProxyURL == d.ProxyURL {
 		t.Errorf("provider-scoped proxy URL = %q", got.ProxyURL)
+	}
+	args := got.buildRunArgsForProvider("/work/abs", "stock:1", hardenedNet{}, "", provider, "/tmp")
+	if !slices.Contains(args, "--http-proxy=false") {
+		t.Errorf("podman host proxy inheritance is enabled: %v", args)
+	}
+	for _, key := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+		if !hasAdjacent(args, "-e", key+"="+got.ProxyURL) {
+			t.Errorf("selected provider proxy missing from %s: %v", key, args)
+		}
 	}
 }
 

@@ -632,6 +632,9 @@ func TestProxySidecarRunArgs(t *testing.T) {
 	}
 	args := d.proxySidecarRunArgs("scrutineer-proxy-7", "scrutineer-hardened-7")
 
+	if len(args) < 2 || !slices.Equal(args[:2], []string{"run", "--http-proxy=false"}) {
+		t.Errorf("podman sidecar must disable host proxy inheritance: %v", args)
+	}
 	// Detached and locked down -- the sidecar runs scrutineer's own trusted code
 	// but gets the same defense-in-depth as the scan container.
 	if !slices.Contains(args, "-d") {
@@ -813,7 +816,10 @@ if [ "$1" = inspect ]; then printf '192.0.2.10\n'; fi
 func TestSidecarReachArgs(t *testing.T) {
 	// Probe (b), sidecar variant: curl the sidecar by IP:port on the --internal
 	// network without relying on its DNS; no --add-host.
-	args := sidecarReachArgs("scrutineer-hardened-7", "10.89.1.2:3128", "img:latest")
+	args := sidecarReachArgs(ContainerRuntime{Bin: runtimePodman}, "scrutineer-hardened-7", "10.89.1.2:3128", "img:latest")
+	if len(args) < 2 || !slices.Equal(args[:2], []string{"run", "--http-proxy=false"}) {
+		t.Errorf("podman reach probe must disable host proxy inheritance: %v", args)
+	}
 	if !hasAdjacent(args, "--network", "scrutineer-hardened-7") {
 		t.Errorf("missing --network: %v", args)
 	}
@@ -847,10 +853,23 @@ func TestBuildRunArgs_SidecarProxyURL(t *testing.T) {
 	// against the sidecar's own IP:port; it does not carry the host-proxy
 	// URL through. The basic-auth username is harness/egress's constant.
 	want := ProxyURLForEndpoint("tok", "10.89.1.2:3128")
-	for _, env := range []string{"HTTPS_PROXY=" + want, "HTTP_PROXY=" + want, "ALL_PROXY=" + want} {
+	for _, key := range []string{
+		"HTTPS_PROXY", "https_proxy",
+		"HTTP_PROXY", "http_proxy",
+		"ALL_PROXY", "all_proxy",
+	} {
+		env := key + "=" + want
 		if !hasAdjacent(args, "-e", env) {
 			t.Errorf("expected sidecar %s in %v", env, args)
 		}
+	}
+	for _, env := range []string{"NO_PROXY=", "no_proxy="} {
+		if !hasAdjacent(args, "-e", env) {
+			t.Errorf("expected empty proxy exclusion %s in %v", env, args)
+		}
+	}
+	if !slices.Contains(args, "--http-proxy=false") {
+		t.Errorf("podman host proxy inheritance is enabled: %v", args)
 	}
 	for _, a := range args {
 		if strings.Contains(a, "host.docker.internal:55000") {
@@ -868,8 +887,22 @@ func TestBuildRunArgs_HostProxyURLWhenNoSidecar(t *testing.T) {
 	// exactly as docker/rootful hardened and non-hardened scans do today.
 	d := ContainerRunner{ProxyURL: "http://scrutineer:tok@host.docker.internal:55000"}
 	args := d.buildRunArgs("img:latest", hardenedNet{}, "")
-	if !hasAdjacent(args, "-e", "HTTPS_PROXY=http://scrutineer:tok@host.docker.internal:55000") {
-		t.Errorf("expected the host proxy URL in %v", args)
+	want := "http://scrutineer:tok@host.docker.internal:55000"
+	for _, key := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+		if !hasAdjacent(args, "-e", key+"="+want) {
+			t.Errorf("expected %s host proxy URL in %v", key, args)
+		}
+	}
+}
+
+func TestBuildRunArgs_PodmanWithoutProxyRejectsInheritedHostProxy(t *testing.T) {
+	d := ContainerRunner{Runtime: ContainerRuntime{Bin: runtimePodman}}
+	args := d.buildRunArgs("img:latest", hardenedNet{}, "")
+	if !slices.Contains(args, "--http-proxy=false") {
+		t.Errorf("podman host proxy inheritance is enabled: %v", args)
+	}
+	if !hasAdjacent(args, "--network", "none") {
+		t.Errorf("unproxied container did not fail closed: %v", args)
 	}
 }
 
