@@ -501,7 +501,7 @@ func writeReportFinding(b *strings.Builder, gdb *gorm.DB, f db.Finding, latest *
 
 	if f.Snippet != "" {
 		path, _ := splitFileLine(f.Location)
-		fmt.Fprintf(b, "#### Source\n\n```%s\n%s\n```\n\n", highlightLang(path), f.Snippet)
+		fmt.Fprintf(b, "#### Source\n\n```%s\n%s\n```\n\n", highlightLang(path, ""), f.Snippet)
 	}
 
 	writeProse(b, "#### Trace", f.Trace)

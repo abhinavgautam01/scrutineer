@@ -98,7 +98,7 @@ func (s *Server) repoBlob(w http.ResponseWriter, r *http.Request) {
 		"Unsupported": !renderable,
 		"Truncated":   blob.Truncated,
 		"Content":     content,
-		"Language":    highlightLang(cleanPath),
+		"Language":    highlightLang(cleanPath, blob.Detection.Format),
 	})
 }
 
@@ -139,8 +139,9 @@ func parseHighlight(raw string) [2]int {
 }
 
 // highlightLang returns the highlight.js language hint for path,
+// falling back to the sniffed content format for extensionless files,
 // or "" to let the library auto-detect.
-func highlightLang(p string) string {
+func highlightLang(p, format string) string {
 	switch strings.ToLower(filepath.Ext(p)) {
 	case ".go":
 		return "go"
@@ -184,6 +185,12 @@ func highlightLang(p string) string {
 		return "markdown"
 	case ".toml":
 		return "toml"
+	}
+	switch format {
+	case magic.FormatJSON:
+		return "json"
+	case magic.FormatXML, magic.FormatHTML, magic.FormatSVG:
+		return "xml"
 	}
 	return ""
 }

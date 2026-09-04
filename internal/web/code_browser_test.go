@@ -86,6 +86,30 @@ func TestParseHighlight(t *testing.T) {
 	}
 }
 
+func TestHighlightLang(t *testing.T) {
+	cases := []struct {
+		path   string
+		format string
+		want   string
+	}{
+		{"main.go", "", "go"},
+		{"lib/foo.RB", "", "ruby"},
+		{"config.json", magic.FormatText, "json"},
+		{"Pipfile.lock", magic.FormatJSON, "json"},
+		{".eslintrc", magic.FormatJSON, "json"},
+		{"pom", magic.FormatXML, "xml"},
+		{"index", magic.FormatHTML, "xml"},
+		{"logo", magic.FormatSVG, "xml"},
+		{"README", magic.FormatText, ""},
+		{"README", "", ""},
+	}
+	for _, c := range cases {
+		if got := highlightLang(c.path, c.format); got != c.want {
+			t.Errorf("highlightLang(%q, %q) = %q, want %q", c.path, c.format, got, c.want)
+		}
+	}
+}
+
 // seedRepoCache makes a real git repo at the cache path the handler will
 // resolve, with two commits so `git show <commit>:<path>` works for both.
 func seedRepoCache(t *testing.T, dataDir, url string) (commit1, commit2 string) {
