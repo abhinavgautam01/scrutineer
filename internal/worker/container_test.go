@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -269,14 +270,19 @@ func TestBuildRunArgs_ContainerHardening(t *testing.T) {
 		t.Errorf("default mode must set neither --read-only nor no-new-privileges: %v", def)
 	}
 
-	// The baseline -- --cap-drop ALL, non-root --user, the /tmp tmpfs -- is
-	// present in EVERY mode; the new flag must not disturb that invariant.
+	// The baseline -- --cap-drop ALL, the /tmp tmpfs and, except on Windows,
+	// the non-root --user -- is present in EVERY mode; the new flag must not
+	// disturb that invariant.
 	for _, mode := range []ContainerRunner{{}, {HardenedRuntimeOnly: true}, {Hardened: true}} {
 		args := mode.buildRunArgs("img:latest", hardenedNet{name: net}, "")
 		if !hasAdjacent(args, "--cap-drop", "ALL") {
 			t.Errorf("%+v: missing --cap-drop ALL: %v", mode, args)
 		}
-		if !hasAdjacent(args, "--user", user) {
+		if runtime.GOOS == "windows" {
+			if slices.Contains(args, "--user") {
+				t.Errorf("%+v: --user has no host uid to map on windows: %v", mode, args)
+			}
+		} else if !hasAdjacent(args, "--user", user) {
 			t.Errorf("%+v: missing --user %s: %v", mode, user, args)
 		}
 		if !hasAdjacent(args, "--tmpfs", tmpfs) {
@@ -636,10 +642,7 @@ func TestResolveProfile_DegradesToFallback(t *testing.T) {
 	// (no real build); anything else (e.g. resolveBaseDigest's `buildx`) exits
 	// non-zero, which the callers already treat as a soft miss.
 	binDir := t.TempDir()
-	stub := "#!/bin/sh\n[ \"$1\" = \"image\" ] && exit 0\nexit 1\n"
-	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte(stub), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeFakeBin(t, binDir, "docker", "#!/bin/sh\n[ \"$1\" = \"image\" ] && exit 0\nexit 1\n")
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	d := ContainerRunner{ProfilesDir: profiles} // default Bin "docker" resolves to the stub
@@ -861,10 +864,8 @@ func TestStartProxySidecar_ConnectsRuntimeBridge(t *testing.T) {
 			script := fmt.Sprintf(`#!/bin/sh
 printf '%%s\n' "$*" >> %q
 if [ "$1" = inspect ]; then printf '192.0.2.10\n'; fi
-`, logPath)
-			if err := os.WriteFile(filepath.Join(binDir, tc.runtime.Bin), []byte(script), 0o755); err != nil {
-				t.Fatal(err)
-			}
+`, filepath.ToSlash(logPath))
+			writeFakeBin(t, binDir, tc.runtime.Bin, script)
 			t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 			d := ContainerRunner{
 				Runtime:  tc.runtime,

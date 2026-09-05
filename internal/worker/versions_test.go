@@ -167,10 +167,7 @@ if [ "$1" = "run" ]; then
 fi
 exit 64
 `
-	bin := filepath.Join(dir, appleBinary)
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeFakeBin(t, dir, appleBinary, script)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("SCRUTINEER_FAKE_CONTAINER_LOG", logPath)
 	return logPath

@@ -12,14 +12,12 @@ import (
 
 	"scrutineer/internal/coverage"
 	"scrutineer/internal/db"
+	"scrutineer/internal/db/dbtest"
 	"scrutineer/internal/testutil"
 )
 
 func TestPrepareDiffRescanStagesDiffInputs(t *testing.T) {
-	gdb, err := db.Open(filepath.Join(t.TempDir(), "d.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	gdb := dbtest.Open(t)
 	repoDir := initGitRepo(t)
 	writeDiffTestFile(t, repoDir, "app.go", "package main\n\nfunc old() {}\n")
 	base := gitCommit(t, repoDir, "base")
@@ -95,10 +93,7 @@ func TestPrepareDiffRescanStagesDiffInputs(t *testing.T) {
 }
 
 func TestDiffBaselineMatchesFocusArea(t *testing.T) {
-	gdb, err := db.Open(filepath.Join(t.TempDir(), "d.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	gdb := dbtest.Open(t)
 	repo := db.Repository{URL: "file:///tmp/focus", Name: "focus"}
 	if err := gdb.Create(&repo).Error; err != nil {
 		t.Fatal(err)
@@ -118,10 +113,7 @@ func TestDiffBaselineMatchesFocusArea(t *testing.T) {
 }
 
 func TestPrepareDiffRescanScopesDiffToSubPath(t *testing.T) {
-	gdb, err := db.Open(filepath.Join(t.TempDir(), "d.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	gdb := dbtest.Open(t)
 	repoDir := initGitRepo(t)
 	writeDiffTestFile(t, repoDir, "pkg/app.go", "package pkg\n\nfunc old() {}\n")
 	writeDiffTestFile(t, repoDir, "README.md", "old\n")
@@ -167,10 +159,7 @@ func TestPrepareDiffRescanScopesDiffToSubPath(t *testing.T) {
 }
 
 func TestPrepareDiffRescanFallsBackWithoutBaseline(t *testing.T) {
-	gdb, err := db.Open(filepath.Join(t.TempDir(), "d.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	gdb := dbtest.Open(t)
 	repo := db.Repository{URL: "file://" + t.TempDir(), Name: "r"}
 	gdb.Create(&repo)
 	missingBaselineID := uint(999)
@@ -234,10 +223,7 @@ func TestParseChangedFilesPreservesPathWhitespaceAndSkipsMalformedStatus(t *test
 }
 
 func TestParseFindingsOutputDiffScanDoesNotMarkPriorFindingsMissed(t *testing.T) {
-	gdb, err := db.Open(filepath.Join(t.TempDir(), "d.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	gdb := dbtest.Open(t)
 	repo := db.Repository{URL: "https://x/r", Name: "r"}
 	gdb.Create(&repo)
 	w := &Worker{DB: gdb, DataDir: t.TempDir(), Log: slog.Default()}

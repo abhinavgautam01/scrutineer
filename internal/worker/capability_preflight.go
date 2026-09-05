@@ -113,6 +113,12 @@ func (sj SkillJob) probeCapabilities(ctx context.Context, prefix []string, egres
 	for _, name := range sj.RequiresFeatures {
 		requirements = append(requirements, "feature:"+name)
 	}
+	if len(prefix) == 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("capability probe: %w", err)
+		}
+		return probeHostCapabilities(requirements, egress), nil
+	}
 	policy := "no"
 	if egress {
 		policy = "yes"
@@ -132,6 +138,26 @@ func (sj SkillJob) probeCapabilities(ctx context.Context, prefix []string, egres
 		return nil, fmt.Errorf("capability probe did not complete: %w", err)
 	}
 	return parseCapabilityProbe(string(output), requirements)
+}
+
+// probeHostCapabilities answers capabilityProbeScript's questions without a
+// shell. The host runner has no container to run one in, and a Windows host
+// has no /bin/sh to fall back on.
+func probeHostCapabilities(requirements []string, egress bool) []string {
+	missing := make([]string, 0, len(requirements))
+	for _, requirement := range requirements {
+		switch {
+		case strings.HasPrefix(requirement, "command:"):
+			if _, err := exec.LookPath(strings.TrimPrefix(requirement, "command:")); err == nil {
+				continue
+			}
+		case requirement == "feature:network-egress" && egress:
+			continue
+		}
+		missing = append(missing, requirement)
+	}
+	slices.Sort(missing)
+	return missing
 }
 
 func parseCapabilityProbe(output string, requirements []string) ([]string, error) {
