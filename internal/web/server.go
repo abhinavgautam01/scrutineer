@@ -3276,7 +3276,10 @@ type ScanOpts struct {
 	ScanGroup string
 	// FocusArea is the complete audit focus serialized as JSON. It is an
 	// internal orchestration input, not an operator-supplied API field.
-	FocusArea string
+	FocusArea       string
+	TriageScanID    *uint
+	ExplorationMode string
+	ExplorationPath string
 	// SessionID and ResumedFromScanID carry a failed scan's claude session
 	// into its retry so the new run continues the conversation with
 	// `claude -p --resume` instead of restarting from turn 0. Both empty
@@ -3364,6 +3367,9 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 	if err := worker.ValidateGitRef(opts.Ref); err != nil {
 		return 0, fmt.Errorf("%w: %v", ErrInvalidRef, err)
 	}
+	if err := worker.ValidateExploration(sk.Name, opts.ExplorationMode, opts.ExplorationPath, opts.FocusArea, opts.RescanMode, opts.FindingID); err != nil {
+		return 0, err
+	}
 	if strings.TrimSpace(opts.FocusArea) != "" {
 		area, err := repoconfig.DecodeFocusAreaJSON(opts.FocusArea)
 		if err != nil {
@@ -3413,6 +3419,9 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 		ScopeMode:            opts.ScopeMode,
 		ScanGroup:            opts.ScanGroup,
 		FocusArea:            opts.FocusArea,
+		TriageScanID:         opts.TriageScanID,
+		ExplorationMode:      opts.ExplorationMode,
+		ExplorationPath:      opts.ExplorationPath,
 		Ref:                  opts.Ref,
 		RescanMode:           opts.RescanMode,
 		DiffBaseScanID:       opts.DiffBaseScanID,
