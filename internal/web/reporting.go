@@ -22,6 +22,7 @@ package web
 import (
 	"encoding/csv"
 	"fmt"
+	"maps"
 	"net/http"
 	"sort"
 	"strconv"
@@ -435,45 +436,68 @@ func (s *Server) reportingCSV(w http.ResponseWriter, r *http.Request) {
 
 	period, severity := data.Interval.Key, severityFilterLabel(data.MinSeverity)
 	num := func(v float64) string { return strconv.FormatFloat(v, 'f', 2, 64) }
-	row := func(rowType, date string, cells ...string) []string {
-		return append([]string{period, severity, rowType, date}, cells...)
+	// Columns are addressed by name, never by position. A partially filled
+	// row (the all-time averages fill three of thirteen) would otherwise be
+	// a run of anonymous "" literals that nobody — human or tool — can
+	// recount safely, and dropping one silently shifts every later value
+	// into its neighbour's column.
+	row := func(rowType, date string, cells map[string]string) []string {
+		values := map[string]string{
+			"period":           period,
+			"minimum_severity": severity,
+			"row_type":         rowType,
+			"date":             date,
+		}
+		maps.Copy(values, cells)
+		return csvRecord(values)
 	}
 
 	_ = cw.Write(reportCSVHeader)
 	// The period total leads: opened in a spreadsheet, the headline numbers
 	// are the first thing under the header rather than below the daily rows.
-	_ = cw.Write(row("period_total", "",
-		strconv.Itoa(data.Totals.ReposScanned),
-		strconv.Itoa(data.Totals.Scans),
-		strconv.Itoa(data.Totals.ScansDone),
-		strconv.Itoa(data.Totals.Findings),
-		num(sumDayCost(data.Days)),
-		strconv.Itoa(sumDayTokens(data.Days)),
-		strconv.Itoa(data.Period.Runs),
-		num(data.Period.CostUSD),
-		num(data.Period.TotalTokens),
-	))
+	_ = cw.Write(row("period_total", "", map[string]string{
+		"repositories_scanned": strconv.Itoa(data.Totals.ReposScanned),
+		"scans_started":        strconv.Itoa(data.Totals.Scans),
+		"scans_completed":      strconv.Itoa(data.Totals.ScansDone),
+		findingsField:          strconv.Itoa(data.Totals.Findings),
+		"cost_usd":             num(sumDayCost(data.Days)),
+		"total_tokens":         strconv.Itoa(sumDayTokens(data.Days)),
+		"scans_averaged":       strconv.Itoa(data.Period.Runs),
+		"avg_cost_usd":         num(data.Period.CostUSD),
+		"avg_total_tokens":     num(data.Period.TotalTokens),
+	}))
 	// All-time averages are a different population from the selected
 	// period, so only the average columns are filled: the activity columns
 	// would otherwise imply an all-time total this report never computed.
-	_ = cw.Write(row("all_time_average", "", "", "", "", "", "",
-		strconv.Itoa(data.AllTime.Runs),
-		num(data.AllTime.CostUSD),
-		num(data.AllTime.TotalTokens),
-	))
+	_ = cw.Write(row("all_time_average", "", map[string]string{
+		"scans_averaged":   strconv.Itoa(data.AllTime.Runs),
+		"avg_cost_usd":     num(data.AllTime.CostUSD),
+		"avg_total_tokens": num(data.AllTime.TotalTokens),
+	}))
 	for _, d := range data.Days {
-		_ = cw.Write(row("day", d.Date,
-			strconv.Itoa(d.ReposScanned),
-			strconv.Itoa(d.Scans),
-			strconv.Itoa(d.ScansDone),
-			strconv.Itoa(d.Findings),
-			num(d.CostUSD),
-			strconv.Itoa(d.TotalTokens),
-			strconv.Itoa(d.ScansAveraged),
-			num(d.AvgCostUSD),
-			num(d.AvgTotalTokens),
-		))
+		_ = cw.Write(row("day", d.Date, map[string]string{
+			"repositories_scanned": strconv.Itoa(d.ReposScanned),
+			"scans_started":        strconv.Itoa(d.Scans),
+			"scans_completed":      strconv.Itoa(d.ScansDone),
+			findingsField:          strconv.Itoa(d.Findings),
+			"cost_usd":             num(d.CostUSD),
+			"total_tokens":         strconv.Itoa(d.TotalTokens),
+			"scans_averaged":       strconv.Itoa(d.ScansAveraged),
+			"avg_cost_usd":         num(d.AvgCostUSD),
+			"avg_total_tokens":     num(d.AvgTotalTokens),
+		}))
 	}
+}
+
+// csvRecord renders one record in reportCSVHeader order. The result is
+// always exactly as wide as the header, so no caller can make the sheet
+// ragged; columns the caller did not set stay empty.
+func csvRecord(values map[string]string) []string {
+	rec := make([]string, len(reportCSVHeader))
+	for i, column := range reportCSVHeader {
+		rec[i] = values[column]
+	}
+	return rec
 }
 
 func sumDayCost(days []reportDayRow) float64 {

@@ -673,3 +673,114 @@ func TestReportingExportsKeepScanFieldNames(t *testing.T) {
 		}
 	}
 }
+
+// Columns are addressed by name, so a mistyped key renders an empty cell
+// instead of failing to compile. Assert which columns each row type is
+// meant to fill, so a typo shows up as a test failure rather than a blank
+// column in someone's spreadsheet.
+func TestReportingCSVRowsFillTheirColumns(t *testing.T) {
+	s, cleanup := newTestServer(t)
+	defer cleanup()
+	seedReportCorpus(t, s)
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", "/reporting/report.csv?interval=all"))
+	rows, err := csv.NewReader(strings.NewReader(w.Body.String())).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := map[string]int{}
+	for i, col := range rows[0] {
+		index[col] = i
+	}
+
+	// The all-time row deliberately leaves the activity columns blank; every
+	// other column of every other row carries a value.
+	blankForAllTime := map[string]bool{
+		"date": true, "repositories_scanned": true, "scans_started": true,
+		"scans_completed": true, findingsField: true, "cost_usd": true,
+		"total_tokens": true,
+	}
+	seen := map[string]bool{}
+	for _, row := range rows[1:] {
+		rowType := row[index["row_type"]]
+		seen[rowType] = true
+		for col, i := range index {
+			// period_total covers the whole window, so it has no single date.
+			wantBlank := (rowType == "period_total" && col == "date") ||
+				(rowType == "all_time_average" && blankForAllTime[col])
+			if wantBlank {
+				if row[i] != "" {
+					t.Errorf("%s: column %q = %q, want empty", rowType, col, row[i])
+				}
+				continue
+			}
+			if row[i] == "" {
+				t.Errorf("%s: column %q is empty; check the key spelling", rowType, col)
+			}
+		}
+	}
+	for _, want := range []string{"period_total", "all_time_average", "day"} {
+		if !seen[want] {
+			t.Errorf("no %s row emitted", want)
+		}
+	}
+}
+
+func TestCSVRecordIsAlwaysHeaderWidth(t *testing.T) {
+	if got := csvRecord(nil); len(got) != len(reportCSVHeader) {
+		t.Errorf("csvRecord(nil) width = %d, want %d", len(got), len(reportCSVHeader))
+	}
+	// An unknown column is dropped rather than widening the record.
+	got := csvRecord(map[string]string{"period": "week", "not_a_column": "x"})
+	if len(got) != len(reportCSVHeader) {
+		t.Fatalf("width = %d, want %d", len(got), len(reportCSVHeader))
+	}
+	if got[0] != "week" {
+		t.Errorf("period cell = %q, want week", got[0])
+	}
+	for _, cell := range got[1:] {
+		if cell == "x" {
+			t.Error("unknown column leaked into the record")
+		}
+	}
+}
+
+// With an unbounded period the "selected period" and "all time" columns are
+// the same population, so rendering both put two identical "All time"
+// headings side by side on the default view.
+func TestReportingCostAveragesColumnsMatchThePeriod(t *testing.T) {
+	s, cleanup := newTestServer(t)
+	defer cleanup()
+	seedReportCorpus(t, s)
+
+	countHeadings := func(body, heading string) int {
+		return strings.Count(body, `<th class="text-right">`+heading+`</th>`)
+	}
+
+	t.Run("all time collapses to one column", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, localReq("GET", "/reporting?interval=all"))
+		if w.Code != 200 {
+			t.Fatalf("status %d", w.Code)
+		}
+		if got := countHeadings(w.Body.String(), "All time"); got != 1 {
+			t.Errorf("All time column count = %d, want 1", got)
+		}
+	})
+
+	t.Run("bounded period keeps both columns", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, localReq("GET", "/reporting?interval=week"))
+		if w.Code != 200 {
+			t.Fatalf("status %d", w.Code)
+		}
+		body := w.Body.String()
+		if got := countHeadings(body, "All time"); got != 1 {
+			t.Errorf("All time column count = %d, want 1", got)
+		}
+		if got := countHeadings(body, "Week"); got != 1 {
+			t.Errorf("Week column count = %d, want 1", got)
+		}
+	})
+}

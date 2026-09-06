@@ -78,48 +78,52 @@
   the better measure of how much the model processed.
 </p>
 {{if $r.AllTime.Runs}}
+  {{/* Since is nil only when the selected period already IS all time. The
+       period and all-time columns are then the same population, so showing
+       both would repeat one number under two identical headings. */}}
+  {{$bounded := $r.Since}}
   <div class="overflow-x-auto mb-8">
     <table class="table w-full">
       <thead><tr>
         <th>Metric</th>
-        <th class="text-right">{{$r.Interval.Label}}</th>
+        {{if $bounded}}<th class="text-right">{{$r.Interval.Label}}</th>{{end}}
         <th class="text-right">All time</th>
       </tr></thead>
       <tbody>
         <tr>
           <td class="font-medium">Scans counted</td>
-          <td class="text-right">{{bignum $r.Period.Runs}}</td>
-          <td class="text-right text-muted-foreground">{{bignum $r.AllTime.Runs}}</td>
+          {{if $bounded}}<td class="text-right">{{bignum $r.Period.Runs}}</td>{{end}}
+          <td class="text-right{{if $bounded}} text-muted-foreground{{end}}">{{bignum $r.AllTime.Runs}}</td>
         </tr>
         <tr>
           <td class="font-medium">Average cost</td>
-          <td class="text-right">{{usd $r.Period.CostUSD}}</td>
-          <td class="text-right text-muted-foreground">{{usd $r.AllTime.CostUSD}}</td>
+          {{if $bounded}}<td class="text-right">{{usd $r.Period.CostUSD}}</td>{{end}}
+          <td class="text-right{{if $bounded}} text-muted-foreground{{end}}">{{usd $r.AllTime.CostUSD}}</td>
         </tr>
         <tr>
           <td class="font-medium">Average input tokens</td>
-          <td class="text-right">{{printf "%.0f" $r.Period.InputTokens}}</td>
-          <td class="text-right text-muted-foreground">{{printf "%.0f" $r.AllTime.InputTokens}}</td>
+          {{if $bounded}}<td class="text-right">{{printf "%.0f" $r.Period.InputTokens}}</td>{{end}}
+          <td class="text-right{{if $bounded}} text-muted-foreground{{end}}">{{printf "%.0f" $r.AllTime.InputTokens}}</td>
         </tr>
         <tr>
           <td class="font-medium">Average output tokens</td>
-          <td class="text-right">{{printf "%.0f" $r.Period.OutputTokens}}</td>
-          <td class="text-right text-muted-foreground">{{printf "%.0f" $r.AllTime.OutputTokens}}</td>
+          {{if $bounded}}<td class="text-right">{{printf "%.0f" $r.Period.OutputTokens}}</td>{{end}}
+          <td class="text-right{{if $bounded}} text-muted-foreground{{end}}">{{printf "%.0f" $r.AllTime.OutputTokens}}</td>
         </tr>
         <tr>
           <td class="font-medium">Average cache read tokens</td>
-          <td class="text-right">{{printf "%.0f" $r.Period.CacheReadTokens}}</td>
-          <td class="text-right text-muted-foreground">{{printf "%.0f" $r.AllTime.CacheReadTokens}}</td>
+          {{if $bounded}}<td class="text-right">{{printf "%.0f" $r.Period.CacheReadTokens}}</td>{{end}}
+          <td class="text-right{{if $bounded}} text-muted-foreground{{end}}">{{printf "%.0f" $r.AllTime.CacheReadTokens}}</td>
         </tr>
         <tr>
           <td class="font-medium">Average cache write tokens</td>
-          <td class="text-right">{{printf "%.0f" $r.Period.CacheWriteTokens}}</td>
-          <td class="text-right text-muted-foreground">{{printf "%.0f" $r.AllTime.CacheWriteTokens}}</td>
+          {{if $bounded}}<td class="text-right">{{printf "%.0f" $r.Period.CacheWriteTokens}}</td>{{end}}
+          <td class="text-right{{if $bounded}} text-muted-foreground{{end}}">{{printf "%.0f" $r.AllTime.CacheWriteTokens}}</td>
         </tr>
         <tr>
           <td class="font-medium">Average total tokens</td>
-          <td class="text-right">{{printf "%.0f" $r.Period.TotalTokens}}</td>
-          <td class="text-right text-muted-foreground">{{printf "%.0f" $r.AllTime.TotalTokens}}</td>
+          {{if $bounded}}<td class="text-right">{{printf "%.0f" $r.Period.TotalTokens}}</td>{{end}}
+          <td class="text-right{{if $bounded}} text-muted-foreground{{end}}">{{printf "%.0f" $r.AllTime.TotalTokens}}</td>
         </tr>
       </tbody>
     </table>
