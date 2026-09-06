@@ -308,6 +308,11 @@ func TestReportingPageRenders(t *testing.T) {
 		"Cost averages",
 		"Daily breakdown",
 		"Minimum severity",
+		// The scan tiles name their unit and show why the count outruns
+		// the repository count.
+		"Scan runs",
+		"per repository",
+		"of runs",
 		"/reporting/report.csv?interval=week",
 		"/reporting/report.json?interval=week",
 	} {
@@ -597,5 +602,74 @@ func TestReportingJSONCarriesSeverityFilter(t *testing.T) {
 	}
 	if out.Activity.ScansCompleted != 4 {
 		t.Errorf("scans_completed = %d, want 4; severity must not touch scan counts", out.Activity.ScansCompleted)
+	}
+}
+
+// The tile captions are derived presentation, so they must be safe on an
+// empty corpus and must not appear in either export.
+func TestReportTotalsDerivedRatios(t *testing.T) {
+	t.Run("zero corpus does not divide by zero", func(t *testing.T) {
+		var empty reportTotals
+		if got := empty.ScansPerRepo(); got != 0 {
+			t.Errorf("ScansPerRepo() = %v, want 0", got)
+		}
+		if got := empty.CompletionRate(); got != 0 {
+			t.Errorf("CompletionRate() = %v, want 0", got)
+		}
+	})
+
+	t.Run("fan-out ratio", func(t *testing.T) {
+		totals := reportTotals{ReposScanned: 49, Scans: 510, ScansDone: 321}
+		if got := totals.ScansPerRepo(); got < 10.4 || got > 10.5 {
+			t.Errorf("ScansPerRepo() = %v, want ~10.41", got)
+		}
+		if got := totals.CompletionRate(); got < 0.62 || got > 0.63 {
+			t.Errorf("CompletionRate() = %v, want ~0.629", got)
+		}
+	})
+
+	// Scans >= ReposScanned always holds, since ReposScanned counts distinct
+	// repositories among the very scans being counted.
+	t.Run("ratio never drops below one for a non-empty corpus", func(t *testing.T) {
+		s, cleanup := newTestServer(t)
+		defer cleanup()
+		seedReportCorpus(t, s)
+		got := s.buildReport(reportIntervals[0], "").Totals
+		if got.ScansPerRepo() < 1 {
+			t.Errorf("ScansPerRepo() = %v, want >= 1", got.ScansPerRepo())
+		}
+	})
+}
+
+// The rename was a UI decision; the export contract stays as published.
+func TestReportingExportsKeepScanFieldNames(t *testing.T) {
+	s, cleanup := newTestServer(t)
+	defer cleanup()
+	seedReportCorpus(t, s)
+
+	csvRec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(csvRec, localReq("GET", "/reporting/report.csv?interval=all"))
+	header := strings.SplitN(csvRec.Body.String(), "\n", 2)[0]
+	for _, want := range []string{"scans_started", "scans_completed"} {
+		if !strings.Contains(header, want) {
+			t.Errorf("CSV header lost %q: %s", want, header)
+		}
+	}
+	if strings.Contains(header, "scan_runs") {
+		t.Error("CSV header picked up the UI-only rename")
+	}
+
+	jsonRec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(jsonRec, localReq("GET", "/reporting/report.json?interval=all"))
+	body := jsonRec.Body.String()
+	for _, want := range []string{`"scans_started"`, `"scans_completed"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("JSON lost %q", want)
+		}
+	}
+	for _, gone := range []string{`"scan_runs"`, `"scans_per_repo"`, `"completion_rate"`} {
+		if strings.Contains(body, gone) {
+			t.Errorf("JSON leaked display-only value %q", gone)
+		}
 	}
 }

@@ -52,12 +52,18 @@
     <p class="text-2xl font-semibold mt-1">{{bignum $r.Totals.ReposScanned}}</p>
   </div>
   <div class="card p-4">
-    <p class="text-sm text-muted-foreground">Scans</p>
+    <p class="text-sm text-muted-foreground">Scan runs</p>
     <p class="text-2xl font-semibold mt-1">{{bignum $r.Totals.Scans}}</p>
+    {{if $r.Totals.ReposScanned}}
+      <p class="text-xs text-muted-foreground mt-1">&#8776;{{printf "%.0f" $r.Totals.ScansPerRepo}} per repository</p>
+    {{end}}
   </div>
   <div class="card p-4">
-    <p class="text-sm text-muted-foreground">Scans completed</p>
+    <p class="text-sm text-muted-foreground">Completed</p>
     <p class="text-2xl font-semibold mt-1">{{bignum $r.Totals.ScansDone}}</p>
+    {{if $r.Totals.Scans}}
+      <p class="text-xs text-muted-foreground mt-1">{{pct $r.Totals.CompletionRate}} of runs</p>
+    {{end}}
   </div>
   <div class="card p-4">
     <p class="text-sm text-muted-foreground">Findings{{if $r.MinSeverity}} ({{$r.MinSeverity}}+){{end}}</p>
@@ -131,7 +137,7 @@
       <thead><tr>
         <th>Date</th>
         <th class="text-right">Repositories</th>
-        <th class="text-right">Scans</th>
+        <th class="text-right">Runs</th>
         <th class="text-right">Completed</th>
         <th class="text-right">Findings{{if $r.MinSeverity}} ({{$r.MinSeverity}}+){{end}}</th>
         <th class="text-right">Cost</th>

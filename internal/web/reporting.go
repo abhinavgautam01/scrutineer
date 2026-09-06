@@ -124,6 +124,31 @@ type reportTotals struct {
 	Findings     int
 }
 
+// ScansPerRepo is the mean number of scan runs each scanned repository
+// accounted for. Display-only: a reader seeing 510 runs against 49
+// repositories needs the ratio to know the figure is a fan-out, not an
+// inflated count. One repository scan enqueues a run per skill (see
+// enqueueDiffRescanGroup), so this is normally well above 1.
+//
+// Deliberately a method rather than a field: it is derived presentation,
+// and the exports build their payloads from the fields explicitly, so
+// keeping it off the struct stops it leaking into the CSV or JSON.
+func (t reportTotals) ScansPerRepo() float64 {
+	if t.ReposScanned == 0 {
+		return 0
+	}
+	return float64(t.Scans) / float64(t.ReposScanned)
+}
+
+// CompletionRate is the share of scan runs that reached "done", as a
+// 0..1 fraction for the pct template helper.
+func (t reportTotals) CompletionRate() float64 {
+	if t.Scans == 0 {
+		return 0
+	}
+	return float64(t.ScansDone) / float64(t.Scans)
+}
+
 // reportAverages is one column of the cost-averages table: the per-scan
 // means from docs/cost_averages.sql. Runs is the denominator, exposed so a
 // small-sample average is recognisable as one.
