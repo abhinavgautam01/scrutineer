@@ -1,0 +1,142 @@
+{{template "head" .}}
+{{$r := .Report}}
+
+<div class="flex items-start justify-between gap-4 mb-6">
+  <div>
+    {{template "crumbs" (crumbs "Reporting" "")}}
+    <h2 class="text-2xl font-semibold mt-1 flex items-center gap-2">
+      <i data-lucide="file-chart-column"></i> Reporting
+    </h2>
+  </div>
+  <div class="flex items-center gap-2 shrink-0" hx-boost="false">
+    <a href="/reporting/report.csv?interval={{$r.Interval.Key}}" class="btn-outline">
+      <i data-lucide="download"></i> CSV
+    </a>
+    <a href="/reporting/report.json?interval={{$r.Interval.Key}}" class="btn-outline">
+      <i data-lucide="download"></i> JSON
+    </a>
+  </div>
+</div>
+
+<div class="flex items-center justify-between gap-4 mb-6">
+  <p class="text-sm text-muted-foreground">
+    Scan activity over a rolling window, with the per-scan cost and token averages.
+    {{if $r.Since}}Covering {{$r.Since.Format "2006-01-02 15:04 UTC"}} onward.{{else}}Covering every scan on record.{{end}}
+  </p>
+  <div class="flex items-center gap-1 shrink-0 ml-4">
+    {{range $.Intervals}}
+      <a href="/reporting?interval={{.Key}}"
+         class="{{if eq $r.Interval.Key .Key}}btn-outline{{else}}btn-sm-ghost{{end}}">{{.Label}}</a>
+    {{end}}
+  </div>
+</div>
+
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+  <div class="card p-4">
+    <p class="text-sm text-muted-foreground">Repositories scanned</p>
+    <p class="text-2xl font-semibold mt-1">{{bignum $r.Totals.ReposScanned}}</p>
+  </div>
+  <div class="card p-4">
+    <p class="text-sm text-muted-foreground">Scans</p>
+    <p class="text-2xl font-semibold mt-1">{{bignum $r.Totals.Scans}}</p>
+  </div>
+  <div class="card p-4">
+    <p class="text-sm text-muted-foreground">Scans completed</p>
+    <p class="text-2xl font-semibold mt-1">{{bignum $r.Totals.ScansDone}}</p>
+  </div>
+  <div class="card p-4">
+    <p class="text-sm text-muted-foreground">Findings</p>
+    <p class="text-2xl font-semibold mt-1">{{bignum $r.Totals.Findings}}</p>
+  </div>
+</div>
+
+<div class="flex items-baseline justify-between gap-4 mb-3">
+  <h3 class="text-lg font-semibold">Cost averages</h3>
+  <span class="text-xs text-muted-foreground">per completed scan with a recorded cost</span>
+</div>
+<p class="text-sm text-muted-foreground mb-3">
+  Cost is API list-price equivalent, not what a subscription was billed. Input excludes
+  cached reads, so total tokens is the better measure of how much the model processed.
+</p>
+{{if $r.AllTime.Runs}}
+  <div class="overflow-x-auto mb-8">
+    <table class="table w-full">
+      <thead><tr>
+        <th>Metric</th>
+        <th class="text-right">{{$r.Interval.Label}}</th>
+        <th class="text-right">All time</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td class="font-medium">Scans counted</td>
+          <td class="text-right">{{bignum $r.Window.Runs}}</td>
+          <td class="text-right text-muted-foreground">{{bignum $r.AllTime.Runs}}</td>
+        </tr>
+        <tr>
+          <td class="font-medium">Average cost</td>
+          <td class="text-right">{{usd $r.Window.CostUSD}}</td>
+          <td class="text-right text-muted-foreground">{{usd $r.AllTime.CostUSD}}</td>
+        </tr>
+        <tr>
+          <td class="font-medium">Average input tokens</td>
+          <td class="text-right">{{printf "%.0f" $r.Window.InputTokens}}</td>
+          <td class="text-right text-muted-foreground">{{printf "%.0f" $r.AllTime.InputTokens}}</td>
+        </tr>
+        <tr>
+          <td class="font-medium">Average output tokens</td>
+          <td class="text-right">{{printf "%.0f" $r.Window.OutputTokens}}</td>
+          <td class="text-right text-muted-foreground">{{printf "%.0f" $r.AllTime.OutputTokens}}</td>
+        </tr>
+        <tr>
+          <td class="font-medium">Average cache read tokens</td>
+          <td class="text-right">{{printf "%.0f" $r.Window.CacheReadTokens}}</td>
+          <td class="text-right text-muted-foreground">{{printf "%.0f" $r.AllTime.CacheReadTokens}}</td>
+        </tr>
+        <tr>
+          <td class="font-medium">Average cache write tokens</td>
+          <td class="text-right">{{printf "%.0f" $r.Window.CacheWriteTokens}}</td>
+          <td class="text-right text-muted-foreground">{{printf "%.0f" $r.AllTime.CacheWriteTokens}}</td>
+        </tr>
+        <tr>
+          <td class="font-medium">Average total tokens</td>
+          <td class="text-right">{{printf "%.0f" $r.Window.TotalTokens}}</td>
+          <td class="text-right text-muted-foreground">{{printf "%.0f" $r.AllTime.TotalTokens}}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+{{else}}
+  <div class="mb-8">
+    {{template "empty" (dict "Icon" "coins" "Title" "No costed scans yet" "Body" "Averages appear once a scan has completed with a recorded cost.")}}
+  </div>
+{{end}}
+
+<h3 class="text-lg font-semibold mb-3">Daily breakdown</h3>
+{{if $r.Days}}
+  <div class="overflow-x-auto">
+    <table class="table w-full">
+      <thead><tr>
+        <th>Date</th>
+        <th class="text-right">Repositories</th>
+        <th class="text-right">Scans</th>
+        <th class="text-right">Findings</th>
+        <th class="text-right">Cost</th>
+        <th class="text-right">Total tokens</th>
+      </tr></thead>
+      <tbody>
+      {{range $r.Days}}
+        <tr>
+          <td class="font-medium">{{.Date}}</td>
+          <td class="text-right text-muted-foreground">{{bignum .ReposScanned}}</td>
+          <td class="text-right text-muted-foreground">{{bignum .Scans}}</td>
+          <td class="text-right text-muted-foreground">{{bignum .Findings}}</td>
+          <td class="text-right">{{usd .CostUSD}}</td>
+          <td class="text-right text-muted-foreground">{{bignum .TotalTokens}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+  </div>
+{{else}}
+  {{template "empty" (dict "Icon" "calendar-off" "Title" "No activity in this window" "Body" "Widen the interval, or run a scan to start populating the report.")}}
+{{end}}

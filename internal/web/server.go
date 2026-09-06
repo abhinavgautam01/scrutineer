@@ -598,6 +598,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /scans/{id}/cancel", s.scanCancel)
 	mux.HandleFunc("GET /scans/{id}/log", s.scanLog)
 	mux.HandleFunc("GET /usage", s.usage)
+	mux.HandleFunc("GET /reporting", s.reporting)
+	mux.HandleFunc("GET /reporting/report.csv", s.reportingCSV)
+	mux.HandleFunc("GET /reporting/report.json", s.reportingJSON)
 	s.registerSBOMRoutes(mux)
 	mux.HandleFunc("GET /skills", s.skillsList)
 	mux.HandleFunc("GET /skills/new", s.skillNew)
@@ -741,7 +744,7 @@ func popFlash(w http.ResponseWriter, r *http.Request) *Flash {
 // index, which is also the home page.
 func navKey(path string) string {
 	for _, p := range []struct{ prefix, key string }{
-		{"/settings", "settings"}, {"/usage", "usage"}, {"/skills", "skills"}, {"/maintainers", "maintainers"},
+		{"/settings", "settings"}, {"/usage", "usage"}, {"/reporting", "reporting"}, {"/skills", "skills"}, {"/maintainers", "maintainers"},
 		{"/orgs", "orgs"}, {"/packages", "packages"}, {"/advisories", "advisories"},
 		{"/findings", "findings"}, {"/benchmark", "benchmark"}, {"/scans", "scans"}, {"/sboms", "sboms"}, {"/audit", "audit"},
 	} {
