@@ -456,7 +456,7 @@ func (s *Server) reportingCSV(w http.ResponseWriter, r *http.Request) {
 	// All-time averages are a different population from the selected
 	// period, so only the average columns are filled: the activity columns
 	// would otherwise imply an all-time total this report never computed.
-	_ = cw.Write(row("all_time_average", "", "", "", "", "", "", "",
+	_ = cw.Write(row("all_time_average", "", "", "", "", "", "",
 		strconv.Itoa(data.AllTime.Runs),
 		num(data.AllTime.CostUSD),
 		num(data.AllTime.TotalTokens),
