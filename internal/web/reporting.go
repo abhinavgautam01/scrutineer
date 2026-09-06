@@ -34,6 +34,12 @@ import (
 // are UTC so a report generated in two timezones bucket-aligns.
 const reportDateLayout = "2006-01-02"
 
+// findingsField is the "findings" column name, shared by the CSV header,
+// the CSV summary block and the JSON payload. Named rather than repeated
+// so the three spellings of the export cannot drift apart, and so this
+// package's count of the bare literal stays under goconst's threshold.
+const findingsField = "findings"
+
 // reportInterval is one selectable rolling window. Dur of 0 means all
 // time. Rolling rather than calendar: the totals are a running figure, so
 // they should not collapse to near-zero at midnight or on the 1st.
@@ -301,7 +307,7 @@ func (s *Server) reportingCSV(w http.ResponseWriter, r *http.Request) {
 		{"repos_scanned", strconv.Itoa(data.Totals.ReposScanned)},
 		{"scans", strconv.Itoa(data.Totals.Scans)},
 		{"scans_done", strconv.Itoa(data.Totals.ScansDone)},
-		{"findings", strconv.Itoa(data.Totals.Findings)},
+		{findingsField, strconv.Itoa(data.Totals.Findings)},
 	}
 	summary = append(summary, averageCSVRows("window", data.Window)...)
 	summary = append(summary, averageCSVRows("alltime", data.AllTime)...)
@@ -314,7 +320,7 @@ func (s *Server) reportingCSV(w http.ResponseWriter, r *http.Request) {
 	cw.Flush()
 	_, _ = w.Write([]byte("\n"))
 
-	_ = cw.Write([]string{"date", "repos_scanned", "scans", "findings", "cost_usd", "total_tokens"})
+	_ = cw.Write([]string{"date", "repos_scanned", "scans", findingsField, "cost_usd", "total_tokens"})
 	for _, d := range data.Days {
 		_ = cw.Write([]string{
 			d.Date,
@@ -350,7 +356,7 @@ func (s *Server) reportingJSON(w http.ResponseWriter, r *http.Request) {
 			"date":          d.Date,
 			"repos_scanned": d.ReposScanned,
 			"scans":         d.Scans,
-			"findings":      d.Findings,
+			findingsField:   d.Findings,
 			"cost_usd":      d.CostUSD,
 			"total_tokens":  d.TotalTokens,
 		})
@@ -364,7 +370,7 @@ func (s *Server) reportingJSON(w http.ResponseWriter, r *http.Request) {
 			"repos_scanned": data.Totals.ReposScanned,
 			"scans":         data.Totals.Scans,
 			"scans_done":    data.Totals.ScansDone,
-			"findings":      data.Totals.Findings,
+			findingsField:   data.Totals.Findings,
 		},
 		"averages": map[string]any{
 			"window":   averageJSON(data.Window),
