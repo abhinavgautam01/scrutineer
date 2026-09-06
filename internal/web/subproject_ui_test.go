@@ -1,9 +1,11 @@
 package web
 
 import (
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -22,11 +24,11 @@ func TestSubprojectShow(t *testing.T) {
 	s.MonorepoAttribution = true // show the attributed packages/advisories sections
 	repo := db.Repository{URL: "https://github.com/rails/rails", Name: "rails", DisclosureChannel: "repo@example.org"}
 	s.DB.Create(&repo)
-	sub := db.Subproject{RepositoryID: repo.ID, Path: "activesupport", Name: "activesupport", Kind: "ruby-gem"}
+	sub := db.Subproject{RepositoryID: repo.ID, Path: "active support/core&next=all", Name: "activesupport", Kind: "ruby-gem"}
 	s.DB.Create(&sub)
-	scan := db.Scan{RepositoryID: repo.ID, Status: db.ScanDone, SubPath: "activesupport"}
+	scan := db.Scan{RepositoryID: repo.ID, Status: db.ScanDone, SubPath: sub.Path}
 	s.DB.Create(&scan)
-	s.DB.Create(&db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, SubPath: "activesupport",
+	s.DB.Create(&db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, SubPath: sub.Path,
 		FindingID: "F1", Title: "XSS in ActiveSupport", Severity: "High", Status: db.FindingNew, Location: "lib/x.rb:1"})
 	s.DB.Create(&db.Package{RepositoryID: repo.ID, SubprojectID: &sub.ID, Name: "activesupport", Ecosystem: "rubygems"})
 
@@ -42,6 +44,21 @@ func TestSubprojectShow(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("subproject page missing %q", want)
 		}
+	}
+	match := regexp.MustCompile(`href="([^"]+)"><i data-lucide="download"></i> Export findings`).FindStringSubmatch(body)
+	if len(match) != 2 {
+		t.Fatal("subproject page missing export findings link")
+	}
+	exportURL, err := url.Parse(html.UnescapeString(match[1]))
+	if err != nil {
+		t.Fatalf("parse export URL: %v", err)
+	}
+	wantPath := "/api/v1/repositories/" + strconv.FormatUint(uint64(repo.ID), 10) + "/findings"
+	if exportURL.Path != wantPath {
+		t.Errorf("export URL path = %q, want %q", exportURL.Path, wantPath)
+	}
+	if got := exportURL.Query().Get("sub_path"); got != sub.Path {
+		t.Errorf("export URL sub_path = %q, want %q", got, sub.Path)
 	}
 }
 
