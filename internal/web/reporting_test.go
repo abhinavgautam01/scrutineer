@@ -279,6 +279,74 @@ func TestBuildReportCountsRunsOnTheirOwnClock(t *testing.T) {
 	}
 }
 
+// Every state below stamps finished_at, so reaching the completion count is
+// not the same as belonging in it. The guard on db.ScanDone is what tells
+// them apart, and it reads as redundant next to the finished_at check that
+// selects the row — it is not, and this test says so out loud rather than
+// leaving a reviewer to infer it from an arithmetic shift elsewhere.
+//
+// The paused row is the clearest case: it has not finished at all. Counting
+// it would report a completion now and another when the run actually
+// finishes after resuming.
+func TestBuildReportCountsOnlyDoneRunsAsCompleted(t *testing.T) {
+	s, cleanup := newTestServer(t)
+	defer cleanup()
+	now := time.Now().UTC()
+
+	repo := db.Repository{URL: "https://example.test/stopped", Name: "stopped", FullName: "acme/stopped"}
+	if err := s.DB.Create(&repo).Error; err != nil {
+		t.Fatal(err)
+	}
+	started, stopped := now.Add(-2*time.Hour), now.Add(-time.Hour)
+	stoppedRuns := []struct {
+		status db.ScanStatus
+		cost   float64
+	}{
+		{db.ScanDone, 2.00},
+		{db.ScanFailed, 1.00},
+		{db.ScanCancelled, 3.00},
+		{db.ScanSkipped, 4.00},
+		{db.ScanPaused, 5.00},
+	}
+	for _, run := range stoppedRuns {
+		sc := db.Scan{
+			RepositoryID: repo.ID, Kind: "skill", Status: run.status, SkillName: "vuln-scan",
+			CostUSD: run.cost, InputTokens: 100,
+			StartedAt: &started, FinishedAt: &stopped, CreatedAt: started,
+		}
+		if err := s.DB.Create(&sc).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := s.buildReport(resolveReportInterval("day"), "")
+	if got.Totals.ScansStarted != len(stoppedRuns) {
+		t.Errorf("ScansStarted = %d, want %d", got.Totals.ScansStarted, len(stoppedRuns))
+	}
+	if got.Totals.ScansCompleted != 1 {
+		t.Errorf("ScansCompleted = %d, want 1: only the done run completed, but every row here "+
+			"carries a finished_at and so reaches the count", got.Totals.ScansCompleted)
+	}
+
+	// Spend is accumulated after the completion guard, so the full total
+	// proves all five rows passed the finished_at check and arrived at it.
+	// Without that guard every one of them would have been a completion.
+	var spend float64
+	for _, d := range got.Days {
+		spend += d.CostUSD
+	}
+	if want := 15.00; spend != want {
+		t.Errorf("attributed spend = %v, want %v; every stopped run should reach the guard", spend, want)
+	}
+
+	// And the averages population stays the completed-and-costed scans
+	// docs/cost_averages.sql defines, so the two figures on the page agree
+	// on what "completed" means.
+	if got.Period.Runs != 1 || got.Period.CostUSD != 2 {
+		t.Errorf("averages = %d runs at %v, want 1 at 2", got.Period.Runs, got.Period.CostUSD)
+	}
+}
+
 // The severity floor must filter findings and leave scan activity alone.
 func TestBuildReportMinSeverityFiltersFindingsOnly(t *testing.T) {
 	s, cleanup := newTestServer(t)

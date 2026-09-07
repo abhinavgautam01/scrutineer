@@ -359,8 +359,17 @@ func (s *Server) buildReport(iv reportInterval, minSeverity string) reportData {
 		}
 		acc := at(sc.FinishedAt.UTC().Format(reportDateLayout))
 		active(acc, sc.RepositoryID)
-data.Totals.ScansCompleted++
-acc.completed++
+		// A completion is a run that reached done. Failed, cancelled and
+		// skipped runs stop here too, and their spend is counted below, but
+		// counting them as completions would make the tile's success rate
+		// read ~100% however many runs were failing, and would put this
+		// figure at odds with the cost averages on the same page, whose
+		// population is the completed-and-costed scans docs/cost_averages.sql
+		// defines.
+		if sc.Status == db.ScanDone {
+			data.Totals.ScansCompleted++
+			acc.completed++
+		}
 		// Spend lands on the finish day for any terminal status: the worker
 		// writes the cost and token columns when a run finalises, so an
 		// in-flight run has nothing to attribute yet and a failed one still
