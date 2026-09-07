@@ -4,11 +4,47 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
+
+	"gorm.io/gorm"
 
 	"scrutineer/internal/db"
 	"scrutineer/internal/worker"
 )
+
+var errExploratoryAuditExists = errors.New("triage already has an exploratory audit")
+
+func (s *Server) validateExploratoryEnqueue(scan *db.Scan, skill *db.Skill) error {
+	if err := worker.ValidateExploration(scan, skill.Name); err != nil {
+		return err
+	}
+	if scan.ExplorationMode == "" {
+		return nil
+	}
+	if err := s.Worker.ValidateExplorationRunner(skill.Name); err != nil {
+		return err
+	}
+	_, err := worker.ExplorationInstructions(skill)
+	return err
+}
+
+// Recheck after INSERT has acquired the write lock, before committing or
+// enqueueing. Explicit retries have a parent and are deliberately allowed.
+func checkExploratoryDuplicate(tx *gorm.DB, scan *db.Scan) error {
+	if scan.ExplorationMode == "" || scan.TriageScanID == nil || scan.ParentScanID != nil {
+		return nil
+	}
+	var count int64
+	if err := tx.Model(&db.Scan{}).Where("id <> ? AND triage_scan_id = ? AND exploration_mode <> ''", scan.ID, *scan.TriageScanID).
+		Count(&count).Error; err != nil {
+		return err
+	}
+	if count != 0 {
+		return errExploratoryAuditExists
+	}
+	return nil
+}
 
 // Hashing the triage identity samples one third of runs without rolling again
 // on completion-hook redelivery or a threat-model retry.
@@ -26,7 +62,7 @@ func (s *Server) autoEnqueueExploratoryAudit(parent *db.Scan, skillID uint, grou
 	}
 	s.agentEnqueueMu.Lock()
 	defer s.agentEnqueueMu.Unlock()
-	if err := s.enqueueExploratoryAudit(parent, skillID, group); err != nil {
+	if err := s.enqueueExploratoryAudit(parent, skillID, group); err != nil && !errors.Is(err, errExploratoryAuditExists) {
 		s.Log.Warn("exploratory audit: enqueue", "scan", parent.ID, "err", err)
 	}
 }

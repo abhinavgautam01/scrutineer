@@ -19,20 +19,54 @@ const ExplorationRandomDig = "random-dig"
 
 // ValidateExploration rejects combinations that would silently turn a blind
 // source audit back into a planned, finding-scoped, or diff-only audit.
-func ValidateExploration(skill, mode, target, focus, rescan string, findingID *uint) error {
-	if mode == "" && target == "" {
+func ValidateExploration(scan *db.Scan, skill string) error {
+	if scan.ExplorationMode == "" && scan.ExplorationPath == "" {
 		return nil
 	}
-	if mode != ExplorationRandomDig || skill != deepDiveSkillName || focus != "" || rescan == db.ScanRescanModeDiff || findingID != nil {
+	if scan.ExplorationMode != ExplorationRandomDig || skill != deepDiveSkillName || scan.FocusArea != "" || scan.RescanMode == db.ScanRescanModeDiff || scan.FindingID != nil {
 		return fmt.Errorf("invalid exploratory audit inputs")
 	}
-	if target != "" && target != "." {
+	if target := scan.ExplorationPath; target != "" && target != "." {
 		clean, err := CleanSubPath(target)
 		if err != nil || clean != target {
 			return fmt.Errorf("invalid exploratory audit path %q", target)
 		}
 	}
 	return nil
+}
+
+// ValidateExplorationRunner rejects host execution, where an agent can bypass
+// callback-token restrictions through the unauthenticated loopback exports.
+func (w *Worker) ValidateExplorationRunner(skill string) error {
+	runner := w.Runner
+	for {
+		switch r := runner.(type) {
+		case LocalClaude, *LocalClaude:
+			return fmt.Errorf("random-dig requires a container runner; host execution is not supported")
+		case HostSplitRunner:
+			runner = r.runnerFor(skill)
+		case *HostSplitRunner:
+			runner = r.runnerFor(skill)
+		default:
+			return nil
+		}
+	}
+}
+
+// ExplorationInstructions is shared by enqueue preflight and workspace staging
+// so skill overrides without the reference pack never queue automatic digs.
+func ExplorationInstructions(skill *db.Skill) ([]byte, error) {
+	if skill.SourcePath == "" {
+		return nil, fmt.Errorf("exploratory audit requires a skill reference pack")
+	}
+	body, err := os.ReadFile(filepath.Join(skill.SourcePath, "references", "random-dig.md"))
+	if err != nil {
+		return nil, fmt.Errorf("read random-dig instructions: %w", err)
+	}
+	if strings.TrimSpace(string(body)) == "" {
+		return nil, fmt.Errorf("random-dig instructions are empty")
+	}
+	return body, nil
 }
 
 type skillContextExploration struct {
@@ -47,7 +81,10 @@ func (w *Worker) prepareExploration(ctx context.Context, workRoot string, scan *
 	if scan.ExplorationMode == "" {
 		return nil
 	}
-	if err := ValidateExploration(scan.SkillName, scan.ExplorationMode, scan.ExplorationPath, scan.FocusArea, scan.RescanMode, scan.FindingID); err != nil {
+	if err := ValidateExploration(scan, scan.SkillName); err != nil {
+		return err
+	}
+	if err := w.ValidateExplorationRunner(scan.SkillName); err != nil {
 		return err
 	}
 	dirs, err := exploratoryDirectories(ctx, filepath.Join(workRoot, "src"), scan.SubPath)
@@ -99,7 +136,7 @@ func exploratoryDirectories(ctx context.Context, src, subPath string) ([]string,
 			return err
 		}
 		if entry.IsDir() {
-			if entry.Name() == ".git" {
+			if slices.Contains(exploratorySkipDirectories, strings.ToLower(entry.Name())) {
 				return fs.SkipDir
 			}
 			if clean != "" && name != "." && name != clean && !strings.HasPrefix(clean, name+"/") && !strings.HasPrefix(name, clean+"/") {
@@ -130,20 +167,22 @@ func exploratoryDirectories(ctx context.Context, src, subPath string) ([]string,
 // binary assets, or manifests as the sole target of an expensive audit.
 var exploratorySourceExtensions = strings.Fields(".c .h .cc .cpp .cxx .hpp .m .mm .go .rs .py .pyw .js .jsx .ts .tsx .mjs .cjs .rb .php .java .kt .kts .scala .sc .cs .fs .fsx .swift .pl .pm .lua .sh .bash .zsh .ex .exs .erl .hrl .hs .ml .mli .clj .cljs .cljc .dart .r .jl .zig .f .f90 .f95 .sol .vue .svelte")
 
+var exploratorySkipDirectories = strings.Fields(".git vendor vendored third_party third-party node_modules dist test tests testdata fixtures __tests__ example examples")
+
 func exploratorySourceFile(name string) bool {
 	return slices.Contains(exploratorySourceExtensions, strings.ToLower(path.Ext(name)))
 }
 
 func stageExploratoryWorkspace(workRoot, skillDir, apiBase string, scan *db.Scan, skill *db.Skill) error {
-	if err := ValidateExploration(skill.Name, scan.ExplorationMode, scan.ExplorationPath, scan.FocusArea, scan.RescanMode, scan.FindingID); err != nil {
+	if err := ValidateExploration(scan, skill.Name); err != nil {
 		return err
 	}
-	if scan.ExplorationPath == "" || skill.SourcePath == "" {
-		return fmt.Errorf("exploratory audit requires a selected directory and a skill reference pack")
+	if scan.ExplorationPath == "" {
+		return fmt.Errorf("exploratory audit requires a selected directory")
 	}
-	body, err := os.ReadFile(filepath.Join(skill.SourcePath, "references", "random-dig.md"))
+	body, err := ExplorationInstructions(skill)
 	if err != nil {
-		return fmt.Errorf("read random-dig instructions: %w", err)
+		return err
 	}
 	// The loaded skill is scan-local. Update it too so the logged prompt and
 	// any report-repair invocation describe the instructions actually staged.

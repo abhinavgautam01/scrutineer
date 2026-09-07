@@ -4327,7 +4327,7 @@ func TestRetry_preservesScanFields(t *testing.T) {
 
 			repo := db.Repository{URL: "https://github.com/apache/airflow.git", Name: "airflow"}
 			s.DB.Create(&repo)
-			skill := db.Skill{Name: "security-deep-dive", Description: "x", Body: "b", Active: true, Source: "ui", Version: 1}
+			skill := db.Skill{Name: "security-deep-dive", Description: "x", Body: "b", Active: true, Source: "disk", SourcePath: "../../skills/security-deep-dive", Version: 1}
 			s.DB.Create(&skill)
 			orig := db.Scan{
 				RepositoryID: repo.ID, Kind: "skill", Status: db.ScanFailed,

@@ -18,6 +18,10 @@ func TestExploratoryDirectories(t *testing.T) {
 	for _, name := range []string{"main.go", "lib/parser.c", "lib/more.h", "cmd/tool.rs", "docs/readme.md", ".git/hooks/test.py", "outside/other.py"} {
 		writeDiffTestFile(t, src, name, "source")
 	}
+	for _, dir := range []string{"vendor", "third_party", "testdata", "tests", "examples", "fixtures", "__tests__", "Vendor"} {
+		writeDiffTestFile(t, src, filepath.Join(dir, "nested", "fixture.go"), "source")
+		writeDiffTestFile(t, src, filepath.Join("lib", dir, "nested", "fixture.go"), "source")
+	}
 	if err := os.Symlink(filepath.Join(src, "outside"), filepath.Join(src, "lib", "linked")); err != nil {
 		t.Fatal(err)
 	}
@@ -183,11 +187,33 @@ func TestValidateExploration(t *testing.T) {
 		{name: "finding", skill: deepDiveSkillName, mode: ExplorationRandomDig, finding: new(uint(1))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := ValidateExploration(tc.skill, tc.mode, tc.target, tc.focus, tc.rescan, tc.finding)
+			scan := db.Scan{ExplorationMode: tc.mode, ExplorationPath: tc.target, FocusArea: tc.focus, RescanMode: tc.rescan, FindingID: tc.finding}
+			err := ValidateExploration(&scan, tc.skill)
 			if (err == nil) != tc.valid {
 				t.Fatalf("valid=%v err=%v", tc.valid, err)
 			}
 		})
+	}
+}
+
+func TestExplorationRejectsHostRunner(t *testing.T) {
+	for _, runner := range []SkillRunner{
+		LocalClaude{}, &LocalClaude{},
+		HostSplitRunner{Host: LocalClaude{}, HostSkills: []string{deepDiveSkillName}},
+		&HostSplitRunner{Host: LocalClaude{}, HostSkills: []string{deepDiveSkillName}},
+	} {
+		w := Worker{Runner: runner}
+		if err := w.ValidateExplorationRunner(deepDiveSkillName); err == nil {
+			t.Fatalf("accepted host runner %T", runner)
+		}
+		scan := db.Scan{SkillName: deepDiveSkillName, ExplorationMode: ExplorationRandomDig}
+		if err := w.prepareExploration(t.Context(), t.TempDir(), &scan); err == nil || !strings.Contains(err.Error(), "host execution") {
+			t.Fatalf("worker did not reject host exploration before preparing source: %v", err)
+		}
+	}
+	w := Worker{Runner: HostSplitRunner{Container: &ContainerRunner{}, Host: LocalClaude{}, HostSkills: []string{"verify"}}}
+	if err := w.ValidateExplorationRunner(deepDiveSkillName); err != nil {
+		t.Fatal(err)
 	}
 }
 

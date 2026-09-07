@@ -1,12 +1,16 @@
 package web
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
+
+	"gorm.io/gorm"
 
 	"scrutineer/internal/db"
 	"scrutineer/internal/worker"
@@ -24,7 +28,7 @@ func exploratoryFixture(t *testing.T, s *Server) (db.Scan, db.Skill) {
 	if err := s.DB.Create(&triage).Error; err != nil {
 		t.Fatal(err)
 	}
-	skill := db.Skill{Name: deepDiveSkillName, Body: "audit", Active: true, Source: "ui", OutputFile: "report.json", OutputKind: "findings"}
+	skill := db.Skill{Name: deepDiveSkillName, Body: "audit", Active: true, Source: "disk", SourcePath: "../../skills/security-deep-dive", OutputFile: "report.json", OutputKind: "findings"}
 	if err := s.DB.Create(&skill).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -56,11 +60,9 @@ func TestExploratoryAuditFanoutIdempotent(t *testing.T) {
 	defer done()
 	parent, skill := exploratoryFixture(t, s)
 	s.autoEnqueueFocusAreaDeepDives(&parent)
-	var wg sync.WaitGroup
 	for range 6 {
-		wg.Go(func() { s.autoEnqueueFocusAreaDeepDives(&parent) })
+		s.autoEnqueueFocusAreaDeepDives(&parent)
 	}
-	wg.Wait()
 	var scans []db.Scan
 	if err := s.DB.Where("skill_id = ?", skill.ID).Order("id").Find(&scans).Error; err != nil {
 		t.Fatal(err)
@@ -81,6 +83,112 @@ func TestExploratoryAuditFanoutIdempotent(t *testing.T) {
 		if err := s.DB.Model(&db.Scan{}).Where("exploration_mode <> ''").Count(&count).Error; err != nil || count != 1 {
 			t.Fatalf("status %s: extra count=%d err=%v", status, count, err)
 		}
+	}
+}
+
+func TestExploratoryAuditCompetingInsert(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	parent, skill := exploratoryFixture(t, s)
+	s.enqueueFocusAreaDeepDive(&parent, skill.ID, parent.ScanGroup, "")
+	inserted := false
+	const callback = "test:competing_exploratory_scan"
+	if err := s.DB.Callback().Create().Before("gorm:create").Register(callback, func(tx *gorm.DB) {
+		scan, ok := tx.Statement.Dest.(*db.Scan)
+		if !ok || scan.ExplorationMode == "" || inserted {
+			return
+		}
+		inserted = true
+		competitor := *scan
+		competitor.ID = 0
+		competitor.APIToken = NewAPIToken()
+		// Commit a competitor on a separate connection after the initial
+		// check but before our INSERT acquires the write lock.
+		if err := s.DB.Session(&gorm.Session{NewDB: true}).Create(&competitor).Error; err != nil {
+			t.Error(err)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := s.DB.Callback().Create().Remove(callback); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := s.enqueueExploratoryAudit(&parent, skill.ID, parent.ScanGroup); !errors.Is(err, errExploratoryAuditExists) {
+		t.Fatalf("enqueue error = %v, want competing audit rejection", err)
+	}
+	if !inserted {
+		t.Fatal("competing insert was not exercised")
+	}
+	var count int64
+	if err := s.DB.Model(&db.Scan{}).Where("exploration_mode <> ''").Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("want only the competing row to survive: count=%d err=%v", count, err)
+	}
+	assertQueuedJobCount(t, s, 1)
+}
+
+func TestExploratoryAuditSkipsUnsupportedSkills(t *testing.T) {
+	for _, mode := range []string{"ui", "missing-reference", "empty-reference", "host", "host-split"} {
+		t.Run(mode, func(t *testing.T) {
+			s, done := newTestServer(t)
+			defer done()
+			parent, skill := exploratoryFixture(t, s)
+			source := skill.SourcePath
+			switch mode {
+			case "ui":
+				source = ""
+			case "missing-reference":
+				source = t.TempDir()
+			case "empty-reference":
+				source = t.TempDir()
+				if err := os.MkdirAll(filepath.Join(source, "references"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(source, "references", "random-dig.md"), []byte(" \n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			case "host":
+				s.Worker.Runner = worker.LocalClaude{}
+			case "host-split":
+				s.Worker.Runner = worker.HostSplitRunner{Host: worker.LocalClaude{}, HostSkills: []string{deepDiveSkillName}}
+			}
+			if err := s.DB.Model(&skill).Update("source_path", source).Error; err != nil {
+				t.Fatal(err)
+			}
+			s.autoEnqueueFocusAreaDeepDives(&parent)
+			var scans []db.Scan
+			if err := s.DB.Where("skill_id = ?", skill.ID).Find(&scans).Error; err != nil {
+				t.Fatal(err)
+			}
+			if len(scans) != 1 || scans[0].ExplorationMode != "" {
+				t.Fatalf("want only the planned audit, got %+v", scans)
+			}
+		})
+	}
+}
+
+func TestScansRetryFailedPreservesExploration(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	parent, skill := exploratoryFixture(t, s)
+	failed := db.Scan{RepositoryID: parent.RepositoryID, SkillID: &skill.ID, SkillName: skill.Name,
+		Kind: worker.JobSkill, Status: db.ScanFailed, TriageScanID: parent.TriageScanID,
+		ExplorationMode: worker.ExplorationRandomDig, ExplorationPath: "lib", ScanGroup: parent.ScanGroup}
+	if err := s.DB.Create(&failed).Error; err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	s.scansRetryFailed(w, localReq(http.MethodPost, "/scans/retry-failed"))
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("retry: %d %s", w.Code, w.Body)
+	}
+	var fresh db.Scan
+	if err := s.DB.Where("parent_scan_id = ?", failed.ID).First(&fresh).Error; err != nil {
+		t.Fatal(err)
+	}
+	if fresh.TriageScanID == nil || *fresh.TriageScanID != *parent.TriageScanID || fresh.ExplorationMode != failed.ExplorationMode || fresh.ExplorationPath != failed.ExplorationPath || fresh.ScanGroup != failed.ScanGroup {
+		t.Fatalf("retry lost exploration scope: %+v", fresh)
 	}
 }
 

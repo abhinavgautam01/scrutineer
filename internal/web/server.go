@@ -3367,9 +3367,6 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 	if err := worker.ValidateGitRef(opts.Ref); err != nil {
 		return 0, fmt.Errorf("%w: %v", ErrInvalidRef, err)
 	}
-	if err := worker.ValidateExploration(sk.Name, opts.ExplorationMode, opts.ExplorationPath, opts.FocusArea, opts.RescanMode, opts.FindingID); err != nil {
-		return 0, err
-	}
 	if strings.TrimSpace(opts.FocusArea) != "" {
 		area, err := repoconfig.DecodeFocusAreaJSON(opts.FocusArea)
 		if err != nil {
@@ -3433,6 +3430,9 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 		SkillsRepoSHA:        s.SkillsRepoSHA,
 		APIToken:             NewAPIToken(),
 	}
+	if err := s.validateExploratoryEnqueue(&scan, &sk); err != nil {
+		return 0, err
+	}
 	// The opt-out check at the top of this function ran before every field above
 	// was resolved, so re-check it inside the creating transaction: the row is
 	// write-locked from the INSERT until commit, which leaves an opt-out only two
@@ -3442,6 +3442,9 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 	// back where it was, just narrower.
 	if err := s.DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&scan).Error; err != nil {
+			return err
+		}
+		if err := checkExploratoryDuplicate(tx, &scan); err != nil {
 			return err
 		}
 		var live db.Repository
@@ -3482,7 +3485,7 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 
 func (s *Server) skillEnqueuePreflight(repo db.Repository, skillID uint, opts ScanOpts) (db.Skill, bool, error) {
 	var sk db.Skill
-	hasSkill := s.DB.Select("name, version, metadata, requires_remote, requires_profile, model").First(&sk, skillID).Error == nil
+	hasSkill := s.DB.Select("name, version, metadata, requires_remote, requires_profile, model, source_path").First(&sk, skillID).Error == nil
 	if hasSkill && opts.FindingID != nil {
 		if err := s.ensureFindingReportable(*opts.FindingID, sk.Name); err != nil {
 			return db.Skill{}, false, err
