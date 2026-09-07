@@ -453,17 +453,39 @@ func CVSSV4ScoreFromVector(vector string) (float64, bool) {
 var confidenceLevels = []string{"low", "medium", "high"}
 var SeverityLevels = []string{"Low", "Medium", "High", "Critical"}
 
+// SeverityRank is a severity's position on the ordering SeverityOrderSQL
+// builds: most severe lowest, so "at or above this severity" is `rank <=
+// threshold`. ok is false for anything outside SeverityLevels, which takes
+// the rank the CASE gives its ELSE and so sorts below every named level.
+//
+// Exported so a caller filtering on the CASE derives its threshold from the
+// same function that numbered the CASE. Re-deriving the arithmetic in a
+// second package leaves the two agreeing only by convention, and a change to
+// the ordering or to the unknown slot would silently move one and not the
+// other.
+func SeverityRank(level string) (int, bool) {
+	for i, s := range SeverityLevels {
+		if s == level {
+			return len(SeverityLevels) - 1 - i, true
+		}
+	}
+	return len(SeverityLevels), false
+}
+
 // SeverityOrderSQL is a SQL CASE expression ranking the severity column
-// highest-first (Critical before Low) with unknown values last, derived from
-// SeverityLevels so an ORDER BY never disagrees with SeverityAtLeast. Shared by
-// the web finding lists and the chat snapshot.
+// highest-first (Critical before Low) with unknown values last, numbered by
+// SeverityRank so an ORDER BY never disagrees with SeverityAtLeast or with a
+// caller filtering on the same expression. Shared by the web finding lists,
+// /reporting's severity floor, and the chat snapshot.
 func SeverityOrderSQL() string {
 	var b strings.Builder
 	b.WriteString("CASE severity")
-	for i, s := range SeverityLevels {
-		fmt.Fprintf(&b, " WHEN '%s' THEN %d", s, len(SeverityLevels)-1-i)
+	for _, s := range SeverityLevels {
+		r, _ := SeverityRank(s)
+		fmt.Fprintf(&b, " WHEN '%s' THEN %d", s, r)
 	}
-	fmt.Fprintf(&b, " ELSE %d END", len(SeverityLevels))
+	unknown, _ := SeverityRank("")
+	fmt.Fprintf(&b, " ELSE %d END", unknown)
 	return b.String()
 }
 

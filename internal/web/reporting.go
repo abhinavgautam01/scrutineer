@@ -102,18 +102,6 @@ func resolveMinSeverity(v string) string {
 	return ""
 }
 
-// minSeverityRank converts a canonical severity to its severityOrder rank.
-// severityOrder ranks the most severe LOWEST (Critical 0 … Low 3, unknown
-// last), so "at least this severe" is `rank <= threshold`.
-func minSeverityRank(level string) (int, bool) {
-	for i, l := range db.SeverityLevels {
-		if l == level {
-			return len(db.SeverityLevels) - 1 - i, true
-		}
-	}
-	return 0, false
-}
-
 // reportTotals is the running-total panel. ReposScanned counts distinct
 // repositories with at least one run that began or ended in the window, so
 // a repo rescanned ten times still counts once. ScansStarted and
@@ -251,7 +239,7 @@ const (
 // corpus should produce. Rounding is left to the display layer: the SQL
 // file's ROUND(AVG(cost_usd), 2) has no round(double precision, integer)
 // overload on PostgreSQL and would not survive the driver swap.
-func (s *Server) reportAveragesFor(since *time.Time) reportAverages {
+func (s *Server) reportAveragesFor(since *time.Time) (reportAverages, error) {
 	var out reportAverages
 	q := s.DB.Model(&db.Scan{}).
 		Select(`COUNT(*) AS runs,
@@ -266,8 +254,7 @@ func (s *Server) reportAveragesFor(since *time.Time) reportAverages {
 	if since != nil {
 		q = q.Where("finished_at >= ?", *since)
 	}
-	q.Scan(&out)
-	return out
+	return out, q.Scan(&out).Error
 }
 
 // dayAccumulator gathers one calendar day's figures while the scan rows
@@ -300,12 +287,16 @@ func (d reportData) inWindow(t *time.Time) bool {
 
 // buildReport assembles the snapshot for one interval and severity floor.
 //
+// Every read is checked. A failed query would otherwise leave this returning
+// a report of zeros that is indistinguishable from a quiet week, and the
+// exports would hand an operator that report as a file to archive.
+//
 // Both averages columns are aggregated in the database. Only the totals
 // and the day breakdown need individual rows, and that read is bounded to
 // the selected window and to the columns the report reads, so picking a
 // narrower interval genuinely costs less rather than filtering a full
 // table scan in memory.
-func (s *Server) buildReport(iv reportInterval, minSeverity string) reportData {
+func (s *Server) buildReport(iv reportInterval, minSeverity string) (reportData, error) {
 	now := time.Now().UTC()
 	data := reportData{Interval: iv, MinSeverity: minSeverity, Generated: now}
 	if iv.Dur > 0 {
@@ -313,8 +304,13 @@ func (s *Server) buildReport(iv reportInterval, minSeverity string) reportData {
 		data.Since = &since
 	}
 
-	data.AllTime = s.reportAveragesFor(nil)
-	data.Period = s.reportAveragesFor(data.Since)
+	var err error
+	if data.AllTime, err = s.reportAveragesFor(nil); err != nil {
+		return data, fmt.Errorf("all-time cost averages: %w", err)
+	}
+	if data.Period, err = s.reportAveragesFor(data.Since); err != nil {
+		return data, fmt.Errorf("cost averages for %s: %w", iv.Key, err)
+	}
 
 	days := map[string]*dayAccumulator{}
 	at := func(day string) *dayAccumulator {
@@ -337,7 +333,9 @@ func (s *Server) buildReport(iv reportInterval, minSeverity string) reportData {
 	if data.Since != nil {
 		sq = sq.Where(reportWindowSQL, *data.Since, *data.Since)
 	}
-	sq.Find(&scans)
+	if err := sq.Find(&scans).Error; err != nil {
+		return data, fmt.Errorf("scan activity: %w", err)
+	}
 
 	repos := map[uint]struct{}{}
 	// active marks a repository as having had scan activity on this day and
@@ -399,10 +397,12 @@ func (s *Server) buildReport(iv reportInterval, minSeverity string) reportData {
 	// severityOrder ranks the most severe lowest, so "at or above this
 	// severity" is `<=`. Reusing that shared CASE keeps this filter from
 	// ever disagreeing with the finding lists' ordering.
-	if rank, ok := minSeverityRank(minSeverity); ok {
+	if rank, ok := db.SeverityRank(minSeverity); ok {
 		fq = fq.Where("("+severityOrder+") <= ?", rank)
 	}
-	fq.Scan(&found)
+	if err := fq.Scan(&found).Error; err != nil {
+		return data, fmt.Errorf("findings: %w", err)
+	}
 	for _, f := range found {
 		data.Totals.Findings++
 		at(f.CreatedAt.UTC().Format(reportDateLayout)).findings++
@@ -428,18 +428,34 @@ func (s *Server) buildReport(iv reportInterval, minSeverity string) reportData {
 		data.Days = append(data.Days, row)
 	}
 	sort.Slice(data.Days, func(i, j int) bool { return data.Days[i].Date > data.Days[j].Date })
-	return data
+	return data, nil
 }
 
 // reportFromRequest builds the snapshot the request asks for. Shared by the
 // page and both exports so a download can never disagree with the screen.
-func (s *Server) reportFromRequest(r *http.Request) reportData {
+func (s *Server) reportFromRequest(r *http.Request) (reportData, error) {
 	q := r.URL.Query()
 	return s.buildReport(resolveReportInterval(q.Get("interval")), resolveMinSeverity(q.Get("severity")))
 }
 
+// reportOrError builds the snapshot or fails the request. Every caller has to
+// answer before writing a byte of the response, so a broken read shows as a
+// 500 rather than as a page or a download full of zeros.
+func (s *Server) reportOrError(w http.ResponseWriter, r *http.Request) (reportData, bool) {
+	data, err := s.reportFromRequest(r)
+	if err != nil {
+		s.Log.Error("build report", "err", err)
+		http.Error(w, "report unavailable", http.StatusInternalServerError)
+		return data, false
+	}
+	return data, true
+}
+
 func (s *Server) reporting(w http.ResponseWriter, r *http.Request) {
-	data := s.reportFromRequest(r)
+	data, ok := s.reportOrError(w, r)
+	if !ok {
+		return
+	}
 	s.render(w, r, "reporting.html", map[string]any{
 		"Report":     data,
 		"Intervals":  reportIntervals,
@@ -488,7 +504,10 @@ var reportCSVHeader = []string{
 }
 
 func (s *Server) reportingCSV(w http.ResponseWriter, r *http.Request) {
-	data := s.reportFromRequest(r)
+	data, ok := s.reportOrError(w, r)
+	if !ok {
+		return
+	}
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+reportFilename(data, "csv")+`"`)
 
@@ -578,7 +597,10 @@ func sumDayTokens(days []reportDayRow) int {
 }
 
 func (s *Server) reportingJSON(w http.ResponseWriter, r *http.Request) {
-	data := s.reportFromRequest(r)
+	data, ok := s.reportOrError(w, r)
+	if !ok {
+		return
+	}
 	days := make([]map[string]any, 0, len(data.Days))
 	for _, d := range data.Days {
 		days = append(days, map[string]any{

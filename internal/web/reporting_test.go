@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/csv"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -21,6 +22,17 @@ import (
 // Day sees repo 1 only; week sees repos 1-2; month adds nothing further;
 // all time adds repo 3. Findings carry three different severities so the
 // minimum-severity filter has something to bite on.
+// mustBuildReport fails the test rather than letting a query error return a
+// zeroed report that would then be asserted against as though it were data.
+func mustBuildReport(t *testing.T, s *Server, iv reportInterval, minSeverity string) reportData {
+	t.Helper()
+	data, err := s.buildReport(iv, minSeverity)
+	if err != nil {
+		t.Fatalf("buildReport(%s, %q): %v", iv.Key, minSeverity, err)
+	}
+	return data
+}
+
 func seedReportCorpus(t *testing.T, s *Server) {
 	t.Helper()
 	now := time.Now().UTC()
@@ -141,20 +153,6 @@ func TestResolveMinSeverity(t *testing.T) {
 // minSeverityRank must agree with severityOrder, which ranks the most
 // severe lowest. If these drift, the filter silently selects the wrong end
 // of the scale.
-func TestMinSeverityRankMatchesSeverityOrder(t *testing.T) {
-	critical, ok := minSeverityRank("Critical")
-	if !ok || critical != 0 {
-		t.Fatalf("Critical rank = %d, %v, want 0, true", critical, ok)
-	}
-	low, ok := minSeverityRank("Low")
-	if !ok || low != 3 {
-		t.Fatalf("Low rank = %d, %v, want 3, true", low, ok)
-	}
-	if _, ok := minSeverityRank("nonsense"); ok {
-		t.Error("minSeverityRank accepted a non-severity")
-	}
-}
-
 func TestBuildReportIntervalTotals(t *testing.T) {
 	s, cleanup := newTestServer(t)
 	defer cleanup()
@@ -176,7 +174,7 @@ func TestBuildReportIntervalTotals(t *testing.T) {
 		{"all", 3, 6, 4, 3, 4},
 	} {
 		t.Run(tc.interval, func(t *testing.T) {
-			got := s.buildReport(resolveReportInterval(tc.interval), "")
+			got := mustBuildReport(t, s, resolveReportInterval(tc.interval), "")
 			if got.Totals.ReposScanned != tc.repos {
 				t.Errorf("ReposScanned = %d, want %d", got.Totals.ReposScanned, tc.repos)
 			}
@@ -236,7 +234,7 @@ func TestBuildReportCountsRunsOnTheirOwnClock(t *testing.T) {
 	// Enqueued and never claimed: no timestamps, no activity.
 	mkScan(mkRepo("queued"), db.ScanQueued, 0, nil, nil)
 
-	day := s.buildReport(resolveReportInterval("day"), "")
+	day := mustBuildReport(t, s, resolveReportInterval("day"), "")
 	if day.Totals.ScansStarted != 1 {
 		t.Errorf("day ScansStarted = %d, want 1 (the running run only)", day.Totals.ScansStarted)
 	}
@@ -267,7 +265,7 @@ func TestBuildReportCountsRunsOnTheirOwnClock(t *testing.T) {
 
 	// Widening the window brings the straddler's start in. The queued run
 	// was enqueued inside this window and must still be counted nowhere.
-	week := s.buildReport(resolveReportInterval("week"), "")
+	week := mustBuildReport(t, s, resolveReportInterval("week"), "")
 	if week.Totals.ScansStarted != 2 {
 		t.Errorf("week ScansStarted = %d, want 2", week.Totals.ScansStarted)
 	}
@@ -319,7 +317,7 @@ func TestBuildReportCountsOnlyDoneRunsAsCompleted(t *testing.T) {
 		}
 	}
 
-	got := s.buildReport(resolveReportInterval("day"), "")
+	got := mustBuildReport(t, s, resolveReportInterval("day"), "")
 	if got.Totals.ScansStarted != len(stoppedRuns) {
 		t.Errorf("ScansStarted = %d, want %d", got.Totals.ScansStarted, len(stoppedRuns))
 	}
@@ -364,7 +362,7 @@ func TestBuildReportMinSeverityFiltersFindingsOnly(t *testing.T) {
 		{"High", 2},     // Critical + High
 		{"Critical", 1}, // Critical only
 	} {
-		got := s.buildReport(all, tc.severity)
+		got := mustBuildReport(t, s, all, tc.severity)
 		if got.Totals.Findings != tc.findings {
 			t.Errorf("severity %q: findings = %d, want %d", tc.severity, got.Totals.Findings, tc.findings)
 		}
@@ -380,8 +378,8 @@ func TestBuildReportMinSeverityAppliesToDayRows(t *testing.T) {
 	defer cleanup()
 	seedReportCorpus(t, s)
 
-	unfiltered := s.buildReport(reportIntervals[0], "")
-	filtered := s.buildReport(reportIntervals[0], "Critical")
+	unfiltered := mustBuildReport(t, s, reportIntervals[0], "")
+	filtered := mustBuildReport(t, s, reportIntervals[0], "Critical")
 	sum := func(days []reportDayRow) int {
 		var n int
 		for _, d := range days {
@@ -404,7 +402,7 @@ func TestBuildReportAveragesMatchCostAveragesSQL(t *testing.T) {
 	defer cleanup()
 	seedReportCorpus(t, s)
 
-	got := s.buildReport(reportIntervals[0], "").AllTime
+	got := mustBuildReport(t, s, reportIntervals[0], "").AllTime
 	// (2+4+6+8)/4
 	if got.CostUSD != 5 {
 		t.Errorf("avg cost = %v, want 5", got.CostUSD)
@@ -435,7 +433,7 @@ func TestBuildReportDayAveragesShareThePeriodPopulation(t *testing.T) {
 	defer cleanup()
 	seedReportCorpus(t, s)
 
-	got := s.buildReport(reportIntervals[0], "")
+	got := mustBuildReport(t, s, reportIntervals[0], "")
 	var averaged int
 	var cost float64
 	for _, d := range got.Days {
@@ -454,7 +452,7 @@ func TestBuildReportEmptyCorpus(t *testing.T) {
 	s, cleanup := newTestServer(t)
 	defer cleanup()
 
-	got := s.buildReport(resolveReportInterval("week"), "")
+	got := mustBuildReport(t, s, resolveReportInterval("week"), "")
 	if got.Totals.ScansStarted != 0 || got.AllTime.Runs != 0 || len(got.Days) != 0 {
 		t.Fatalf("empty corpus report = %+v, want zeroed", got)
 	}
@@ -818,7 +816,7 @@ func TestReportTotalsDerivedRatios(t *testing.T) {
 		s, cleanup := newTestServer(t)
 		defer cleanup()
 		seedReportCorpus(t, s)
-		got := s.buildReport(reportIntervals[0], "").Totals
+		got := mustBuildReport(t, s, reportIntervals[0], "").Totals
 		if want := 2.0; got.ScansPerRepo() != want {
 			t.Errorf("ScansPerRepo() = %v, want %v", got.ScansPerRepo(), want)
 		}
@@ -967,4 +965,28 @@ func TestReportingCostAveragesColumnsMatchThePeriod(t *testing.T) {
 			t.Errorf("Week column count = %d, want 1", got)
 		}
 	})
+}
+
+// A failing read must not render as a quiet week. The exports are files an
+// operator archives, so a zeroed report passing as a real one is worse than
+// an error.
+func TestReportingFailsRatherThanReportingZeros(t *testing.T) {
+	for _, path := range []string{"/reporting", "/reporting/report.csv", "/reporting/report.json"} {
+		t.Run(path, func(t *testing.T) {
+			s, cleanup := newTestServer(t)
+			defer cleanup()
+			seedReportCorpus(t, s)
+			if err := s.DB.Exec("DROP TABLE scans").Error; err != nil {
+				t.Fatal(err)
+			}
+			w := httptest.NewRecorder()
+			s.Handler().ServeHTTP(w, localReq("GET", path))
+			if w.Code != http.StatusInternalServerError {
+				t.Errorf("status = %d, want 500; body: %s", w.Code, w.Body)
+			}
+			if strings.Contains(w.Body.String(), "repositories_scanned") {
+				t.Error("a failed read still produced report content")
+			}
+		})
+	}
 }
