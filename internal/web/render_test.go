@@ -2,6 +2,7 @@ package web
 
 import (
 	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -104,5 +105,44 @@ func TestRenderPooledBufferDoesNotLeakFailedPageIntoNextRender(t *testing.T) {
 	// one, so nothing downstream would flag it.
 	if cl := w.Header().Get("Content-Length"); cl != strconv.Itoa(len("small")) {
 		t.Errorf("Content-Length = %q, want %d", cl, len("small"))
+	}
+}
+
+// Every full page template must close what "head" opened. "head" emits the
+// document, the sidebar and an unclosed <main><div>; only "foot" closes them
+// and emits the shared dialogs plus the #toaster that flash messages and
+// htmx OOB toasts are swapped into. A page that opens with "head" and never
+// calls "foot" still parses, still renders 200 and still looks right in a
+// browser that forgives unclosed tags — it just silently drops the toaster
+// and the dialogs. Nothing else in the build catches that, so assert the
+// pairing here (#reporting shipped without it). Fragment templates invoke
+// neither and are left alone.
+func TestPageTemplatesCloseTheLayoutTheyOpen(t *testing.T) {
+	const (
+		head = `{{template "head" .}}`
+		foot = `{{template "foot" .}}`
+	)
+	entries, err := fs.ReadDir(tmplFS, "templates")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pages int
+	for _, entry := range entries {
+		body, err := fs.ReadFile(tmplFS, "templates/"+entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		opens := strings.Count(string(body), head)
+		closes := strings.Count(string(body), foot)
+		if opens == 0 && closes == 0 {
+			continue
+		}
+		pages++
+		if opens != closes {
+			t.Errorf("%s: %d %s but %d %s", entry.Name(), opens, head, closes, foot)
+		}
+	}
+	if pages == 0 {
+		t.Fatal("no page templates found; the head/foot spelling must have changed")
 	}
 }

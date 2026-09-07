@@ -2,7 +2,9 @@ package db
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1017,5 +1019,40 @@ func TestSeedDefaultLabels_idempotent(t *testing.T) {
 	gdb.Model(&FindingLabel{}).Count(&count2)
 	if count1 != count2 {
 		t.Errorf("second seed inserted rows: %d -> %d", count1, count2)
+	}
+}
+
+// SeverityOrderSQL's numbers and SeverityRank's are the same ordering in two
+// forms — one for SQL to sort and filter by, one for Go to build a threshold
+// from. Asserting the two agree by reading the generated CASE ties them
+// together; pinning a couple of literal ranks instead would let a change to
+// the level order or to the unknown slot move one and not the other.
+func TestSeverityOrderSQLIsNumberedBySeverityRank(t *testing.T) {
+	sql := SeverityOrderSQL()
+	for _, level := range SeverityLevels {
+		want, ok := SeverityRank(level)
+		if !ok {
+			t.Fatalf("SeverityRank(%q) reports the level is unknown", level)
+		}
+		clause := fmt.Sprintf(" WHEN '%s' THEN %d", level, want)
+		if !strings.Contains(sql, clause) {
+			t.Errorf("SeverityOrderSQL missing %q\n  got: %s", clause, sql)
+		}
+	}
+	unknown, ok := SeverityRank("not-a-severity")
+	if ok {
+		t.Error("SeverityRank accepted a non-severity")
+	}
+	if clause := fmt.Sprintf(" ELSE %d END", unknown); !strings.HasSuffix(sql, clause) {
+		t.Errorf("SeverityOrderSQL should end %q so unknown severities sort where SeverityRank puts them\n  got: %s", clause, sql)
+	}
+	// Most severe lowest, which is what makes "at least this severe" a <=.
+	critical, _ := SeverityRank("Critical")
+	low, _ := SeverityRank("Low")
+	if critical >= low || critical != 0 {
+		t.Errorf("ranks are not most-severe-lowest: Critical=%d Low=%d", critical, low)
+	}
+	if unknown <= low {
+		t.Errorf("unknown severity ranks %d, must sort below Low at %d", unknown, low)
 	}
 }
