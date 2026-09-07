@@ -183,8 +183,18 @@ type reportDayRow struct {
 }
 
 // reportData is the whole snapshot. The page render and both exports read
-// from this one value, so a downloaded report always matches the screen it
-// was downloaded from.
+// from this one value, so no figure in a download can disagree with the
+// screen it came from — a weaker promise than carrying the same columns,
+// and the one that matters.
+//
+// The exports do carry more: each day's averages (scans_averaged,
+// avg_cost_usd, avg_total_tokens) have no column in the daily table. The
+// page shows the averages for the period as a whole instead, and a day's
+// average is over a narrower population than the same row's Cost column —
+// the completed-and-costed runs, not every run that spent — so putting the
+// two side by side invites reading one as the other's mean. The daily table
+// says so under its heading rather than leaving the difference to be found
+// on download.
 type reportData struct {
 	Interval    reportInterval
 	MinSeverity string

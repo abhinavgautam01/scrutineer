@@ -137,7 +137,11 @@
   </div>
 {{end}}
 
-<h3 class="text-lg font-semibold mb-3">Daily breakdown</h3>
+<h3 class="text-lg font-semibold mb-1">Daily breakdown</h3>
+<p class="text-sm text-muted-foreground mb-3">
+  Totals per day. The CSV and JSON exports add each day's per-scan averages, which are
+  taken over that day's completed and costed runs rather than over the Cost column here.
+</p>
 {{if $r.Days}}
   <div class="overflow-x-auto">
     <table class="table w-full">
