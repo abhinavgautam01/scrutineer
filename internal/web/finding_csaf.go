@@ -86,7 +86,12 @@ func (s *Server) findingCSAF(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(r.PathValue("id"))
 	var f db.Finding
 	if err := s.DB.First(&f, id).Error; err != nil {
-		http.NotFound(w, r)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		s.Log.Error("csaf finding", "finding", id, "err", err)
+		http.Error(w, "failed to load finding", http.StatusInternalServerError)
 		return
 	}
 	if f.Status == db.FindingDuplicate {
