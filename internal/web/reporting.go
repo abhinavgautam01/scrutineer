@@ -359,10 +359,8 @@ func (s *Server) buildReport(iv reportInterval, minSeverity string) reportData {
 		}
 		acc := at(sc.FinishedAt.UTC().Format(reportDateLayout))
 		active(acc, sc.RepositoryID)
-		if sc.Status == db.ScanDone {
-			data.Totals.ScansCompleted++
-			acc.completed++
-		}
+data.Totals.ScansCompleted++
+acc.completed++
 		// Spend lands on the finish day for any terminal status: the worker
 		// writes the cost and token columns when a run finalises, so an
 		// in-flight run has nothing to attribute yet and a failed one still
