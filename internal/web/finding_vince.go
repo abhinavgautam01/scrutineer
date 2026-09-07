@@ -257,6 +257,9 @@ func vinceEligibility(f db.Finding, notes []db.FindingNote, refs []db.FindingRef
 	if strings.TrimSpace(f.DisclosureDraft) == "" {
 		return fmt.Errorf("a reviewed disclosure draft is required before VINCE submission")
 	}
+	if db.FindingDisclosureBlocked(f) {
+		return db.ErrFindingNonViable
+	}
 	switch f.Status {
 	case db.FindingReported, db.FindingAcknowledged, db.FindingFixed, db.FindingPublished:
 		return fmt.Errorf("finding status %q has already reached or passed reported", f.Status)
