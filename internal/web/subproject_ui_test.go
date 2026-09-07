@@ -45,7 +45,7 @@ func TestSubprojectShow(t *testing.T) {
 			t.Errorf("subproject page missing %q", want)
 		}
 	}
-	match := regexp.MustCompile(`href="([^"]+)"><i data-lucide="download"></i> Export findings`).FindStringSubmatch(body)
+	match := regexp.MustCompile(`href="([^"]*/api/v1/repositories/[0-9]+/findings\?[^"]*)"`).FindStringSubmatch(body)
 	if len(match) != 2 {
 		t.Fatal("subproject page missing export findings link")
 	}
