@@ -151,8 +151,9 @@ func stageExploratoryWorkspace(workRoot, skillDir, apiBase string, scan *db.Scan
 	if err := stageSkill(skill, workRoot, skillDir); err != nil {
 		return err
 	}
-	// Keep repository identity and scope, not any model-derived guidance.
-	// apiAuth limits this scan's token to validating its own output schema.
+	// Staging keeps repository identity, scope, and the token, but omits
+	// model-derived guidance. The web server's apiAuth middleware separately
+	// restricts that token to validating this scan's own report.
 	blind := *scan
 	blind.Repository.ScanConfig = ""
 	blind.Repository.ThreatModel = ""
