@@ -5,12 +5,15 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
+
+	"gorm.io/gorm"
 
 	"scrutineer/internal/db"
 )
@@ -234,4 +237,29 @@ func keys[V any](m map[string]V) []string {
 var _ = func(s *Server, w http.ResponseWriter, r *http.Request) {
 	s.findingBundleDownload(w, r)
 	_ = strings.TrimSpace("")
+}
+
+func TestFindingBundle_failsOnDependentLookupError(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	f := setUpBundleFinding(t, s, false)
+	seedBundleDependent(t, s, f.RepositoryID)
+	var dep db.Dependent
+	if err := s.DB.Where("repository_id = ?", f.RepositoryID).First(&dep).Error; err != nil {
+		t.Fatal(err)
+	}
+	s.DB.Create(&db.FindingDependent{FindingID: f.ID, DependentID: dep.ID, Status: db.ExposureKnownAffected})
+	failCSAFQueries(t, s, func(tx *gorm.DB) bool {
+		_, isRows := tx.Statement.Dest.(*[]db.Dependent)
+		return tx.Statement.Table == "dependents" && isRows
+	}, errors.New("database unavailable"))
+
+	r := httptest.NewRequest(http.MethodGet,
+		"/findings/"+strconv.Itoa(int(f.ID))+"/bundle.tar.gz", nil)
+	r.Host = "127.0.0.1:8080"
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", w.Code, w.Body)
+	}
 }
