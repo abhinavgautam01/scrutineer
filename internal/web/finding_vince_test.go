@@ -244,13 +244,25 @@ func TestVINCEEligibilityProductionViability(t *testing.T) {
 }
 
 func TestFindingVINCENonViableBlockedBeforeSubmission(t *testing.T) {
-	for _, status := range []db.FindingLifecycle{db.FindingTriaged, db.FindingReady} {
-		t.Run(string(status), func(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status db.FindingLifecycle
+		draft  string
+	}{
+		{"triaged/reviewed", db.FindingTriaged, "reviewed"},
+		{"ready/reviewed", db.FindingReady, "reviewed"},
+		{"triaged/empty", db.FindingTriaged, ""},
+		{"ready/empty", db.FindingReady, ""},
+		{"triaged/whitespace", db.FindingTriaged, " \t\n"},
+		{"ready/whitespace", db.FindingReady, " \t\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			s, done := newTestServer(t)
 			defer done()
 			ctx := seedVINCEFinding(t, s)
 			if err := s.DB.Model(&ctx.Finding).Updates(map[string]any{
-				"status": status, "production_viability": db.ProductionViabilityNonViable,
+				"status": tc.status, "production_viability": db.ProductionViabilityNonViable,
+				"disclosure_draft": tc.draft,
 			}).Error; err != nil {
 				t.Fatal(err)
 			}
@@ -286,7 +298,7 @@ func TestFindingVINCENonViableBlockedBeforeSubmission(t *testing.T) {
 			if requests.Load() != 0 {
 				t.Errorf("VINCE requests = %d, want 0", requests.Load())
 			}
-			assertVINCEBlockedStateUnchanged(t, s, ctx, status)
+			assertVINCEBlockedStateUnchanged(t, s, ctx, tc.status)
 		})
 	}
 }
