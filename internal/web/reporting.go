@@ -115,21 +115,27 @@ func minSeverityRank(level string) (int, bool) {
 }
 
 // reportTotals is the running-total panel. ReposScanned counts distinct
-// repositories with at least one scan in the window, so a repo rescanned
-// ten times still counts once. Findings honours the severity filter; the
-// scan counts do not, since severity is a property of findings only.
+// repositories with at least one run that began or ended in the window, so
+// a repo rescanned ten times still counts once. ScansStarted and
+// ScansCompleted are read on their own clocks (see reportActivitySQL), so
+// they are not a total and a subset of it. Findings honours the severity
+// filter; the scan counts do not, since severity is a property of findings
+// only.
 type reportTotals struct {
-	ReposScanned int
-	Scans        int
-	ScansDone    int
-	Findings     int
+	ReposScanned   int
+	ScansStarted   int
+	ScansCompleted int
+	Findings       int
 }
 
-// ScansPerRepo is the mean number of scan runs each scanned repository
+// ScansPerRepo is the mean number of runs each repository with activity
 // accounted for. Display-only: a reader seeing 510 runs against 49
 // repositories needs the ratio to know the figure is a fan-out, not an
 // inflated count. One repository scan enqueues a run per skill (see
-// enqueueDiffRescanGroup), so this is normally well above 1.
+// enqueueDiffRescanGroup), so this is normally well above 1. It can dip
+// below 1 in a narrow window whose only activity for some repository was a
+// run that had already started before the window opened, which is why the
+// page renders it to one decimal rather than rounding to a bare "0".
 //
 // Deliberately a method rather than a field: it is derived presentation,
 // and the exports build their payloads from the fields explicitly, so
@@ -138,16 +144,20 @@ func (t reportTotals) ScansPerRepo() float64 {
 	if t.ReposScanned == 0 {
 		return 0
 	}
-	return float64(t.Scans) / float64(t.ReposScanned)
+	return float64(t.ScansStarted) / float64(t.ReposScanned)
 }
 
-// CompletionRate is the share of scan runs that reached "done", as a
-// 0..1 fraction for the pct template helper.
+// CompletionRate is the completions in the window over the starts in it, as
+// a 0..1 fraction for the pct template helper. Over all time that is the
+// success rate, since every run that finished also started. Over a rolling
+// window it is a throughput ratio and may exceed 1: the two figures are on
+// different clocks, so a batch that began just before the window and
+// finished inside it counts as completions with no matching starts.
 func (t reportTotals) CompletionRate() float64 {
-	if t.Scans == 0 {
+	if t.ScansStarted == 0 {
 		return 0
 	}
-	return float64(t.ScansDone) / float64(t.Scans)
+	return float64(t.ScansCompleted) / float64(t.ScansStarted)
 }
 
 // reportAverages is one column of the cost-averages table: the per-scan
@@ -174,8 +184,8 @@ type reportAverages struct {
 type reportDayRow struct {
 	Date           string
 	ReposScanned   int
-	Scans          int
-	ScansDone      int
+	ScansStarted   int
+	ScansCompleted int
 	Findings       int
 	CostUSD        float64
 	TotalTokens    int
@@ -198,13 +208,30 @@ type reportData struct {
 	Days        []reportDayRow
 }
 
-// reportAnchorSQL is the timestamp a scan is attributed to, as SQL: when
-// it finished, falling back to when it was created for rows that never
-// reached a terminal state. COALESCE is standard SQL, so this survives the
-// driver swap. scanAnchor below is the Go twin of this expression and the
-// two must stay in step, since the SQL bounds the window and the Go one
-// picks the day bucket within it.
-const reportAnchorSQL = "COALESCE(finished_at, created_at)"
+// A scan row carries two nullable timestamps this report reads: started_at,
+// stamped when the worker claims the job and the run begins, and finished_at,
+// stamped when the run reaches a terminal state. Each figure is counted on
+// the clock that recorded it — a start where started_at falls, a completion
+// where finished_at falls.
+//
+// Neither is derived from created_at, which is only the enqueue time. A row
+// that has sat in the queue since Tuesday has started nothing, and counting
+// it as a start reports work that never ran.
+//
+// One consequence: a run spanning a window boundary contributes a start to
+// one period and a completion to the next, so starts and completions are not
+// a total and a subset of it and need not reconcile.
+const (
+	// reportActivitySQL keeps the rows that have begun or ended. A row still
+	// queued has neither timestamp and nothing to attribute to a day.
+	reportActivitySQL = "(started_at IS NOT NULL OR finished_at IS NOT NULL)"
+	// reportWindowSQL bounds those rows to a rolling window. Either end
+	// being inside is enough, so a run that began before the window and
+	// finished within it is still read — inWindow then admits its
+	// completion and rejects its start. Parenthesised so the disjunction
+	// cannot bind loosely against the clauses ANDed alongside it.
+	reportWindowSQL = "(started_at >= ? OR finished_at >= ?)"
+)
 
 // reportAveragesFor loads one column of the cost-averages table.
 //
@@ -213,6 +240,11 @@ const reportAnchorSQL = "COALESCE(finished_at, created_at)"
 // queued, running, failed and cancelled rows don't drag the figures toward
 // zero. since bounds the population to a rolling window; nil averages the
 // whole corpus.
+//
+// The bound is on finished_at, the same clock the completion counts use, so
+// the denominator here is exactly the completed runs the report attributes
+// to the window. A done row without a finish timestamp cannot be placed on
+// the timeline and so falls out of every bounded window.
 //
 // AVG over an empty set is NULL, which will not scan into a float64, so
 // each average is coalesced to zero — matching the zeroed struct an empty
@@ -232,21 +264,10 @@ func (s *Server) reportAveragesFor(since *time.Time) reportAverages {
 		Where("status = ?", db.ScanDone).
 		Where("cost_usd > 0")
 	if since != nil {
-		q = q.Where(reportAnchorSQL+" >= ?", *since)
+		q = q.Where("finished_at >= ?", *since)
 	}
 	q.Scan(&out)
 	return out
-}
-
-// scanAnchor is the timestamp a scan is attributed to: when it finished,
-// falling back to when it was created for rows that never reached a
-// terminal state. This is the same bucketing /usage uses for its by-day
-// view, so the two pages agree on which day a scan lands in.
-func scanAnchor(sc db.Scan) time.Time {
-	if sc.FinishedAt != nil {
-		return sc.FinishedAt.UTC()
-	}
-	return sc.CreatedAt.UTC()
 }
 
 // dayAccumulator gathers one calendar day's figures while the scan rows
@@ -254,14 +275,27 @@ func scanAnchor(sc db.Scan) time.Time {
 // per day.
 type dayAccumulator struct {
 	repos         map[uint]struct{}
-	scans         int
-	scansDone     int
+	started       int
+	completed     int
 	findings      int
 	cost          float64
 	tokens        int
 	averagedScans int
 	averagedCost  float64
 	averagedToken int
+}
+
+// inWindow reports whether one of a scan's two timestamps falls inside the
+// selected window. A nil timestamp is inside no window at all: a run that
+// has not started, or not finished, has not reached that milestone yet and
+// there is no day to put it on. The comparison mirrors reportWindowSQL's
+// `>=`, so a row the query returned is attributed on exactly the same
+// boundary the query used to select it.
+func (d reportData) inWindow(t *time.Time) bool {
+	if t == nil {
+		return false
+	}
+	return d.Since == nil || !t.Before(*d.Since)
 }
 
 // buildReport assembles the snapshot for one interval and severity floor.
@@ -292,28 +326,48 @@ func (s *Server) buildReport(iv reportInterval, minSeverity string) reportData {
 		return acc
 	}
 
-	// Every status counts toward the activity totals, so unlike the
-	// averages this read is not narrowed to completed scans.
+	// A failed or still-running row is activity too, so unlike the averages
+	// this read is not narrowed to completed scans — only to rows that have
+	// begun or ended, which is every row that has anything to attribute.
 	var scans []db.Scan
 	sq := s.DB.Model(&db.Scan{}).
 		Select("repository_id", "status", "cost_usd", "input_tokens", "output_tokens",
-			"cache_read_tokens", "cache_write_tokens", "finished_at", "created_at")
+			"cache_read_tokens", "cache_write_tokens", "started_at", "finished_at").
+		Where(reportActivitySQL)
 	if data.Since != nil {
-		sq = sq.Where(reportAnchorSQL+" >= ?", *data.Since)
+		sq = sq.Where(reportWindowSQL, *data.Since, *data.Since)
 	}
 	sq.Find(&scans)
 
 	repos := map[uint]struct{}{}
+	// active marks a repository as having had scan activity on this day and
+	// in the period overall. A repository counts once however many of its
+	// runs touched the window.
+	active := func(acc *dayAccumulator, repoID uint) {
+		repos[repoID] = struct{}{}
+		acc.repos[repoID] = struct{}{}
+	}
 	for _, sc := range scans {
-		acc := at(scanAnchor(sc).Format(reportDateLayout))
-		data.Totals.Scans++
-		acc.scans++
-		if sc.Status == db.ScanDone {
-			data.Totals.ScansDone++
-			acc.scansDone++
+		if data.inWindow(sc.StartedAt) {
+			acc := at(sc.StartedAt.UTC().Format(reportDateLayout))
+			data.Totals.ScansStarted++
+			acc.started++
+			active(acc, sc.RepositoryID)
 		}
-		repos[sc.RepositoryID] = struct{}{}
-		acc.repos[sc.RepositoryID] = struct{}{}
+		if !data.inWindow(sc.FinishedAt) {
+			continue
+		}
+		acc := at(sc.FinishedAt.UTC().Format(reportDateLayout))
+		active(acc, sc.RepositoryID)
+		if sc.Status == db.ScanDone {
+			data.Totals.ScansCompleted++
+			acc.completed++
+		}
+		// Spend lands on the finish day for any terminal status: the worker
+		// writes the cost and token columns when a run finalises, so an
+		// in-flight run has nothing to attribute yet and a failed one still
+		// spent what it spent. Keeping it on this clock also means a day's
+		// cost_usd and its avg_cost_usd count the same runs.
 		tokens := sc.InputTokens + sc.OutputTokens + sc.CacheReadTokens + sc.CacheWriteTokens
 		acc.cost += sc.CostUSD
 		acc.tokens += tokens
@@ -350,14 +404,14 @@ func (s *Server) buildReport(iv reportInterval, minSeverity string) reportData {
 	data.Days = make([]reportDayRow, 0, len(days))
 	for day, acc := range days {
 		row := reportDayRow{
-			Date:          day,
-			ReposScanned:  len(acc.repos),
-			Scans:         acc.scans,
-			ScansDone:     acc.scansDone,
-			Findings:      acc.findings,
-			CostUSD:       acc.cost,
-			TotalTokens:   acc.tokens,
-			ScansAveraged: acc.averagedScans,
+			Date:           day,
+			ReposScanned:   len(acc.repos),
+			ScansStarted:   acc.started,
+			ScansCompleted: acc.completed,
+			Findings:       acc.findings,
+			CostUSD:        acc.cost,
+			TotalTokens:    acc.tokens,
+			ScansAveraged:  acc.averagedScans,
 		}
 		if acc.averagedScans > 0 {
 			n := float64(acc.averagedScans)
@@ -457,8 +511,8 @@ func (s *Server) reportingCSV(w http.ResponseWriter, r *http.Request) {
 	// are the first thing under the header rather than below the daily rows.
 	_ = cw.Write(row("period_total", "", map[string]string{
 		"repositories_scanned": strconv.Itoa(data.Totals.ReposScanned),
-		"scans_started":        strconv.Itoa(data.Totals.Scans),
-		"scans_completed":      strconv.Itoa(data.Totals.ScansDone),
+		"scans_started":        strconv.Itoa(data.Totals.ScansStarted),
+		"scans_completed":      strconv.Itoa(data.Totals.ScansCompleted),
 		findingsField:          strconv.Itoa(data.Totals.Findings),
 		"cost_usd":             num(sumDayCost(data.Days)),
 		"total_tokens":         strconv.Itoa(sumDayTokens(data.Days)),
@@ -477,8 +531,8 @@ func (s *Server) reportingCSV(w http.ResponseWriter, r *http.Request) {
 	for _, d := range data.Days {
 		_ = cw.Write(row("day", d.Date, map[string]string{
 			"repositories_scanned": strconv.Itoa(d.ReposScanned),
-			"scans_started":        strconv.Itoa(d.Scans),
-			"scans_completed":      strconv.Itoa(d.ScansDone),
+			"scans_started":        strconv.Itoa(d.ScansStarted),
+			"scans_completed":      strconv.Itoa(d.ScansCompleted),
 			findingsField:          strconv.Itoa(d.Findings),
 			"cost_usd":             num(d.CostUSD),
 			"total_tokens":         strconv.Itoa(d.TotalTokens),
@@ -523,8 +577,8 @@ func (s *Server) reportingJSON(w http.ResponseWriter, r *http.Request) {
 		days = append(days, map[string]any{
 			"date":                 d.Date,
 			"repositories_scanned": d.ReposScanned,
-			"scans_started":        d.Scans,
-			"scans_completed":      d.ScansDone,
+			"scans_started":        d.ScansStarted,
+			"scans_completed":      d.ScansCompleted,
 			findingsField:          d.Findings,
 			"cost_usd":             d.CostUSD,
 			"total_tokens":         d.TotalTokens,
@@ -559,9 +613,15 @@ func (s *Server) reportingJSON(w http.ResponseWriter, r *http.Request) {
 		},
 		"activity_in_period": map[string]any{
 			"repositories_scanned": data.Totals.ReposScanned,
-			"scans_started":        data.Totals.Scans,
-			"scans_completed":      data.Totals.ScansDone,
+			"scans_started":        data.Totals.ScansStarted,
+			"scans_completed":      data.Totals.ScansCompleted,
 			findingsField:          data.Totals.Findings,
+			// Starts and completions are read on different columns, so a run
+			// spanning the boundary lands in one period as a start and the
+			// next as a completion. Spelled out here because the two figures
+			// look like a total and a subset of it and are not.
+			"measured_by": "scans_started at started_at, scans_completed at finished_at on runs that reached done, " +
+				findingsField + " at first report; queued runs are counted nowhere",
 		},
 		"cost_averages_per_scan": map[string]any{
 			"population": "completed scans with a recorded cost",

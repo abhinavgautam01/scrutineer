@@ -20,6 +20,9 @@
 
 <p class="text-sm text-muted-foreground mb-4">
   Scan activity over a rolling window, with the per-scan cost and token averages.
+  Runs are counted when they begin and again when they finish, so a run spanning the
+  boundary is a start in one period and a completion in the next; queued runs count
+  in neither.
   {{if $r.Since}}Covering {{$r.Since.Format "2006-01-02 15:04 UTC"}} onward.{{else}}Covering every scan on record.{{end}}
 </p>
 
@@ -52,17 +55,17 @@
     <p class="text-2xl font-semibold mt-1">{{bignum $r.Totals.ReposScanned}}</p>
   </div>
   <div class="card p-4">
-    <p class="text-sm text-muted-foreground">Scan runs</p>
-    <p class="text-2xl font-semibold mt-1">{{bignum $r.Totals.Scans}}</p>
+    <p class="text-sm text-muted-foreground">Scan runs started</p>
+    <p class="text-2xl font-semibold mt-1">{{bignum $r.Totals.ScansStarted}}</p>
     {{if $r.Totals.ReposScanned}}
-      <p class="text-xs text-muted-foreground mt-1">&#8776;{{printf "%.0f" $r.Totals.ScansPerRepo}} per repository</p>
+      <p class="text-xs text-muted-foreground mt-1">&#8776;{{printf "%.1f" $r.Totals.ScansPerRepo}} per repository</p>
     {{end}}
   </div>
   <div class="card p-4">
-    <p class="text-sm text-muted-foreground">Completed</p>
-    <p class="text-2xl font-semibold mt-1">{{bignum $r.Totals.ScansDone}}</p>
-    {{if $r.Totals.Scans}}
-      <p class="text-xs text-muted-foreground mt-1">{{pct $r.Totals.CompletionRate}} of runs</p>
+    <p class="text-sm text-muted-foreground">Scan runs completed</p>
+    <p class="text-2xl font-semibold mt-1">{{bignum $r.Totals.ScansCompleted}}</p>
+    {{if $r.Totals.ScansStarted}}
+      <p class="text-xs text-muted-foreground mt-1">{{pct $r.Totals.CompletionRate}} of runs started</p>
     {{end}}
   </div>
   <div class="card p-4">
@@ -141,7 +144,7 @@
       <thead><tr>
         <th>Date</th>
         <th class="text-right">Repositories</th>
-        <th class="text-right">Runs</th>
+        <th class="text-right">Started</th>
         <th class="text-right">Completed</th>
         <th class="text-right">Findings{{if $r.MinSeverity}} ({{$r.MinSeverity}}+){{end}}</th>
         <th class="text-right">Cost</th>
@@ -152,8 +155,8 @@
         <tr>
           <td class="font-medium">{{.Date}}</td>
           <td class="text-right text-muted-foreground">{{bignum .ReposScanned}}</td>
-          <td class="text-right text-muted-foreground">{{bignum .Scans}}</td>
-          <td class="text-right text-muted-foreground">{{bignum .ScansDone}}</td>
+          <td class="text-right text-muted-foreground">{{bignum .ScansStarted}}</td>
+          <td class="text-right text-muted-foreground">{{bignum .ScansCompleted}}</td>
           <td class="text-right text-muted-foreground">{{bignum .Findings}}</td>
           <td class="text-right">{{usd .CostUSD}}</td>
           <td class="text-right text-muted-foreground">{{bignum .TotalTokens}}</td>
@@ -165,3 +168,4 @@
 {{else}}
   {{template "empty" (dict "Icon" "calendar-off" "Title" "No activity in this window" "Body" "Widen the interval, or run a scan to start populating the report.")}}
 {{end}}
+{{template "foot" .}}

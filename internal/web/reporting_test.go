@@ -33,13 +33,19 @@ func seedReportCorpus(t *testing.T, s *Server) {
 	}
 	r1, r2, r3 := mkRepo("one"), mkRepo("two"), mkRepo("three")
 
+	// mkScan seeds a terminal run that finished `ago` before now, having
+	// started a few minutes earlier so both ends land in the same window.
+	// created_at sits before the start, as an enqueue always does, so any
+	// code reaching for it instead of started_at buckets the row wrong.
+	const ranFor = 5 * time.Minute
 	mkScan := func(repo db.Repository, status db.ScanStatus, cost float64, in, out, cr, cw int, ago time.Duration) db.Scan {
-		at := now.Add(-ago)
+		finished := now.Add(-ago)
+		started := finished.Add(-ranFor)
 		sc := db.Scan{
 			RepositoryID: repo.ID, Kind: "skill", Status: status, SkillName: "vuln-scan",
 			CostUSD: cost, InputTokens: in, OutputTokens: out,
 			CacheReadTokens: cr, CacheWriteTokens: cw,
-			FinishedAt: &at, CreatedAt: at,
+			StartedAt: &started, FinishedAt: &finished, CreatedAt: started.Add(-time.Minute),
 		}
 		if err := s.DB.Create(&sc).Error; err != nil {
 			t.Fatal(err)
@@ -51,10 +57,28 @@ func seedReportCorpus(t *testing.T, s *Server) {
 	mkScan(r1, db.ScanDone, 4.00, 300, 30, 3000, 150, 3*reportDay)
 	mkScan(r2, db.ScanDone, 6.00, 200, 20, 2000, 100, 10*reportDay)
 	mkScan(r3, db.ScanDone, 8.00, 400, 40, 4000, 200, 100*reportDay)
-	// Failed and queued rows are activity but not costed scans, so they
-	// move the scan totals without touching the averages.
+	// A failed run is a start and a spend but never a completion, so it
+	// moves the scan totals without touching the averages.
 	mkScan(r3, db.ScanFailed, 1.00, 10, 1, 10, 1, time.Hour)
-	mkScan(r3, db.ScanQueued, 0, 0, 0, 0, 0, time.Hour)
+
+	// A queued run has neither timestamp: it is enqueued work, not scan
+	// activity, and must be counted in no window. A running one has only a
+	// start, and is counted as one.
+	mkPending := func(repo db.Repository, status db.ScanStatus, startedAgo time.Duration) {
+		sc := db.Scan{
+			RepositoryID: repo.ID, Kind: "skill", Status: status, SkillName: "vuln-scan",
+			CreatedAt: now.Add(-time.Hour),
+		}
+		if startedAgo > 0 {
+			started := now.Add(-startedAgo)
+			sc.StartedAt = &started
+		}
+		if err := s.DB.Create(&sc).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	mkPending(r3, db.ScanQueued, 0)
+	mkPending(r2, db.ScanRunning, 30*time.Minute)
 
 	recent := now.Add(-2 * time.Hour)
 	old := now.Add(-100 * reportDay)
@@ -137,16 +161,18 @@ func TestBuildReportIntervalTotals(t *testing.T) {
 	seedReportCorpus(t, s)
 
 	for _, tc := range []struct {
-		interval                                     string
-		repos, scans, done, findings, costedInWindow int
+		interval                                       string
+		repos, started, done, findings, costedInWindow int
 	}{
-		// Day: repo 1's 2h scan, plus repo 3's failed and queued rows.
-		{"day", 2, 3, 1, 2, 1},
-		// Week: adds repo 1's 3-day scan; repo 2's 10-day scan is out.
-		{"week", 2, 4, 2, 2, 2},
-		// Month: adds repo 2's 10-day scan.
+		// Day: repo 1's 2h run, repo 3's failed run and repo 2's running
+		// one all started inside it; only repo 1's reached done. The queued
+		// row is not activity and is counted nowhere.
+		{"day", 3, 3, 1, 2, 1},
+		// Week: adds repo 1's 3-day run; repo 2's 10-day one is out.
+		{"week", 3, 4, 2, 2, 2},
+		// Month: adds repo 2's 10-day run.
 		{"month", 3, 5, 3, 2, 3},
-		// All time: adds repo 3's 100-day scan and the old finding.
+		// All time: adds repo 3's 100-day run and the old finding.
 		{"all", 3, 6, 4, 3, 4},
 	} {
 		t.Run(tc.interval, func(t *testing.T) {
@@ -154,11 +180,11 @@ func TestBuildReportIntervalTotals(t *testing.T) {
 			if got.Totals.ReposScanned != tc.repos {
 				t.Errorf("ReposScanned = %d, want %d", got.Totals.ReposScanned, tc.repos)
 			}
-			if got.Totals.Scans != tc.scans {
-				t.Errorf("Scans = %d, want %d", got.Totals.Scans, tc.scans)
+			if got.Totals.ScansStarted != tc.started {
+				t.Errorf("ScansStarted = %d, want %d", got.Totals.ScansStarted, tc.started)
 			}
-			if got.Totals.ScansDone != tc.done {
-				t.Errorf("ScansDone = %d, want %d", got.Totals.ScansDone, tc.done)
+			if got.Totals.ScansCompleted != tc.done {
+				t.Errorf("ScansCompleted = %d, want %d", got.Totals.ScansCompleted, tc.done)
 			}
 			if got.Totals.Findings != tc.findings {
 				t.Errorf("Findings = %d, want %d", got.Totals.Findings, tc.findings)
@@ -171,6 +197,85 @@ func TestBuildReportIntervalTotals(t *testing.T) {
 				t.Errorf("AllTime.Runs = %d, want 4", got.AllTime.Runs)
 			}
 		})
+	}
+}
+
+// A start is read from started_at and a completion from finished_at, so a
+// run spanning a window boundary belongs to two different periods and a run
+// still on the queue belongs to none. created_at is only the enqueue time
+// and must not stand in for either.
+func TestBuildReportCountsRunsOnTheirOwnClock(t *testing.T) {
+	s, cleanup := newTestServer(t)
+	defer cleanup()
+	now := time.Now().UTC()
+
+	mkRepo := func(name string) db.Repository {
+		repo := db.Repository{URL: "https://example.test/" + name, Name: name, FullName: "acme/" + name}
+		if err := s.DB.Create(&repo).Error; err != nil {
+			t.Fatal(err)
+		}
+		return repo
+	}
+	mkScan := func(repo db.Repository, status db.ScanStatus, cost float64, started, finished *time.Time) {
+		sc := db.Scan{
+			RepositoryID: repo.ID, Kind: "skill", Status: status, SkillName: "vuln-scan",
+			CostUSD: cost, StartedAt: started, FinishedAt: finished,
+			// Enqueued 40 hours ago: outside the day window but inside the
+			// week, so counting rows by created_at would show up here.
+			CreatedAt: now.Add(-40 * time.Hour),
+		}
+		if err := s.DB.Create(&sc).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	began, ended, running := now.Add(-30*time.Hour), now.Add(-2*time.Hour), now.Add(-30*time.Minute)
+	// Began before the day window and finished inside it.
+	mkScan(mkRepo("straddler"), db.ScanDone, 3.00, &began, &ended)
+	// Began inside the day window and has not finished.
+	mkScan(mkRepo("inflight"), db.ScanRunning, 0, &running, nil)
+	// Enqueued and never claimed: no timestamps, no activity.
+	mkScan(mkRepo("queued"), db.ScanQueued, 0, nil, nil)
+
+	day := s.buildReport(resolveReportInterval("day"), "")
+	if day.Totals.ScansStarted != 1 {
+		t.Errorf("day ScansStarted = %d, want 1 (the running run only)", day.Totals.ScansStarted)
+	}
+	if day.Totals.ScansCompleted != 1 {
+		t.Errorf("day ScansCompleted = %d, want 1 (the straddler only)", day.Totals.ScansCompleted)
+	}
+	// Both repositories saw activity in the window even though neither had a
+	// whole run inside it; the queued repository saw none.
+	if day.Totals.ReposScanned != 2 {
+		t.Errorf("day ReposScanned = %d, want 2", day.Totals.ReposScanned)
+	}
+	// Starts can trail the repository count once completions bring their own
+	// repositories in, so the fan-out ratio is allowed below one.
+	if got := day.Totals.ScansPerRepo(); got != 0.5 {
+		t.Errorf("day ScansPerRepo() = %v, want 0.5", got)
+	}
+	// The averages window is bounded on finished_at, the same clock the
+	// completion count uses, so the straddler is inside it.
+	if day.Period.Runs != 1 || day.Period.CostUSD != 3 {
+		t.Errorf("day averages = %d runs at %v, want 1 at 3", day.Period.Runs, day.Period.CostUSD)
+	}
+	// Its spend lands on the day it finished, not the day it began.
+	for _, d := range day.Days {
+		if d.Date == ended.Format(reportDateLayout) && d.CostUSD != 3 {
+			t.Errorf("finish day %s cost = %v, want 3", d.Date, d.CostUSD)
+		}
+	}
+
+	// Widening the window brings the straddler's start in. The queued run
+	// was enqueued inside this window and must still be counted nowhere.
+	week := s.buildReport(resolveReportInterval("week"), "")
+	if week.Totals.ScansStarted != 2 {
+		t.Errorf("week ScansStarted = %d, want 2", week.Totals.ScansStarted)
+	}
+	if week.Totals.ScansCompleted != 1 {
+		t.Errorf("week ScansCompleted = %d, want 1", week.Totals.ScansCompleted)
+	}
+	if week.Totals.ReposScanned != 2 {
+		t.Errorf("week ReposScanned = %d, want 2; the queued repository has no activity", week.Totals.ReposScanned)
 	}
 }
 
@@ -196,7 +301,7 @@ func TestBuildReportMinSeverityFiltersFindingsOnly(t *testing.T) {
 			t.Errorf("severity %q: findings = %d, want %d", tc.severity, got.Totals.Findings, tc.findings)
 		}
 		// Scan-side numbers are a property of scans, not findings.
-		if got.Totals.Scans != 6 || got.Totals.ScansDone != 4 || got.AllTime.Runs != 4 {
+		if got.Totals.ScansStarted != 6 || got.Totals.ScansCompleted != 4 || got.AllTime.Runs != 4 {
 			t.Errorf("severity %q moved scan totals: %+v", tc.severity, got.Totals)
 		}
 	}
@@ -282,7 +387,7 @@ func TestBuildReportEmptyCorpus(t *testing.T) {
 	defer cleanup()
 
 	got := s.buildReport(resolveReportInterval("week"), "")
-	if got.Totals.Scans != 0 || got.AllTime.Runs != 0 || len(got.Days) != 0 {
+	if got.Totals.ScansStarted != 0 || got.AllTime.Runs != 0 || len(got.Days) != 0 {
 		t.Fatalf("empty corpus report = %+v, want zeroed", got)
 	}
 	// A zero denominator must not produce NaN in the rendered averages.
@@ -309,10 +414,11 @@ func TestReportingPageRenders(t *testing.T) {
 		"Daily breakdown",
 		"Minimum severity",
 		// The scan tiles name their unit and show why the count outruns
-		// the repository count.
-		"Scan runs",
+		// the repository count, and each names the clock it is read on.
+		"Scan runs started",
+		"Scan runs completed",
 		"per repository",
-		"of runs",
+		"of runs started",
 		"/reporting/report.csv?interval=week",
 		"/reporting/report.json?interval=week",
 	} {
@@ -330,6 +436,14 @@ func TestReportingPageRenders(t *testing.T) {
 	}
 	if !strings.Contains(body, `href="/reporting" aria-current="page"`) {
 		t.Error("sidebar Reporting entry not marked current")
+	}
+	// The page must invoke the shared foot: it closes the <main> wrapper
+	// "head" opened and carries the dialogs and the #toaster that flash
+	// messages and htmx OOB toasts land in.
+	for _, want := range []string{`id="toaster"`, "</main>", "</body>", "</html>"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page never reaches the shared foot: missing %q", want)
+		}
 	}
 }
 
@@ -423,7 +537,7 @@ func TestReportingCSVIsOneRectangularTable(t *testing.T) {
 		t.Fatal("no period_total row")
 	}
 	// repositories_scanned, scans_started, scans_completed, findings
-	if total[4] != "2" || total[5] != "4" || total[6] != "2" || total[7] != "2" {
+	if total[4] != "3" || total[5] != "4" || total[6] != "2" || total[7] != "2" {
 		t.Errorf("period_total activity = %v", total[4:8])
 	}
 	if total[11] != "3.00" {
@@ -619,7 +733,7 @@ func TestReportTotalsDerivedRatios(t *testing.T) {
 	})
 
 	t.Run("fan-out ratio", func(t *testing.T) {
-		totals := reportTotals{ReposScanned: 49, Scans: 510, ScansDone: 321}
+		totals := reportTotals{ReposScanned: 49, ScansStarted: 510, ScansCompleted: 321}
 		if got := totals.ScansPerRepo(); got < 10.4 || got > 10.5 {
 			t.Errorf("ScansPerRepo() = %v, want ~10.41", got)
 		}
@@ -628,15 +742,17 @@ func TestReportTotalsDerivedRatios(t *testing.T) {
 		}
 	})
 
-	// Scans >= ReposScanned always holds, since ReposScanned counts distinct
-	// repositories among the very scans being counted.
-	t.Run("ratio never drops below one for a non-empty corpus", func(t *testing.T) {
+	// Over all time the corpus\'s six started runs span three repositories.
+	// The ratio can fall below one in a narrow window — see
+	// TestBuildReportCountsRunsOnTheirOwnClock — which is why the tile
+	// renders it to one decimal.
+	t.Run("fan-out over the seeded corpus", func(t *testing.T) {
 		s, cleanup := newTestServer(t)
 		defer cleanup()
 		seedReportCorpus(t, s)
 		got := s.buildReport(reportIntervals[0], "").Totals
-		if got.ScansPerRepo() < 1 {
-			t.Errorf("ScansPerRepo() = %v, want >= 1", got.ScansPerRepo())
+		if want := 2.0; got.ScansPerRepo() != want {
+			t.Errorf("ScansPerRepo() = %v, want %v", got.ScansPerRepo(), want)
 		}
 	})
 }
