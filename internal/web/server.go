@@ -835,12 +835,25 @@ func paginate(r *http.Request, total int64) Page {
 	return Page{N: n, Pages: pages, Total: total, Path: r.URL.Path, Query: r.URL.Query()}
 }
 
+// repoListFields is the complete Repository surface rendered by
+// repo_list.html. Querying into this narrow type makes GORM derive the SELECT
+// list from the template's data contract while keeping the potentially large
+// Repository cache fields out. A template reference to an unlisted field then
+// fails loudly instead of silently rendering an unhydrated zero value.
+type repoListFields struct {
+	ID         uint
+	URL        string
+	Languages  string
+	Health     db.RepositoryHealth
+	CloneError string
+	DiskBytes  int64
+}
+
 type repoRow struct {
-	db.Repository
+	repoListFields
 	LastScan      *db.Scan
 	StatusScan    *db.Scan
 	FindingsTotal int
-	DiskBytes     int64
 	// Branches lists the distinct non-default refs this repo has been
 	// scanned on, for the branch tags next to its name. Empty when every
 	// scan ran on the default branch.
@@ -927,7 +940,7 @@ func (s *Server) repoList(w http.ResponseWriter, r *http.Request) {
 	q.Count(&total)
 	page := paginate(r, total)
 
-	var repos []db.Repository
+	var repos []repoListFields
 	q.Limit(perPage).Offset((page.N - 1) * perPage).Find(&repos)
 
 	// Batch-load findings count and last scan per page (N rows) rather
@@ -1023,15 +1036,11 @@ func (s *Server) repoList(w http.ResponseWriter, r *http.Request) {
 	rows := make([]repoRow, 0, len(repos))
 	for _, repo := range repos {
 		rows = append(rows, repoRow{
-			Repository:    repo,
-			LastScan:      lastScans[repo.ID],
-			StatusScan:    statusScans[repo.ID],
-			FindingsTotal: findingCounts[repo.ID],
-			// Read the cached size from the row; the worker refreshes it on
-			// each scan and a startup backfill seeds it, so the list never
-			// walks the clone cache per row (#126).
-			DiskBytes: repo.DiskBytes,
-			Branches:  branchesByRepo[repo.ID],
+			repoListFields: repo,
+			LastScan:       lastScans[repo.ID],
+			StatusScan:     statusScans[repo.ID],
+			FindingsTotal:  findingCounts[repo.ID],
+			Branches:       branchesByRepo[repo.ID],
 		})
 	}
 	languages := distinctLanguages(s.DB)
