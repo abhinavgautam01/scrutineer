@@ -75,7 +75,7 @@ Plaintext bundles work too — drop `&encrypt=1` on export and import accepts th
       ]
     }
 
-`generated_at` (RFC3339 UTC) records when the bundle was produced. It lives inside the encrypted JSON — not in cleartext around the armor, which would leak the production time to anyone who intercepts the file — and the importer ignores it; it is provenance for the human recipient. The shareable unit is one repository. Severity and status filters apply: `?format=bundle&severity=High` exports only High findings. By default the bundle carries every finding for the repository, including tool-scanner output; add `&scope=findings` to share only the curated Findings bucket — the deep-dive and vuln-scan audits plus operator imports — dropping per-repo semgrep/zizmor noise.
+`generated_at` (RFC3339 UTC) records when the bundle was produced. It lives inside the encrypted JSON — not in cleartext around the armor, which would leak the production time to anyone who intercepts the file — and the importer ignores it; it is provenance for the human recipient. The shareable unit is one repository. Severity and status filters apply: `?format=bundle&severity=High` exports only High findings. By default the bundle carries every finding for the repository, including tool-scanner output; add `&scope=findings` to share only the curated Findings bucket — the deep-dive and vuln-scan audits plus operator imports — dropping per-repo semgrep/zizmor noise. The same `scope=findings` also narrows the plain JSONL export, so a script can stream the curated bucket without filtering scanner rows locally.
 
 When the source repository was scanned from a local directory, the exporter uses that checkout's HTTPS `origin` for `repository` when one is configured. The common SSH origin forms (`git@host:owner/repo` and `ssh://git@host/owner/repo`) are converted to HTTPS for GitHub, GitLab.com, Bitbucket, and Codeberg. The receiving instance therefore imports a remote repository and clones it automatically when verification or another skill first runs, instead of trying to reuse a sender-only `file:///...` path.
 
@@ -235,12 +235,12 @@ All are optional. When absent the feature is fully disabled and all endpoints be
 
 ## Endpoints
 
-No new routes. The existing endpoints gain three optional parameters:
+No new routes. The existing endpoints gain four optional parameters:
 
 | Endpoint | Parameter | Effect |
 |----------|-----------|--------|
 | `GET /api/v1/repositories/{id}/findings` | `format=bundle` | JSON bundle instead of NDJSON |
 | `GET /api/v1/repositories/{id}/findings` | `encrypt=1` | Wrap bundle in armored age (requires `format=bundle`) |
-| `GET /api/v1/repositories/{id}/findings` | `scope=findings` | Curate the bundle to the Findings bucket, excluding scanner noise (requires `format=bundle`) |
+| `GET /api/v1/repositories/{id}/findings` | `scope=findings` | Curate the export (JSONL or bundle) to the Findings bucket, excluding scanner noise |
 | `GET /api/v1/repositories/{id}/findings` | `include=all` | Promote the bundle to the archival superset — enrichment, disclosure fields, and notes/communications/references — for lossless round-trip into your own instance (requires `format=bundle`) |
 | `POST /api/v1/import` | *(none)* | Auto-detects age header and decrypts before parsing |

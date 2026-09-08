@@ -989,7 +989,7 @@ paths:
             application/x-ndjson:
               schema: { $ref: '#/components/schemas/RepositoryExport' }
         '400':
-          description: Unsupported format query value, or `encrypt`/`scope`/`include` requested (only valid on per-repository bundle exports).
+          description: Unsupported format query value, or `encrypt`/`scope`/`include` requested (`scope` is only valid on per-repository exports, `encrypt`/`include` on per-repository bundle exports).
         '403':
           description: Host header is not localhost
 
@@ -1040,10 +1040,10 @@ paths:
         snippet embeds verbatim source, which a cross-party share must not leak.
 
         Adding `encrypt=1` (bundle only) wraps the bundle in armored age,
-        encrypted to every configured recipient. Adding `scope=findings` (bundle
-        only) curates the bundle to the Findings bucket (deep-dive and vuln-scan
-        audits plus operator imports), dropping per-repo scanner noise. No bearer
-        token; localhost-only.
+        encrypted to every configured recipient. Adding `scope=findings` (either
+        format) curates the export to the Findings bucket (deep-dive and
+        vuln-scan audits plus operator imports), dropping per-repo scanner
+        noise. No bearer token; localhost-only.
       operationId: exportRepositoryFindings
       security: []
       parameters:
@@ -1064,11 +1064,12 @@ paths:
         - name: scope
           in: query
           description: |
-            `findings` curates a `format=bundle` export to the Findings bucket
-            (deep-dive and vuln-scan audits plus operator imports), excluding
-            per-repo scanner noise. Requires `format=bundle`; any other value,
-            or use on the cross-repo `/v1/findings` and `/v1/scans` endpoints,
-            gets a 400. Omitted: the bundle carries every finding.
+            `findings` curates a `jsonl` or `bundle` export to the Findings
+            bucket (deep-dive and vuln-scan audits plus operator imports),
+            excluding per-repo scanner noise. It combines with `severity` and
+            `status`. Any other value, or use on the cross-repo
+            `/v1/repositories`, `/v1/findings` and `/v1/scans` endpoints, gets
+            a 400. Omitted: the export carries every finding.
           schema: { type: string, enum: [findings] }
         - name: include
           in: query
@@ -1105,7 +1106,7 @@ paths:
                 type: string
                 description: Armored age ciphertext, starting `-----BEGIN AGE ENCRYPTED FILE-----`.
         '400':
-          description: Unsupported `format`, `encrypt`/`scope`/`include` without `format=bundle`, an unknown `scope`/`include` value, or encryption requested with no recipients configured.
+          description: Unsupported `format`, `encrypt`/`include` without `format=bundle`, an unknown `scope`/`include` value, or encryption requested with no recipients configured.
         '403':
           description: Host header is not localhost
         '404':
@@ -1139,7 +1140,7 @@ paths:
             application/x-ndjson:
               schema: { $ref: '#/components/schemas/FindingExport' }
         '400':
-          description: Unsupported format query value, or `encrypt`/`scope`/`include` requested (only valid on per-repository bundle exports).
+          description: Unsupported format query value, or `encrypt`/`scope`/`include` requested (`scope` is only valid on per-repository exports, `encrypt`/`include` on per-repository bundle exports).
         '403':
           description: Host header is not localhost
 
@@ -1194,7 +1195,7 @@ paths:
             application/x-ndjson:
               schema: { $ref: '#/components/schemas/ScanExport' }
         '400':
-          description: Unsupported format query value, or `encrypt`/`scope`/`include` requested (only valid on per-repository bundle exports).
+          description: Unsupported format query value, or `encrypt`/`scope`/`include` requested (`scope` is only valid on per-repository exports, `encrypt`/`include` on per-repository bundle exports).
         '403':
           description: Host header is not localhost
 

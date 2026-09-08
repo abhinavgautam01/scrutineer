@@ -193,24 +193,18 @@ func (s *Server) apiExportRepoFindings(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "encrypt requires format=bundle")
 		return
 	}
-	// scope=findings curates the bundle to the Findings bucket (deep-dive,
-	// vuln-scan, imports), dropping per-repo scanner noise. Like encrypt it only
-	// applies to the bundle format; reject it elsewhere rather than silently
-	// returning the full set a caller asked to narrow.
-	scope := r.URL.Query().Get("scope")
-	if scope != "" && scope != "findings" {
+	// scope=findings curates either format to the Findings bucket (deep-dive,
+	// vuln-scan, imports), dropping per-repo scanner noise. Unknown values are
+	// rejected rather than silently returning the full set a caller asked to
+	// narrow.
+	if scope := r.URL.Query().Get("scope"); scope != "" && scope != "findings" {
 		writeAPIError(w, http.StatusBadRequest, "unsupported scope: findings")
-		return
-	}
-	if scope != "" && format != "bundle" {
-		writeAPIError(w, http.StatusBadRequest, "scope requires format=bundle")
 		return
 	}
 	// include=all promotes the bundle to the archival superset (the operator's
 	// enrichment, disclosure work product, and notes/comms/refs child records).
-	// Like encrypt and scope it only applies to the bundle format; reject it
-	// elsewhere rather than silently returning the lean default a caller asked
-	// to widen.
+	// Like encrypt it only applies to the bundle format; reject it elsewhere
+	// rather than silently returning the lean default a caller asked to widen.
 	include := r.URL.Query().Get("include")
 	if include != "" && include != "all" {
 		writeAPIError(w, http.StatusBadRequest, "unsupported include: all")
@@ -371,13 +365,6 @@ func (s *Server) apiExportRepoBundle(w http.ResponseWriter, r *http.Request, rep
 	var findings []db.Finding
 	q := s.DB.Where("repository_id = ?", repo.ID).
 		Order("id desc")
-	if r.URL.Query().Get("scope") == "findings" {
-		// Curate to the Findings bucket — drop semgrep/zizmor scanner noise,
-		// keep deep-dive, vuln-scan, and operator imports (nonScannerScanFilter,
-		// the same predicate the Findings tab uses). Validated in
-		// apiExportRepoFindings; the default (no scope) shares every finding.
-		q = q.Where(nonScannerScanFilter)
-	}
 	if includeAll {
 		// Load the child records only for the archival superset. Ordered so the
 		// bundle is deterministic (byte-stable re-exports) and reads in the same
@@ -676,13 +663,13 @@ func validateExportFormat(w http.ResponseWriter, r *http.Request) bool {
 		writeAPIError(w, http.StatusBadRequest, "encrypt is only supported on per-repository bundle exports")
 		return false
 	}
-	// scope curates the per-repository bundle and has no meaning on these
-	// cross-repo NDJSON dumps; reject it rather than silently ignore it.
+	// scope is only accepted on the per-repository findings export; reject it
+	// here rather than silently ignore it.
 	if r.URL.Query().Get("scope") != "" {
-		writeAPIError(w, http.StatusBadRequest, "scope is only supported on per-repository bundle exports")
+		writeAPIError(w, http.StatusBadRequest, "scope is only supported on per-repository exports")
 		return false
 	}
-	// include selects the archival bundle superset; likewise bundle-only.
+	// include selects the archival bundle superset; like encrypt, bundle-only.
 	if r.URL.Query().Get("include") != "" {
 		writeAPIError(w, http.StatusBadRequest, "include is only supported on per-repository bundle exports")
 		return false
@@ -691,17 +678,23 @@ func validateExportFormat(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func applyFindingFilters(q *gorm.DB, r *http.Request) *gorm.DB {
-	if v := r.URL.Query().Get("severity"); v != "" {
+	params := r.URL.Query()
+	if v := params.Get("severity"); v != "" {
 		q = q.Where("severity = ?", v)
 	}
-	if v := r.URL.Query().Get(statusKey); v != "" {
+	if v := params.Get(statusKey); v != "" {
 		q = q.Where("status = ?", v)
 	}
 	// sub_path narrows an export to a single monorepo sub-package, so a repo
 	// like rails/rails can be exported (or bundled/encrypted) one gem at a
 	// time. Empty means the whole repository, as before.
-	if v := strings.TrimSpace(r.URL.Query().Get("sub_path")); v != "" {
+	if v := strings.TrimSpace(params.Get("sub_path")); v != "" {
 		q = q.Where("sub_path = ?", v)
+	}
+	// scope=findings curates to the bucket the Findings tab shows; the callers
+	// validate the value.
+	if params.Get("scope") == "findings" {
+		q = q.Where(nonScannerScanFilter)
 	}
 	return q
 }
