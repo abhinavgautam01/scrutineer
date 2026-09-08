@@ -4,6 +4,8 @@ Entries are grouped by release, newest first. Each entry is a summary written fo
 
 ## Unreleased
 
+## 2026-09-08
+
 - Native code bundled inside a project, whether pulled in as a git submodule or built as a compiled extension, is now mapped and audited alongside the main language, and a defect in a vendored component is attributed to its upstream source. ([#908](https://github.com/alpha-omega-security/scrutineer/pull/908) [#909](https://github.com/alpha-omega-security/scrutineer/pull/909), [@andrew](https://github.com/andrew))
 - Every confirmed finding is now assessed for whether it can be reached in a released build, so a flaw that only exists in test or example code is marked as such rather than treated the same as one on a shipped path. ([#900](https://github.com/alpha-omega-security/scrutineer/pull/900), [@abhinavgautam01](https://github.com/abhinavgautam01))
 - A finding's severity is now capped when verification shows a protection recorded in the project's threat model stopped the attack, or that exploiting it would need access as damaging as the flaw itself, and the evidence behind each cap is kept with the finding. ([#936](https://github.com/alpha-omega-security/scrutineer/pull/936) [#938](https://github.com/alpha-omega-security/scrutineer/pull/938) [#955](https://github.com/alpha-omega-security/scrutineer/pull/955), [@abhinavgautam01](https://github.com/abhinavgautam01))
