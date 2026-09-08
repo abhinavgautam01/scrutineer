@@ -743,6 +743,43 @@ func TestWithPragmas_joinsOnExistingQuery(t *testing.T) {
 	}
 }
 
+func TestOpen_addsRepositoryUpdatedAtIndexToExistingDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "existing.db")
+	gdb, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqldb, err := gdb.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sqldb.Close() }()
+	if err := gdb.Migrator().DropIndex(&Repository{}, "idx_repositories_updated_at"); err != nil {
+		t.Fatal(err)
+	}
+	// Prove the precondition: without this the reopen below could pass on an
+	// index the drop never removed, and the test would assert nothing.
+	if gdb.Migrator().HasIndex(&Repository{}, "idx_repositories_updated_at") {
+		t.Fatal("DropIndex left idx_repositories_updated_at in place")
+	}
+	if err := sqldb.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopenedSQL, err := reopened.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopenedSQL.Close() }()
+	if !reopened.Migrator().HasIndex(&Repository{}, "idx_repositories_updated_at") {
+		t.Fatal("Open did not add idx_repositories_updated_at to an existing database")
+	}
+}
+
 // foreign_keys and busy_timeout are per-connection in SQLite. Setting them
 // via a single gdb.Exec only configures whichever pooled connection that
 // Exec lands on, leaving the rest at the defaults (#457). Open now folds
