@@ -55,7 +55,7 @@ The central entity. One row per git URL.
 | upstream_url | text | Upstream this repository is a pushed staging copy of (no forge fork relationship). When set, the scheduler force-syncs the repository from it (a mirror push that overwrites local-only commits) before the new-commit check. Empty for ordinary repos. |
 | next_scheduled_scan_at | datetime | Scheduler bookkeeping: when the next scheduled run is due. Null means "recompute on the next tick"; schedule edits reset it instead of computing inline. |
 | created_at | datetime | |
-| updated_at | datetime | |
+| updated_at | datetime | Indexed for the repository list's default newest-first order. |
 
 ## audit_events
 

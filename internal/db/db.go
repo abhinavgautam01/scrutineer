@@ -141,7 +141,10 @@ type Repository struct {
 	NextScheduledScanAt *time.Time `gorm:"index"`
 
 	CreatedAt time.Time
-	UpdatedAt time.Time
+	// UpdatedAt drives the repository list's default newest-first order. Keep
+	// it indexed so SQLite can find the first page without scanning through
+	// every repository's large cache columns and building a temporary sort.
+	UpdatedAt time.Time `gorm:"index"`
 
 	Scans            []Scan            `gorm:"constraint:OnDelete:CASCADE"`
 	ExpectedFindings []ExpectedFinding `gorm:"constraint:OnDelete:CASCADE"`
