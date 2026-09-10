@@ -47,7 +47,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Verify Claude Code version pins
+      - name: Verify runner CLI version pins
         run: scripts/check-claude-version-pins.sh
 
       - name: Set up Docker Buildx
