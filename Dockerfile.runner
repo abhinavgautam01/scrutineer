@@ -9,9 +9,12 @@
 # failed upstream.
 ARG CLAUDE_AMD64_LOCK=v2.1.259@sha256:f77fff577240f535c9c1b44dfef705280cb4809d6f0d50b6997f4965331ade34
 ARG CLAUDE_ARM64_LOCK=v2.1.259@sha256:de20156d423cf3d5038e5df732a28e642921a51ec110fd3a8b6d0d25415e7358
-ARG CODEX_VERSION=0.142.5
-ARG OPENCODE_VERSION=1.17.12
-ARG COPILOT_VERSION=1.0.80
+ARG CODEX_AMD64_LOCK=rust-v0.154.0@sha256:d7e18b2597ae8f242f5f31ee9e90deef48dbc9edd634d9868fb6435d08c07f02
+ARG CODEX_ARM64_LOCK=rust-v0.154.0@sha256:583b48df32804213bdcd338c2e5adb06b34340821fa757a726cc0a524fa33c27
+ARG OPENCODE_AMD64_LOCK=v1.17.12@sha256:b41e3ae69b5033f6fba8b9fcf4cb19f0dc8093d449266ef01a5cd142f6f7064d
+ARG OPENCODE_ARM64_LOCK=v1.17.12@sha256:b36060c4c5bc8fee8e507a600af0ad8b2aa5e0c451f7f34cc3763a0d557b44d6
+ARG COPILOT_AMD64_LOCK=v1.0.80@sha256:039933c9247686131c4406abb1d439bdbf68103edc1ff585bd70d5b0dc940f72
+ARG COPILOT_ARM64_LOCK=v1.0.80@sha256:3ed85e711955e13be523bf492bc6c93b40b69925bcb7f817c9d08abf4839cf89
 ARG SEMGREP_VERSION=1.167.0
 ARG BANDIT_VERSION=1.9.4
 
@@ -37,9 +40,12 @@ RUN CGO_ENABLED=0 go build -o /out/scrutineer ./cmd/scrutineer && \
 FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd
 ARG CLAUDE_AMD64_LOCK
 ARG CLAUDE_ARM64_LOCK
-ARG CODEX_VERSION
-ARG OPENCODE_VERSION
-ARG COPILOT_VERSION
+ARG CODEX_AMD64_LOCK
+ARG CODEX_ARM64_LOCK
+ARG OPENCODE_AMD64_LOCK
+ARG OPENCODE_ARM64_LOCK
+ARG COPILOT_AMD64_LOCK
+ARG COPILOT_ARM64_LOCK
 ARG SEMGREP_VERSION
 ARG BANDIT_VERSION
 
@@ -96,12 +102,14 @@ RUN set -eux; \
 # static binary named codex-${triple}; install it as /usr/local/bin/codex.
 RUN set -eux; \
     case "${TARGETARCH}" in \
-      amd64) triple=x86_64-unknown-linux-musl;  sha=cb933ec3cb61bf4b5fc88eecf5e6149829faa6172535b6ef0afb0154beb4aab8 ;; \
-      arm64) triple=aarch64-unknown-linux-musl; sha=b18c75c49645918fae23beba0ab41c05f07941601510a2451ba97fe519573c38 ;; \
+      amd64) triple=x86_64-unknown-linux-musl;  lock="${CODEX_AMD64_LOCK}" ;; \
+      arm64) triple=aarch64-unknown-linux-musl; lock="${CODEX_ARM64_LOCK}" ;; \
       *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
+    tag="${lock%@*}"; \
+    sha="${lock#*@sha256:}"; \
     curl -fsSL -o /tmp/codex.tgz \
-      "https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/codex-${triple}.tar.gz"; \
+      "https://github.com/openai/codex/releases/download/${tag}/codex-${triple}.tar.gz"; \
     echo "${sha}  /tmp/codex.tgz" | sha256sum -c -; \
     tar -xzf /tmp/codex.tgz -C /tmp; \
     install -m 0755 "/tmp/codex-${triple}" /usr/local/bin/codex; \
@@ -113,12 +121,14 @@ RUN set -eux; \
 # is why libstdc++6 is in the apt install list above.
 RUN set -eux; \
     case "${TARGETARCH}" in \
-      amd64) ocarch=x64;   sha=b41e3ae69b5033f6fba8b9fcf4cb19f0dc8093d449266ef01a5cd142f6f7064d ;; \
-      arm64) ocarch=arm64; sha=b36060c4c5bc8fee8e507a600af0ad8b2aa5e0c451f7f34cc3763a0d557b44d6 ;; \
+      amd64) ocarch=x64;   lock="${OPENCODE_AMD64_LOCK}" ;; \
+      arm64) ocarch=arm64; lock="${OPENCODE_ARM64_LOCK}" ;; \
       *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
+    tag="${lock%@*}"; \
+    sha="${lock#*@sha256:}"; \
     curl -fsSL -o /tmp/opencode.tgz \
-      "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-${ocarch}.tar.gz"; \
+      "https://github.com/anomalyco/opencode/releases/download/${tag}/opencode-linux-${ocarch}.tar.gz"; \
     echo "${sha}  /tmp/opencode.tgz" | sha256sum -c -; \
     tar -xzf /tmp/opencode.tgz -C /usr/local/bin opencode; \
     rm /tmp/opencode.tgz; \
@@ -141,12 +151,14 @@ RUN set -eux; \
 ENV COPILOT_PKG_CACHE_HOME=/usr/local/lib/copilot
 RUN set -eux; \
     case "${TARGETARCH}" in \
-      amd64) cparch=x64;   sha=039933c9247686131c4406abb1d439bdbf68103edc1ff585bd70d5b0dc940f72 ;; \
-      arm64) cparch=arm64; sha=3ed85e711955e13be523bf492bc6c93b40b69925bcb7f817c9d08abf4839cf89 ;; \
+      amd64) cparch=x64;   lock="${COPILOT_AMD64_LOCK}" ;; \
+      arm64) cparch=arm64; lock="${COPILOT_ARM64_LOCK}" ;; \
       *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
+    tag="${lock%@*}"; \
+    sha="${lock#*@sha256:}"; \
     curl -fsSL -o /tmp/copilot.tgz \
-      "https://github.com/github/copilot-cli/releases/download/v${COPILOT_VERSION}/copilot-linux-${cparch}.tar.gz"; \
+      "https://github.com/github/copilot-cli/releases/download/${tag}/copilot-linux-${cparch}.tar.gz"; \
     echo "${sha}  /tmp/copilot.tgz" | sha256sum -c -; \
     tar -xzf /tmp/copilot.tgz -C /usr/local/bin copilot; \
     rm /tmp/copilot.tgz; \

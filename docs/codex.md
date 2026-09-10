@@ -19,27 +19,33 @@ credential and start scrutineer:
 or in `scrutineer.yaml`:
 
     backend: codex
-    default_model: gpt-5.3-codex
+    default_model: gpt-5.6-sol
     models:
-      - name: GPT-5.3 Codex
-        id:   gpt-5.3-codex
+      - name: GPT-5.6 Sol
+        id:   gpt-5.6-sol
         tier: high
-      - name: GPT-5.4
-        id:   gpt-5.4
-      - name: GPT-5.4 mini
-        id:   gpt-5.4-mini
+      - name: GPT-5.6 Terra
+        id:   gpt-5.6-terra
+      - name: GPT-5.6 Luna
+        id:   gpt-5.6-luna
         tier: mid
+      - name: GPT-6 Astra
+        id:   gpt-6-astra
+        tier: max
       - name: GPT-5.5
         id:   gpt-5.5
-        tier: max
+      - name: GPT-5.2
+        id:   gpt-5.2
 
-The `models:` block is optional. Without it, the pick list is codex's own
-built-in catalog with mid/high/max tier tags already set, so a fresh install
-works with no config. Setting `models:` replaces that list; `tier:` on an
-entry marks it as the default for that tier in `/settings`.
+The `models:` block is optional. Without it, Scrutineer seeds the list above
+from defaults matched to the pinned codex catalog, with mid/high/max tier tags
+already set, so a fresh install works with no config. Setting `models:`
+replaces that list; `tier:` on an entry marks it as the default for that tier
+in `/settings`.
 
 Model ids must be in the pinned codex version's built-in catalog
-(`codex-rs/models-manager/models.json` at the `rust-v${CODEX_VERSION}` tag);
+(`codex-rs/models-manager/models.json` at the release tag stored in the
+`CODEX_*_LOCK` build args);
 an id codex doesn't recognise still runs but emits a "model metadata not
 found" error item into every scan log (openai/codex#12100).
 

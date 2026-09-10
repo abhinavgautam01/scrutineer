@@ -406,7 +406,7 @@ func (f *flags) merge(cfg *config.Config) {
 	// then overrides. An invalid backend name is caught later by
 	// validateFlags; until then, HarnessByName("") gives claude.
 	if h, err := worker.HarnessByName(f.backend); err == nil {
-		defs := h.DefaultModels()
+		defs := worker.DefaultModelsFor(h)
 		models := make([]web.Model, 0, len(defs))
 		for _, d := range defs {
 			models = append(models, web.Model{Name: d.Name, ID: d.ID, Tier: d.Tier})
