@@ -11,7 +11,7 @@ ARG COMMIT=""
 RUN CGO_ENABLED=0 go build -ldflags "-X main.commit=${COMMIT}" -o /scrutineer ./cmd/scrutineer
 
 FROM node:26-alpine@sha256:2d984a15c9b54fd0aeb608b8e0d0d83529eb34d2966db27a1fb4f1edc3d298a3 AS claude
-RUN npm install -g @anthropic-ai/claude-code@2.1.259
+RUN npm install -g @anthropic-ai/claude-code@2.1.260
 
 FROM python:3.14-alpine@sha256:c6ead215bfd31f1e433d968853b7a769989117115b728874824e6c0a27cb96fc AS python-tools
 RUN pip install --no-cache-dir semgrep==1.176.0 "setuptools<81" bandit==1.9.4
