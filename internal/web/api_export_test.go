@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -40,6 +41,22 @@ func seedFindings(t *testing.T, s *Server) db.Repository {
 	s.DB.Create(&db.Finding{ScanID: scanA.ID, RepositoryID: repoA.ID, Title: "F2", Severity: "Low", Status: db.FindingNew})
 	s.DB.Create(&db.Finding{ScanID: scanB.ID, RepositoryID: repoB.ID, Title: "G1", Severity: sevHigh, Status: db.FindingNew})
 	return repoA
+}
+
+// seedScopedFindings seeds one repository with a deep-dive scan and a semgrep
+// scan, one High finding on each; the semgrep row is triaged under sub-path
+// "pkg" so status and sub_path filters keep a scanner row for scope to drop.
+func seedScopedFindings(t *testing.T, s *Server) db.Repository {
+	t.Helper()
+	repo := db.Repository{URL: "https://example.com/scoped", Name: "scoped"}
+	s.DB.Create(&repo)
+	dd := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName}
+	sg := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: "semgrep"}
+	s.DB.Create(&dd)
+	s.DB.Create(&sg)
+	s.DB.Create(&db.Finding{ScanID: dd.ID, RepositoryID: repo.ID, Title: "audit finding", Severity: sevHigh})
+	s.DB.Create(&db.Finding{ScanID: sg.ID, RepositoryID: repo.ID, Title: "semgrep noise", Severity: sevHigh, Status: db.FindingTriaged, SubPath: "pkg"})
+	return repo
 }
 
 func readJSONL(t *testing.T, body string) []map[string]any {
@@ -235,6 +252,56 @@ func TestExportRepoFindings_severityFilter(t *testing.T) {
 	}
 	if rows[0]["severity"] != sevHigh {
 		t.Errorf("severity %v, want High", rows[0]["severity"])
+	}
+}
+
+// TestExportRepoFindings_scopeFindings pins scope=findings on JSONL: both formats
+// drop scanner rows, keep audits and imports, and combine with the other filters.
+func TestExportRepoFindings_scopeFindings(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := seedScopedFindings(t, s)
+	imp := db.Scan{RepositoryID: repo.ID, Kind: "import", Status: db.ScanDone, SkillName: "trivy"}
+	s.DB.Create(&imp)
+	s.DB.Create(&db.Finding{ScanID: imp.ID, RepositoryID: repo.ID, Title: "imported finding", Severity: "Low", Status: db.FindingTriaged, SubPath: "pkg"})
+
+	titles := func(t *testing.T, qs string) []string {
+		t.Helper()
+		r := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10)+"/findings"+qs, nil)
+		r.Host = testHost
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, r)
+		if w.Code != 200 {
+			t.Fatalf("GET %s: status %d: %s", qs, w.Code, w.Body)
+		}
+		if ct := w.Header().Get("Content-Type"); ct != "application/x-ndjson; charset=utf-8" {
+			t.Fatalf("content-type %q, want application/x-ndjson", ct)
+		}
+		var out []string
+		for _, row := range readJSONL(t, w.Body.String()) {
+			out = append(out, row["title"].(string))
+		}
+		return out
+	}
+
+	cases := []struct {
+		name, qs string
+		want     []string
+	}{
+		{"no scope keeps scanner output", "", []string{"imported finding", "semgrep noise", "audit finding"}},
+		{"default format", "?scope=findings", []string{"imported finding", "audit finding"}},
+		{"explicit jsonl", "?format=jsonl&scope=findings", []string{"imported finding", "audit finding"}},
+		{"combined with severity", "?scope=findings&severity=High", []string{"audit finding"}},
+		{"combined with status", "?scope=findings&status=triaged", []string{"imported finding"}},
+		{"combined with sub_path", "?scope=findings&sub_path=pkg", []string{"imported finding"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := titles(t, tc.qs); !slices.Equal(got, tc.want) {
+				t.Errorf("titles = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -1681,14 +1748,7 @@ func TestExportBundle_scopeFindingsCuratesScanners(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
 
-	repo := db.Repository{URL: "https://example.com/scoped", Name: "scoped"}
-	s.DB.Create(&repo)
-	dd := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName}
-	s.DB.Create(&dd)
-	sg := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: "semgrep"}
-	s.DB.Create(&sg)
-	s.DB.Create(&db.Finding{ScanID: dd.ID, RepositoryID: repo.ID, Title: "audit finding", Severity: sevHigh})
-	s.DB.Create(&db.Finding{ScanID: sg.ID, RepositoryID: repo.ID, Title: "semgrep noise", Severity: "Low"})
+	repo := seedScopedFindings(t, s)
 
 	bundleTitles := func(qs string) []string {
 		r := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10)+"/findings?format=bundle"+qs, nil)
@@ -1724,8 +1784,7 @@ func TestExportBundle_scopeFindingsCuratesScanners(t *testing.T) {
 }
 
 // assertExportRejects runs each GET path and asserts a 400 whose body mentions
-// keyword. Shared by the scope and include rejection tests, which validate the
-// same "bundle-only query param used elsewhere" guard.
+// keyword. Shared by the scope and include rejection tests.
 func assertExportRejects(t *testing.T, s *Server, keyword string, cases []struct{ name, path string }) {
 	t.Helper()
 	for _, tc := range cases {
@@ -1744,9 +1803,8 @@ func assertExportRejects(t *testing.T, s *Server, keyword string, cases []struct
 	}
 }
 
-// TestExportBundle_scopeRejected pins the validation: an unknown scope value, a
-// scope without format=bundle, and scope on the cross-repo endpoints all 400
-// rather than silently returning a wider set than the caller asked for.
+// TestExportBundle_scopeRejected pins the validation: an unknown scope value on
+// either per-repository format and scope on the cross-repo endpoints all 400.
 func TestExportBundle_scopeRejected(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
@@ -1754,8 +1812,8 @@ func TestExportBundle_scopeRejected(t *testing.T) {
 	id := strconv.FormatUint(uint64(repo.ID), 10)
 
 	assertExportRejects(t, s, "scope", []struct{ name, path string }{
-		{"unknown scope value", "/api/v1/repositories/" + id + "/findings?format=bundle&scope=bogus"},
-		{"scope without bundle", "/api/v1/repositories/" + id + "/findings?scope=findings"},
+		{"unknown scope value on bundle", "/api/v1/repositories/" + id + "/findings?format=bundle&scope=bogus"},
+		{"unknown scope value on jsonl", "/api/v1/repositories/" + id + "/findings?scope=bogus"},
 		{"scope on repositories", "/api/v1/repositories?scope=findings"},
 		{"scope on global findings", "/api/v1/findings?scope=findings"},
 		{"scope on global scans", "/api/v1/scans?scope=findings"},
@@ -1776,14 +1834,7 @@ func TestExportBundle_scopeFindingsCuratesEncrypted(t *testing.T) {
 	s.EncRecipients = []age.Recipient{id.Recipient()}
 	s.EncIdentities = []age.Identity{id}
 
-	repo := db.Repository{URL: "https://example.com/enc-scoped", Name: "enc-scoped"}
-	s.DB.Create(&repo)
-	dd := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName}
-	s.DB.Create(&dd)
-	sg := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: "semgrep"}
-	s.DB.Create(&sg)
-	s.DB.Create(&db.Finding{ScanID: dd.ID, RepositoryID: repo.ID, Title: "audit finding", Severity: sevHigh})
-	s.DB.Create(&db.Finding{ScanID: sg.ID, RepositoryID: repo.ID, Title: "semgrep noise", Severity: "Low"})
+	repo := seedScopedFindings(t, s)
 
 	r := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10)+"/findings?format=bundle&encrypt=1&scope=findings", nil)
 	r.Host = testHost
