@@ -14,7 +14,7 @@ FROM node:26-alpine@sha256:2d984a15c9b54fd0aeb608b8e0d0d83529eb34d2966db27a1fb4f
 RUN npm install -g @anthropic-ai/claude-code@2.1.261
 
 FROM python:3.14-alpine@sha256:c6ead215bfd31f1e433d968853b7a769989117115b728874824e6c0a27cb96fc AS python-tools
-RUN pip install --no-cache-dir semgrep==1.176.0 "setuptools<81" bandit==1.9.4
+RUN pip install --no-cache-dir semgrep==1.176.1 "setuptools<81" bandit==1.9.4
 
 FROM golang:1.27.1-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS go-tools
 RUN apk add --no-cache git
