@@ -1,14 +1,14 @@
 package web
 
 import (
-	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+
+	"golang.org/x/net/html"
 
 	"scrutineer/internal/db"
 )
@@ -45,13 +45,34 @@ func TestSubprojectShow(t *testing.T) {
 			t.Errorf("subproject page missing %q", want)
 		}
 	}
-	match := regexp.MustCompile(`href="([^"]*/api/v1/repositories/[0-9]+/findings\?[^"]*)"`).FindStringSubmatch(body)
-	if len(match) != 2 {
+	doc, err := html.Parse(strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("parse subproject page: %v", err)
+	}
+	var exportHref string
+	var visit func(*html.Node)
+	visit = func(node *html.Node) {
+		if node.Type == html.ElementNode && node.Data == "a" {
+			for _, attr := range node.Attr {
+				if attr.Key == "href" && strings.HasPrefix(attr.Val, "/api/v1/repositories/") && strings.Contains(attr.Val, "/findings?") {
+					exportHref = attr.Val
+				}
+			}
+		}
+		for child := node.FirstChild; child != nil && exportHref == ""; child = child.NextSibling {
+			visit(child)
+		}
+	}
+	visit(doc)
+	if exportHref == "" {
 		t.Fatal("subproject page missing export findings link")
 	}
-	exportURL, err := url.Parse(html.UnescapeString(match[1]))
+	exportURL, err := url.Parse(exportHref)
 	if err != nil {
 		t.Fatalf("parse export URL: %v", err)
+	}
+	if exportURL.Scheme != "" || exportURL.Host != "" {
+		t.Fatalf("export URL must be relative, got %q", exportHref)
 	}
 	wantPath := "/api/v1/repositories/" + strconv.FormatUint(uint64(repo.ID), 10) + "/findings"
 	if exportURL.Path != wantPath {
