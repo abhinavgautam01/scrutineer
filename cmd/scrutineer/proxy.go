@@ -41,15 +41,23 @@ type proxyConfig struct {
 // process environment.
 func parseProxyConfig(args []string, getenv func(string) string) (proxyConfig, error) {
 	fset := flag.NewFlagSet("proxy", flag.ContinueOnError)
-	var listen, token, apiHost, apiPort, hostPorts, allow string
+	var listen, token, apiHost, apiPort, hostPorts, allow, requireCapability string
 	fset.StringVar(&listen, "listen", envOr(getenv, "SCRUTINEER_PROXY_LISTEN", ":3128"), "listen address")
 	fset.StringVar(&token, "token", getenv("SCRUTINEER_PROXY_TOKEN"), "Proxy-Authorization token clients must present")
 	fset.StringVar(&apiHost, "api-host", getenv("SCRUTINEER_PROXY_API_HOST"), "host-gateway IPv4 to dial for the host skill API")
 	fset.StringVar(&apiPort, "api-port", getenv("SCRUTINEER_PROXY_API_PORT"), "host skill API port allowed on the host alias")
 	fset.StringVar(&hostPorts, "host-ports", getenv("SCRUTINEER_PROXY_HOST_PORTS"), "comma-separated additional ports allowed on the host alias")
 	fset.StringVar(&allow, "allow", getenv("SCRUTINEER_PROXY_ALLOW"), "comma-separated egress allowlist")
-	if err := fset.Parse(args); err != nil {
-		return proxyConfig{}, err
+	fset.StringVar(&requireCapability, "require-capability", "", "host-required proxy security capability")
+	parseErr := fset.Parse(args)
+	// Validate a capability parsed before -h even though flag.Parse reports
+	// ErrHelp. The host's smoke check deliberately uses that ordering so it
+	// proves the image supports this exact policy, not merely the flag name.
+	if (parseErr == nil || errors.Is(parseErr, flag.ErrHelp)) && requireCapability != "" && requireCapability != worker.ProxyCapabilityDenyAPIConnect {
+		return proxyConfig{}, fmt.Errorf("proxy: unsupported required capability %q", requireCapability)
+	}
+	if parseErr != nil {
+		return proxyConfig{}, parseErr
 	}
 	cfg := proxyConfig{
 		listen:    listen,

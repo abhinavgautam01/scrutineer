@@ -741,11 +741,13 @@ func TestProxySidecarRunArgs(t *testing.T) {
 			t.Errorf("missing env %q in %v", kv, args)
 		}
 	}
-	// Runs the DEFAULT runner image (which carries the scrutineer binary), then
-	// `scrutineer proxy`. The tail must be: -- <image> scrutineer proxy.
-	tail := args[len(args)-4:]
-	if !reflect.DeepEqual(tail, []string{"--", DefaultRunnerImage, "scrutineer", "proxy"}) {
-		t.Errorf("sidecar command tail = %v, want -- %s scrutineer proxy", tail, DefaultRunnerImage)
+	// Runs the DEFAULT runner image (which carries the scrutineer binary) and
+	// requires the patched API CONNECT policy. An older image rejects the flag
+	// and exits instead of silently running a vulnerable sidecar.
+	tail := args[len(args)-5:]
+	wantTail := []string{"--", DefaultRunnerImage, "scrutineer", "proxy", "--require-capability=" + ProxyCapabilityDenyAPIConnect}
+	if !reflect.DeepEqual(tail, wantTail) {
+		t.Errorf("sidecar command tail = %v, want %v", tail, wantTail)
 	}
 	// No host bind mounts and no keep-id: the sidecar touches no host files.
 	for _, a := range args {
@@ -814,6 +816,15 @@ func TestVerifyProxyBinary_NoopWhenImageAbsent(t *testing.T) {
 	}
 	if err := VerifyProxyBinary(context.Background(), ContainerRuntime{Bin: "docker"}, "scrutineer-nonexistent-test-image:does-not-exist"); err != nil {
 		t.Errorf("absent image must be a no-op, got %v", err)
+	}
+}
+
+func TestProxyBinaryCheckRequiresConnectPolicyBeforeHelp(t *testing.T) {
+	args := proxyBinaryCheckArgs(ContainerRuntime{Bin: "docker"}, "runner:test")
+	tail := args[len(args)-6:]
+	want := []string{"--", "runner:test", "scrutineer", "proxy", "--require-capability=" + ProxyCapabilityDenyAPIConnect, "-h"}
+	if !reflect.DeepEqual(tail, want) {
+		t.Fatalf("proxy binary check tail = %v, want %v", tail, want)
 	}
 }
 

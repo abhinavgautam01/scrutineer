@@ -1047,9 +1047,10 @@ func (d ContainerRunner) sidecarNetworkIP(name, network string) (string, error) 
 // listen keyword binds to; startProxySidecar connects the default (egress)
 // bridge afterwards, so the listener never faces it. It deliberately runs the
 // DEFAULT runner image (d.image()), which is guaranteed to carry the scrutineer
-// binary, not the per-scan profile image. No --rm, so a sidecar that exits on
-// an unreachable host API lingers long enough for verifyHardenedNetwork to
-// capture its logs.
+// binary, not the per-scan profile image. The required-capability flag makes a
+// stale binary fail closed instead of serving without the host-API CONNECT
+// guard. No --rm, so a sidecar that exits on an unreachable host API lingers
+// long enough for verifyHardenedNetwork to capture its logs.
 func (d ContainerRunner) proxySidecarRunArgs(name, network string) []string {
 	args := runtimeRunArgs(d.Runtime,
 		"-d",
@@ -1064,7 +1065,8 @@ func (d ContainerRunner) proxySidecarRunArgs(name, network string) []string {
 	for _, e := range EgressSidecarEnv(d.Egress, SidecarListenFirstIface+":"+proxySidecarPort) {
 		args = append(args, "-e", e)
 	}
-	return append(args, "--", d.image(), "scrutineer", "proxy")
+	return append(args, "--", d.image(), "scrutineer", "proxy",
+		"--require-capability="+ProxyCapabilityDenyAPIConnect)
 }
 
 // EgressSidecarEnv returns the SCRUTINEER_PROXY_* environment assignments the
@@ -1129,28 +1131,31 @@ func noteworthyProxyLogLine(line string) bool {
 	return strings.Contains(line, "level=WARN") || strings.Contains(line, "level=ERROR")
 }
 
-// VerifyProxyBinary smoke-tests that the runner image carries the scrutineer
-// binary the egress proxy sidecar runs (`scrutineer proxy`). A runner image
-// without it -- an old cached image, or a custom --runner-image not built from
-// Dockerfile.runner -- would otherwise make every sidecar-backed scan fail
-// with a cryptic per-scan exec error; this turns that into one clear startup
-// failure. It is a no-op when the image is not present locally yet (the first
-// scan pulls it and would surface the same issue then), matching
-// container.VerifyKeepID.
+// VerifyProxyBinary smoke-tests that the runner image's `scrutineer proxy`
+// supports the host-required API CONNECT policy. A missing or stale binary
+// would otherwise fail later with a cryptic per-scan exec error; this turns
+// that into one clear startup failure. It is a no-op when the image is not
+// present locally yet (the first scan pulls it and the actual sidecar command
+// enforces the same capability), matching container.VerifyKeepID.
 // Only meaningful on the sidecar path; the caller checks the runtime trait.
 func VerifyProxyBinary(ctx context.Context, rt ContainerRuntime, image string) error {
 	if image == "" || !imageExistsLocally(ctx, rt, image) {
 		return nil
 	}
-	args := runtimeRunArgs(rt, "--rm", "--pull", "never",
-		"--", image, "scrutineer", "proxy", "-h")
+	args := proxyBinaryCheckArgs(rt, image)
 	out, err := exec.CommandContext(ctx, runtimeBin(rt), args...).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("runner image %q is missing the scrutineer binary required for the "+
-			"hardened egress proxy sidecar (rebuild it from Dockerfile.runner): %w: %s",
+		return fmt.Errorf("runner image %q does not support the hardened egress proxy policy "+
+			"required by this scrutineer binary (update it or rebuild it from Dockerfile.runner): %w: %s",
 			image, err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+func proxyBinaryCheckArgs(rt ContainerRuntime, image string) []string {
+	return runtimeRunArgs(rt, "--rm", "--pull", "never",
+		"--", image, "scrutineer", "proxy",
+		"--require-capability="+ProxyCapabilityDenyAPIConnect, "-h")
 }
 
 // verifyHardenedNetwork fails closed when the per-scan --internal network does

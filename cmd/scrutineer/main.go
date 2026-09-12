@@ -1341,8 +1341,8 @@ func resolveEgressSidecar(rt worker.ContainerRuntime, f *flags, allow []string, 
 	if !rt.NeedsEgressSidecar() {
 		return worker.EgressSidecarConfig{}, nil
 	}
-	// Fail fast if the runner image lacks the scrutineer binary the sidecar runs,
-	// rather than letting every hardened scan fail with a cryptic per-scan error.
+	// Fail fast if the runner image lacks the proxy policy capability the sidecar
+	// requires, rather than letting every hardened scan fail with a cryptic error.
 	smokeCtx, cancel := context.WithTimeout(context.Background(), f.smokeTimeout)
 	defer cancel()
 	if err := worker.VerifyProxyBinary(smokeCtx, rt, f.runnerImage); err != nil {
