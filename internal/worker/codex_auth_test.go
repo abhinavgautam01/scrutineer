@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -38,8 +39,12 @@ func TestValidateCodexAuthFile(t *testing.T) {
 	}{
 		{"invalid JSON", `{`, 0o600, "invalid JSON"},
 		{"API key mode", `{"auth_mode":"apikey","tokens":{"refresh_token":"refresh"}}`, 0o600, `require "chatgpt"`},
+		{"empty mode", `{"auth_mode":"","tokens":{"refresh_token":"refresh"}}`, 0o600, `require "chatgpt"`},
+		{"non-string mode", `{"auth_mode":true,"tokens":{"refresh_token":"refresh"}}`, 0o600, `require "chatgpt"`},
+		{"case variants do not replace mode", `{"auth_mode":"apikey","AUTH_MODE":"chatgpt","tokens":{"refresh_token":"refresh"}}`, 0o600, `require "chatgpt"`},
 		{"missing tokens", `{"auth_mode":"chatgpt"}`, 0o600, "no ChatGPT refresh token"},
 		{"missing refresh", `{"auth_mode":"chatgpt","tokens":{}}`, 0o600, "no ChatGPT refresh token"},
+		{"case-sensitive refresh", `{"auth_mode":"chatgpt","tokens":{"REFRESH_TOKEN":"refresh"}}`, 0o600, "no ChatGPT refresh token"},
 		{"read-only mode", validCodexAuthJSON, 0o400, "require exactly 0600 (chmod 600 "},
 		{"exposed mode", validCodexAuthJSON, 0o644, "require exactly 0600 (chmod 600 "},
 	}
@@ -51,6 +56,64 @@ func TestValidateCodexAuthFile(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidateCodexAuthFileAlternateCredentials(t *testing.T) {
+	for _, key := range []string{"OPENAI_API_KEY", "personal_access_token", "bedrock_api_key", "bedrock_access_keys"} {
+		for _, explicitMode := range []bool{false, true} {
+			auth := map[string]any{
+				"tokens":         map[string]string{"refresh_token": "refresh"},
+				"agent_identity": map[string]string{"account_id": "account"},
+			}
+			if explicitMode {
+				auth["auth_mode"] = "chatgpt"
+			}
+			for _, credential := range []any{nil, "", "test-credential", map[string]string{}} {
+				auth[key] = credential
+				body, err := json.Marshal(auth)
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = ValidateCodexAuthFile(writeCodexAuthFile(t, string(body), 0o600))
+				if credential == nil {
+					if err != nil {
+						t.Fatalf("null %s (explicit mode %v): %v", key, explicitMode, err)
+					}
+				} else if err == nil || !strings.Contains(err.Error(), "non-ChatGPT credentials") {
+					t.Fatalf("%s (explicit mode %v): error = %v", key, explicitMode, err)
+				}
+			}
+		}
+	}
+	legacy := `{"auth_mode":null,"OPENAI_API_KEY":null,"tokens":{"refresh_token":"refresh"}}`
+	if err := ValidateCodexAuthFile(writeCodexAuthFile(t, legacy, 0o600)); err != nil {
+		t.Fatalf("legacy null auth mode: %v", err)
+	}
+}
+
+func TestValidateCodexAuthFileSizeLimit(t *testing.T) {
+	body := validCodexAuthJSON + strings.Repeat(" ", maxCodexAuthFileBytes-len(validCodexAuthJSON))
+	path := writeCodexAuthFile(t, body, 0o600)
+	if err := ValidateCodexAuthFile(path); err != nil {
+		t.Fatalf("file at size limit: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(body+" "), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	auth := NewCodexAccountAuth(path)
+	if _, err := auth.acquire(t.Context()); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("file above size limit: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(validCodexAuthJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	unlock, err := auth.acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire after correcting file size: %v", err)
+	}
+	unlock()
 }
 
 func TestValidateCodexAuthFileRejectsDirectory(t *testing.T) {

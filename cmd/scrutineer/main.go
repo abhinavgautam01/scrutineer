@@ -453,9 +453,10 @@ func (f *flags) fullClone() bool { return f.cloneMode == "full" }
 // opens or creates (data dir, local skill dirs, profiles dir, and the
 // recipients/identity key files), so config values like "data: ~/scrutineer"
 // work — the shell expands ~ for CLI flags but never for config-file values,
-// and Go's os package does no tilde expansion of its own. metadata_dir is
-// deliberately excluded (it names a path inside a staging git repo, not a host
-// path); skills_repo is a URL, not a path.
+// and Go's os package does no tilde expansion of its own. The Codex credential
+// path is also made absolute so validation and the runtime mount use one file.
+// metadata_dir is deliberately excluded (it names a path inside a staging git
+// repo, not a host path); skills_repo is a URL, not a path.
 func (f *flags) normalizePaths() error {
 	for _, p := range []*string{&f.dataDir, &f.profilesDir, &f.recipientsFile, &f.identityFile, &f.codexAuthFile} {
 		expanded, err := expandHome(*p)
@@ -463,6 +464,13 @@ func (f *flags) normalizePaths() error {
 			return err
 		}
 		*p = expanded
+	}
+	if f.codexAuthFile != "" {
+		absolute, err := filepath.Abs(f.codexAuthFile)
+		if err != nil {
+			return fmt.Errorf("resolve codex.auth_file: %w", err)
+		}
+		f.codexAuthFile = absolute
 	}
 	for i, dir := range f.skillLocal {
 		expanded, err := expandHome(dir)

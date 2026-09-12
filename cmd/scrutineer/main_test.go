@@ -1242,6 +1242,28 @@ func TestNormalizePaths(t *testing.T) {
 	}
 }
 
+func TestNormalizePathsCodexAuthFile(t *testing.T) {
+	t.Chdir(t.TempDir())
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ path, want string }{
+		{"", ""},
+		{"auth.json", filepath.Join(cwd, "auth.json")},
+		{"./credentials/auth.json", filepath.Join(cwd, "credentials", "auth.json")},
+		{filepath.Join(cwd, "auth.json"), filepath.Join(cwd, "auth.json")},
+	} {
+		f := &flags{codexAuthFile: tc.path}
+		if err := f.normalizePaths(); err != nil {
+			t.Fatal(err)
+		}
+		if f.codexAuthFile != tc.want {
+			t.Errorf("normalize %q = %q, want %q", tc.path, f.codexAuthFile, tc.want)
+		}
+	}
+}
+
 func TestValidateFlagsCodexAccountAuth(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "auth.json")
 	if err := os.WriteFile(path, []byte(`{"auth_mode":"chatgpt","tokens":{"refresh_token":"refresh"}}`), 0o600); err != nil {

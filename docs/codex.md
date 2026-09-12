@@ -9,9 +9,9 @@ where it differs from claude, and what's still rough.
 
 ## Setup
 
-The runner image already bundles the `codex` binary (a static musl build,
-sha256-pinned in `Dockerfile.runner`), so there's nothing to install. For a
-Platform API-key run, set the credential and start scrutineer:
+The runner image already bundles the static musl `codex` binary and its
+version-matched `codex-code-mode-host` (sha256-pinned in `Dockerfile.runner`),
+so there's nothing to install. Set the credential and start scrutineer:
 
     export CODEX_API_KEY=sk-...
     go run ./cmd/scrutineer -skills ./skills -backend codex
@@ -66,9 +66,12 @@ Then select it in `scrutineer.yaml`:
       auth_file: ~/.config/scrutineer/codex-rubygems/auth.json
 
 `codex.auth_file` is deliberately config-only. Startup requires a regular file
-with mode `0600`, ChatGPT token data, and a refresh token. It also
+no larger than 1 MiB with mode `0600`, ChatGPT token data, and a refresh token.
+Non-ChatGPT credential fields must be absent or null. Scrutineer also
 refuses `CODEX_API_KEY` or `OPENAI_API_KEY` in the environment so an account
 run cannot silently consume Platform API credits.
+Use `--device-auth`: browser login can also store a non-null `OPENAI_API_KEY`,
+which Scrutineer rejects even when `auth_mode` is `chatgpt`.
 
 Each scan keeps its own session/history directory. Only the rotating
 `auth.json` is bind-mounted into that private `CODEX_HOME`, read-write. The
@@ -101,7 +104,7 @@ Everything the container runner asks of the agent CLI goes through the
 | Skill staging | `./.claude/skills/{name}/SKILL.md` | `./skills/{name}/SKILL.md` |
 | Project memory | `CLAUDE.md` | `AGENTS.md` |
 | Egress hosts | `*.anthropic.com` | `api.openai.com`, `auth0.openai.com`, `chatgpt.com`; account auth also adds `auth.openai.com` |
-| Credential env | `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` | `CODEX_API_KEY` |
+| Credentials | `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` env | `CODEX_API_KEY` env or `codex.auth_file` mount |
 | Base URL override | `ANTHROPIC_BASE_URL` env | `-c openai_base_url=...` |
 | State dir env (mounted at `/harness-state`) | `CLAUDE_CONFIG_DIR` | `CODEX_HOME` |
 | Account-error phrases | claude usage/plan/access messages | OpenAI `rate_limit`, `insufficient_quota`, `invalid_api_key`, `429` |
