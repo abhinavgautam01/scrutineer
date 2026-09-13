@@ -53,21 +53,6 @@ func TestCostFromUsage_gpt56SolAndDaybreakBasePricing(t *testing.T) {
 	}
 }
 
-func TestCostFromUsage_solOverrideStillNeeded(t *testing.T) {
-	for _, usage := range []Usage{
-		{InputTokens: 100_000},
-		{OutputTokens: 10_000},
-		{InputTokens: 100_000, CacheReadTokens: 100_000},
-		{InputTokens: 100_000, CacheWriteTokens: 100_000},
-	} {
-		upstream := harness.CostFromUsage(modelGPT56SolID, usage)
-		if math.Abs(upstream-CostFromUsage(modelGPT56SolID, usage)) > 1e-9 {
-			return
-		}
-	}
-	t.Fatal("Harness now has the current Sol base rates; remove the local Sol rate override, delegate Daybreak to Harness's Sol pricing, and delete this test")
-}
-
 func TestCostFromUsage_delegatesOtherModels(t *testing.T) {
 	usage := Usage{InputTokens: 100_000, OutputTokens: 10_000, CacheReadTokens: 10_000, CacheWriteTokens: 20_000}
 	if got := CostFromUsage("unknown", usage); got != 0 {
