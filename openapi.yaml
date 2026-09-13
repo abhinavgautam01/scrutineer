@@ -1188,6 +1188,26 @@ paths:
         - name: skill
           in: query
           schema: { type: string }
+        - name: repository_id
+          in: query
+          description: Restrict scans to this repository. A nonexistent ID returns an empty stream.
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: kind
+          in: query
+          description: |
+            Exact, case-sensitive match against the stored scan kind (for example,
+            `skill`, `exposure`, `import` or `schedule`). Any nonempty string is accepted;
+            unknown values return an empty stream. Empty means no kind filter.
+          schema: { type: string }
+        - name: since
+          in: query
+          description: |
+            Include scans whose `created_at` is greater than or equal to this
+            RFC3339 timestamp. UTC and numeric offsets represent the same instant;
+            fractional seconds are preserved to nanosecond precision. Combine
+            with any other filters using AND. This filters creation time, so it
+            does not include older scans merely because they were updated later.
+          schema: { type: string, format: date-time }
       responses:
         '200':
           description: JSONL stream of ScanExport objects, one per line.
@@ -1195,7 +1215,7 @@ paths:
             application/x-ndjson:
               schema: { $ref: '#/components/schemas/ScanExport' }
         '400':
-          description: Unsupported format query value, or `encrypt`/`scope`/`include` requested (`scope` is only valid on per-repository exports, `encrypt`/`include` on per-repository bundle exports).
+          description: Invalid or empty repository_id or since, unsupported format query value, or `encrypt`/`scope`/`include` requested (`scope` is only valid on per-repository exports, `encrypt`/`include` on per-repository bundle exports). Validation completes before streaming starts.
         '403':
           description: Host header is not localhost
 

@@ -611,13 +611,41 @@ func (s *Server) apiExportScans(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := s.DB.Model(&db.Scan{}).Order("id desc")
-	if v := r.URL.Query().Get(statusKey); v != "" {
+	params := r.URL.Query()
+	if params.Has("repository_id") {
+		id, err := strconv.ParseInt(params.Get("repository_id"), 10, 64)
+		if err != nil || id <= 0 {
+			writeAPIError(w, http.StatusBadRequest, "repository_id must be a positive integer")
+			return
+		}
+		q = q.Where("repository_id = ?", id)
+	}
+	if v := params.Get("kind"); v != "" {
+		q = q.Where("kind = ?", v)
+	}
+	if params.Has("since") {
+		since, err := time.Parse(time.RFC3339, params.Get("since"))
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, "since must be an RFC3339 timestamp")
+			return
+		}
+		q = scanExportSince(q, since)
+	}
+	if v := params.Get(statusKey); v != "" {
 		q = q.Where("status = ?", v)
 	}
-	if v := r.URL.Query().Get("skill"); v != "" {
+	if v := params.Get("skill"); v != "" {
 		q = q.Where("skill_name = ?", v)
 	}
 	streamJSONL(w, q, s.Log, scanExport)
+}
+
+func scanExportSince(q *gorm.DB, since time.Time) *gorm.DB {
+	// SQLite timestamps retain local offsets. Compare seconds and the fraction
+	// separately: text ordering ignores offsets, while julianday loses nanoseconds.
+	return q.Where(`(unixepoch(created_at),
+		CASE WHEN substr(created_at, 20, 1) = '.' THEN CAST(substr(created_at, 20) AS REAL) ELSE 0 END
+	) >= (?, ?)`, since.Unix(), float64(since.Nanosecond())/float64(time.Second))
 }
 
 // repositoryExport maps a repositoryExportRow to the public JSON object. Repos
