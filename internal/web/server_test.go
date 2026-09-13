@@ -1552,7 +1552,7 @@ func TestFindingShow_disablesVerifyActionWhenVerifyInFlight(t *testing.T) {
 	if strings.Contains(body, fmt.Sprintf(`hx-post="/findings/%d/verify"`, f.ID)) {
 		t.Error("finding page should not render an active verify action while verify is in flight")
 	}
-	if !strings.Contains(body, `button type="button" class="btn" disabled`) || !strings.Contains(body, "Verify in progress") {
+	if !strings.Contains(body, `button type="button" class="btn" disabled`) || !strings.Contains(body, "Verification in progress") {
 		t.Errorf("finding page should render disabled verify state, body=%s", body)
 	}
 }
@@ -5735,5 +5735,71 @@ func TestRepoCreate_existingRepoWithoutBranchDoesNotEnqueue(t *testing.T) {
 	s.DB.Model(&db.Scan{}).Count(&count)
 	if count != 0 {
 		t.Errorf("expected no scan for plain re-add, got %d", count)
+	}
+}
+
+// The workflow card must say which actions enqueue a model job and which only
+// record a decision, so a regression to the ambiguous Verify and Triage labels
+// fails here rather than on an operator's token bill.
+func TestFindingShow_workflowActionsStateTheirEffect(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	lib := db.Repository{URL: "https://github.com/foo/lib", Name: "lib"}
+	app := db.Repository{URL: "https://github.com/foo/app", Name: "app"}
+	for _, repo := range []*db.Repository{&lib, &app} {
+		s.DB.Create(repo)
+	}
+	s.DB.Create(&db.Dependent{RepositoryID: lib.ID, Name: "downstream", Ecosystem: "npm"})
+
+	triagedCost := "Draft disclosure, Reassess viability, Propose patch and Draft mitigation each start a model job and use tokens"
+	cases := []struct {
+		name    string
+		repo    db.Repository
+		status  db.FindingLifecycle
+		actions []string
+		want    []string
+		gone    []string
+	}{
+		{"new", app, db.FindingNew, []string{"verify", "status"},
+			[]string{"Run verification", "Mark triaged", "starts a model job to check this finding and uses tokens", "mark it triaged to save your review decision"},
+			[]string{"Skip to triage"}},
+		{"enriched", app, db.FindingEnriched, []string{"critic", "status"},
+			[]string{"Mark triaged", "Assess viability", "Mark triaged saves your review decision", "Assess viability starts a model job and uses tokens"},
+			[]string{"</i> Triage\n"}},
+		{"triaged with dependents", lib, db.FindingTriaged, []string{"disclose", "critic", "patch", "mitigate"},
+			[]string{"Draft disclosure", "Review and edit the generated draft", triagedCost},
+			nil},
+		{"triaged without dependents", app, db.FindingTriaged, []string{"disclose", "critic", "patch", "mitigate"},
+			[]string{"Draft disclosure", "patch or mitigation", triagedCost},
+			nil},
+	}
+	for _, tc := range cases {
+		scan := db.Scan{RepositoryID: tc.repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName}
+		s.DB.Create(&scan)
+		f := db.Finding{ScanID: scan.ID, RepositoryID: tc.repo.ID, Title: tc.name + " finding", Severity: "High", Status: tc.status}
+		s.DB.Create(&f)
+
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, localReq("GET", fmt.Sprintf("/findings/%d", f.ID)))
+		body := w.Body.String()
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s status %d: %s", tc.name, w.Code, body)
+		}
+		for _, action := range tc.actions {
+			if target := fmt.Sprintf(`hx-post="/findings/%d/%s"`, f.ID, action); !strings.Contains(body, target) {
+				t.Errorf("%s finding page missing action %s", tc.name, target)
+			}
+		}
+		for _, want := range tc.want {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s finding page missing workflow text %q", tc.name, want)
+			}
+		}
+		for _, gone := range tc.gone {
+			if strings.Contains(body, gone) {
+				t.Errorf("%s finding page still renders retired label %q", tc.name, gone)
+			}
+		}
 	}
 }
