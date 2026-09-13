@@ -101,10 +101,14 @@
     },
     {
       "customType": "regex",
-      "description": "Update the govulncheck workflow pin",
-      "managerFilePatterns": ["/^\\.github/workflows/tests\\.yml$/"],
+      "description": "Update the govulncheck workflow and Go profile pins",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/tests\\.yml$/",
+        "/^docker/profiles/go/Dockerfile$/"
+      ],
       "matchStrings": [
-        "go install golang\\.org/x/vuln/cmd/govulncheck@(?<currentValue>v\\d+\\.\\d+\\.\\d+)"
+        "go install golang\\.org/x/vuln/cmd/govulncheck@(?<currentValue>v\\d+\\.\\d+\\.\\d+)",
+        "ARG GOVULNCHECK_VERSION=(?<currentValue>v\\d+\\.\\d+\\.\\d+)"
       ],
       "packageNameTemplate": "golang.org/x/vuln",
       "depNameTemplate": "govulncheck",
