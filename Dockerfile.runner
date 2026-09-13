@@ -59,8 +59,8 @@ ARG BANDIT_VERSION
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl git bash coreutils \
-        python3 python3-venv \
+        ca-certificates curl git bash coreutils jq \
+        python3 python3-venv python3-jsonschema \
         libstdc++6 ripgrep \
  && install -d -m 0755 /etc/apt/keyrings \
  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
@@ -85,6 +85,8 @@ RUN python3 -m venv /opt/semgrep && \
     /opt/bandit/bin/pip install --no-cache-dir "bandit==${BANDIT_VERSION}" && \
     ln -s /opt/bandit/bin/bandit /usr/local/bin/bandit && \
     python3 --version && \
+    jq --version && \
+    jsonschema --version && \
     curl --version && \
     gh --version && \
     semgrep --version && \
