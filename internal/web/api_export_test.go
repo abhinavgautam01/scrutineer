@@ -101,7 +101,7 @@ func TestExportRepoFindings(t *testing.T) {
 		if row["repository_id"] != float64(repoA.ID) {
 			t.Errorf("row has repository_id %v, want %d", row["repository_id"], repoA.ID)
 		}
-		for _, k := range []string{"missed_count", "last_missed_scan_id"} {
+		for _, k := range []string{"missed_count", "last_missed_scan_id", "model"} {
 			if _, ok := row[k]; !ok {
 				t.Errorf("export row missing %q", k)
 			}
@@ -1048,6 +1048,72 @@ func TestExportBundleRoundTrip(t *testing.T) {
 	// The original finding already existed with the same fingerprint,
 	// so re-import observes it rather than creating a duplicate.
 	// A truly fresh import (different repo) would show created=1.
+}
+
+// TestExportBundleRoundTripPreservesModel pins the model provenance chain:
+// the bundle carries each finding's producing model, and importing the
+// bundle stores that model on the new finding rather than attributing it
+// to the receiving instance's ingest run.
+func TestExportBundleRoundTripPreservesModel(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://github.com/test/model-roundtrip", Name: "model-roundtrip"}
+	s.DB.Create(&repo)
+	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: "security-deep-dive", Commit: "aaa111", Model: "model-orig"}
+	s.DB.Create(&scan)
+	s.DB.Create(&db.Finding{
+		ScanID: scan.ID, RepositoryID: repo.ID, Commit: "aaa111", Model: "model-orig",
+		Title: "SQL Injection in login", Severity: sevHigh, Confidence: "high",
+		CWE: "CWE-89", Location: "auth/login.go:42",
+		Trace: "Unsanitised user input reaches the query builder.",
+	})
+
+	exportReq := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10)+"/findings?format=bundle", nil)
+	exportReq.Host = testHost
+	exportW := httptest.NewRecorder()
+	s.Handler().ServeHTTP(exportW, exportReq)
+	if exportW.Code != 200 {
+		t.Fatalf("export status %d: %s", exportW.Code, exportW.Body)
+	}
+	var bundle map[string]any
+	if err := json.Unmarshal(exportW.Body.Bytes(), &bundle); err != nil {
+		t.Fatalf("unmarshal bundle: %v", err)
+	}
+	findings, _ := bundle["findings"].([]any)
+	if len(findings) != 1 {
+		t.Fatalf("got %d bundle findings, want 1", len(findings))
+	}
+	if got := findings[0].(map[string]any)["model"]; got != "model-orig" {
+		t.Fatalf("bundle finding model = %v, want model-orig", got)
+	}
+
+	// Re-point the bundle at a fresh repository so the import creates a new
+	// finding instead of re-observing the exported one.
+	bundle["repository"] = "https://github.com/test/model-roundtrip-import"
+	body, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	importReq := httptest.NewRequest("POST", "/api/v1/import", strings.NewReader(string(body)))
+	importReq.Host = testHost
+	importW := httptest.NewRecorder()
+	s.Handler().ServeHTTP(importW, importReq)
+	if importW.Code != 201 {
+		t.Fatalf("import status %d: %s", importW.Code, importW.Body)
+	}
+
+	var imported db.Repository
+	if err := s.DB.Where("url = ?", "https://github.com/test/model-roundtrip-import").First(&imported).Error; err != nil {
+		t.Fatalf("imported repository: %v", err)
+	}
+	var f db.Finding
+	if err := s.DB.Where("repository_id = ?", imported.ID).First(&f).Error; err != nil {
+		t.Fatalf("imported finding: %v", err)
+	}
+	if f.Model != "model-orig" {
+		t.Errorf("imported Finding.Model = %q, want model-orig (the exporting instance's producer, not the ingest run)", f.Model)
+	}
 }
 
 func TestExportBundleWithSeverityFilter(t *testing.T) {

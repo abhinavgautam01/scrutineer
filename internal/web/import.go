@@ -549,9 +549,14 @@ func buildImportFindings(scan *db.Scan, res ingest.Result) ([]db.Finding, []impo
 		// all the other formats supply.
 		commit := firstNonEmpty(in.Commit, scan.Commit)
 		f := db.Finding{
-			ScanID:         scan.ID,
-			RepositoryID:   scan.RepositoryID,
-			Commit:         commit,
+			ScanID:       scan.ID,
+			RepositoryID: scan.RepositoryID,
+			Commit:       commit,
+			// A scrutineer bundle carries the exporting instance's producing
+			// model; every other format leaves it empty and the ingest run's
+			// own model is the producing scan's, same as the finding page
+			// has always attributed imports.
+			Model:          firstNonEmpty(in.Model, scan.Model),
 			SubPath:        in.SubPath,
 			Title:          in.Title,
 			Severity:       in.Severity,

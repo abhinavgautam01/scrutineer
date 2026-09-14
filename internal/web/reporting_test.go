@@ -55,6 +55,7 @@ func seedReportCorpus(t *testing.T, s *Server) {
 		started := finished.Add(-ranFor)
 		sc := db.Scan{
 			RepositoryID: repo.ID, Kind: "skill", Status: status, SkillName: "vuln-scan",
+			Model:   "model-a",
 			CostUSD: cost, InputTokens: in, OutputTokens: out,
 			CacheReadTokens: cr, CacheWriteTokens: cw,
 			StartedAt: &started, FinishedAt: &finished, CreatedAt: started.Add(-time.Minute),
@@ -77,8 +78,12 @@ func seedReportCorpus(t *testing.T, s *Server) {
 	// activity, and must be counted in no window. A running one has only a
 	// start, and is counted as one.
 	mkPending := func(repo db.Repository, status db.ScanStatus, startedAgo time.Duration) {
+		// A second model, so the by-model breakdown has something to group:
+		// the running row contributes one start under model-b and nothing
+		// else, while every terminal row above is model-a.
 		sc := db.Scan{
 			RepositoryID: repo.ID, Kind: "skill", Status: status, SkillName: "vuln-scan",
+			Model:     "model-b",
 			CreatedAt: now.Add(-time.Hour),
 		}
 		if startedAgo > 0 {
@@ -104,6 +109,7 @@ func seedReportCorpus(t *testing.T, s *Server) {
 	} {
 		row := db.Finding{
 			RepositoryID: r1.ID, ScanID: inWindow.ID, Title: "x",
+			Model:    "model-a",
 			Severity: f.severity, CreatedAt: f.at,
 		}
 		if err := s.DB.Create(&row).Error; err != nil {
@@ -876,12 +882,14 @@ func TestReportingCSVRowsFillTheirColumns(t *testing.T) {
 		index[col] = i
 	}
 
-	// The all-time row deliberately leaves the activity columns blank; every
-	// other column of every other row carries a value.
+	// The all-time row deliberately leaves the activity columns blank, the
+	// model column is filled only on model rows, and a model row has no
+	// date or repository count; every other column of every other row
+	// carries a value.
 	blankForAllTime := map[string]bool{
 		"date": true, "repositories_scanned": true, "scans_started": true,
 		"scans_completed": true, findingsField: true, "cost_usd": true,
-		"total_tokens": true,
+		"total_tokens": true, "model": true,
 	}
 	seen := map[string]bool{}
 	for _, row := range rows[1:] {
@@ -889,8 +897,10 @@ func TestReportingCSVRowsFillTheirColumns(t *testing.T) {
 		seen[rowType] = true
 		for col, i := range index {
 			// period_total covers the whole window, so it has no single date.
-			wantBlank := (rowType == "period_total" && col == "date") ||
-				(rowType == "all_time_average" && blankForAllTime[col])
+			wantBlank := (rowType == "period_total" && (col == "date" || col == "model")) ||
+				(rowType == "all_time_average" && blankForAllTime[col]) ||
+				(rowType == "day" && col == "model") ||
+				(rowType == "model" && (col == "date" || col == "repositories_scanned"))
 			if wantBlank {
 				if row[i] != "" {
 					t.Errorf("%s: column %q = %q, want empty", rowType, col, row[i])
@@ -902,10 +912,48 @@ func TestReportingCSVRowsFillTheirColumns(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{"period_total", "all_time_average", "day"} {
+	for _, want := range []string{"period_total", "all_time_average", "model", "day"} {
 		if !seen[want] {
 			t.Errorf("no %s row emitted", want)
 		}
+	}
+}
+
+func TestReportingJSONModelBreakdown(t *testing.T) {
+	s, cleanup := newTestServer(t)
+	defer cleanup()
+	seedReportCorpus(t, s)
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", "/reporting/report.json?interval=all"))
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	var out struct {
+		ByModel []struct {
+			Model          string  `json:"model"`
+			ScansStarted   int     `json:"scans_started"`
+			ScansCompleted int     `json:"scans_completed"`
+			Findings       int     `json:"findings"`
+			CostUSD        float64 `json:"cost_usd"`
+		} `json:"activity_by_model"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.ByModel) != 2 {
+		t.Fatalf("got %d model rows, want 2: %+v", len(out.ByModel), out.ByModel)
+	}
+	// model-a leads: rows sort by findings first. It owns every terminal
+	// run (4 done + 1 failed = 5 starts, 4 completions, all the spend) and
+	// all three findings; model-b's only activity is the running scan's
+	// start, so its other figures hold zero rather than going blank.
+	a, b := out.ByModel[0], out.ByModel[1]
+	if a.Model != "model-a" || a.ScansStarted != 5 || a.ScansCompleted != 4 || a.Findings != 3 || a.CostUSD != 21.00 {
+		t.Errorf("model-a row = %+v, want started 5, completed 4, findings 3, cost 21.00", a)
+	}
+	if b.Model != "model-b" || b.ScansStarted != 1 || b.ScansCompleted != 0 || b.Findings != 0 {
+		t.Errorf("model-b row = %+v, want started 1, completed 0, findings 0", b)
 	}
 }
 

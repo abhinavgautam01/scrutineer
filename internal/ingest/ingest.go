@@ -102,6 +102,10 @@ type Finding struct {
 	Rating     string
 	// FixCommit is the base revision SuggestedFix applies to.
 	FixCommit string
+	// Model is the model id of the scan that produced the finding on the
+	// exporting instance, so a bundle round-trip preserves which model
+	// generated it rather than attributing it to the receiving ingest run.
+	Model string
 
 	// Sinks (comma-joined sink ids) rides the default bundle alongside the
 	// six-step prose; it is finding substance, not triage. Snippet and the

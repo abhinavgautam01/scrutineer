@@ -4,6 +4,8 @@ Entries are grouped by release, newest first. Each entry is a summary written fo
 
 ## Unreleased
 
+- Each finding now records which model first produced it. The model appears on the findings list and finding pages, in the JSONL findings exports and sharing bundles (surviving import into another instance), and the reporting page adds a per-model breakdown of scans, findings, and cost. Existing findings are attributed to their producing scan's model on upgrade.
+
 ## 2026-09-12
 
 - Closed a proxy bypass that let a scan container access controls reserved for the operator. Hardened deployments using proxy sidecars now require an updated runner image; pull or rebuild it when updating the host binary. ([#1034](https://github.com/alpha-omega-security/scrutineer/pull/1034), [@p-linnane](https://github.com/p-linnane))

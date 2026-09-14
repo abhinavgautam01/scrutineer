@@ -259,6 +259,47 @@ func TestBackfillFindingRepositoryFillsCommit(t *testing.T) {
 	}
 }
 
+func TestBackfillFindingRepositoryFillsModel(t *testing.T) {
+	gdb, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := Repository{URL: "https://example.com/x", Name: "x"}
+	if err := gdb.Create(&r).Error; err != nil {
+		t.Fatal(err)
+	}
+	s := Scan{RepositoryID: r.ID, Kind: "skill", Status: ScanDone, Model: "model-x"}
+	if err := gdb.Create(&s).Error; err != nil {
+		t.Fatal(err)
+	}
+	// One pre-column row to fill, and one bundle-imported row whose model
+	// names the exporting instance's producer and must not be overwritten
+	// with the local scan's.
+	legacy := Finding{ScanID: s.ID, RepositoryID: r.ID, Title: "legacy", Severity: "Low"}
+	imported := Finding{ScanID: s.ID, RepositoryID: r.ID, Title: "imported", Severity: "Low", Model: "model-orig"}
+	for _, f := range []*Finding{&legacy, &imported} {
+		if err := gdb.Create(f).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	BackfillFindingRepository(gdb)
+
+	var gotLegacy, gotImported Finding
+	if err := gdb.First(&gotLegacy, legacy.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if gotLegacy.Model != "model-x" {
+		t.Errorf("legacy Finding.Model = %q, want %q", gotLegacy.Model, "model-x")
+	}
+	if err := gdb.First(&gotImported, imported.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if gotImported.Model != "model-orig" {
+		t.Errorf("imported Finding.Model = %q, want %q (must not be overwritten)", gotImported.Model, "model-orig")
+	}
+}
+
 func TestOpenAndMigrate(t *testing.T) {
 	gdb, err := Open(":memory:")
 	if err != nil {

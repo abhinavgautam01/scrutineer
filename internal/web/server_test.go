@@ -813,6 +813,35 @@ func TestFindingsSearchFilters(t *testing.T) {
 	}
 }
 
+func TestFindings_modelColumnAndSort(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://example.com/x", Name: "x"}
+	s.DB.Create(&repo)
+	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: "security-deep-dive", Model: "model-col-test"}
+	s.DB.Create(&scan)
+	f := db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "SSRF in image fetcher",
+		Severity: "High", Location: "fetch.go:42", Model: "model-col-test"}
+	s.DB.Create(&f)
+
+	for _, path := range []string{
+		"/findings",                       // list renders the model column once any row has one
+		"/findings?sort=model",            // and the column sorts without erroring
+		fmt.Sprintf("/findings/%d", f.ID), // detail page shows the finding's own model
+	} {
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, localReq("GET", path))
+		if w.Code != 200 {
+			t.Errorf("%s status %d", path, w.Code)
+			continue
+		}
+		if !strings.Contains(w.Body.String(), "model-col-test") {
+			t.Errorf("%s does not show the finding's model", path)
+		}
+	}
+}
+
 func TestFindings_categoryFilter(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()

@@ -137,6 +137,46 @@
   </div>
 {{end}}
 
+<h3 class="text-lg font-semibold mb-1">By model</h3>
+<p class="text-sm text-muted-foreground mb-3">
+  The period's activity sliced by model. Scan runs and cost group by the model each
+  run used; findings group by the model that first produced them, so findings imported
+  from another instance's bundle count under the model that found them there, not the
+  local import run. Rows without a model predate model recording.
+</p>
+{{if $r.Models}}
+  <div class="overflow-x-auto mb-8">
+    <table class="table w-full">
+      <thead><tr>
+        <th>Model</th>
+        <th class="text-right">Started</th>
+        <th class="text-right">Completed</th>
+        <th class="text-right">Findings{{if $r.MinSeverity}} ({{$r.MinSeverity}}+){{end}}</th>
+        <th class="text-right">Cost</th>
+        <th class="text-right">Total tokens</th>
+        <th class="text-right">Avg cost/scan</th>
+      </tr></thead>
+      <tbody>
+      {{range $r.Models}}
+        <tr>
+          <td class="font-medium">{{if .Model}}{{.Model}}{{else}}<span class="text-muted-foreground">(not recorded)</span>{{end}}</td>
+          <td class="text-right text-muted-foreground">{{bignum .ScansStarted}}</td>
+          <td class="text-right text-muted-foreground">{{bignum .ScansCompleted}}</td>
+          <td class="text-right text-muted-foreground">{{bignum .Findings}}</td>
+          <td class="text-right">{{usd .CostUSD}}</td>
+          <td class="text-right text-muted-foreground">{{bignum .TotalTokens}}</td>
+          <td class="text-right text-muted-foreground">{{if .ScansAveraged}}{{usd .AvgCostUSD}}{{else}}-{{end}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+  </div>
+{{else}}
+  <div class="mb-8">
+    {{template "empty" (dict "Icon" "bot" "Title" "No activity in this window" "Body" "The model breakdown appears once a scan has run or a finding has been reported.")}}
+  </div>
+{{end}}
+
 <h3 class="text-lg font-semibold mb-1">Daily breakdown</h3>
 <p class="text-sm text-muted-foreground mb-3">
   Totals per day. The CSV and JSON exports add each day's per-scan averages, which are

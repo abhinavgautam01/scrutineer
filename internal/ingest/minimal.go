@@ -42,6 +42,7 @@ type minimalFinding struct {
 	Reach        string `json:"reach"`
 	Rating       string `json:"rating"`
 	FixCommit    string `json:"fix_commit"`
+	Model        string `json:"model"`
 
 	// Sinks rides the default bundle; the fields below it, and the child-record
 	// slices, are emitted only by an include=all archival bundle. Absent from
@@ -135,6 +136,7 @@ func parseMinimal(data []byte) ([]Result, error) {
 			Reach:                   f.Reach,
 			Rating:                  f.Rating,
 			FixCommit:               f.FixCommit,
+			Model:                   f.Model,
 			Sinks:                   f.Sinks,
 			Snippet:                 f.Snippet,
 			Affected:                f.Affected,
