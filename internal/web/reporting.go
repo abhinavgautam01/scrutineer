@@ -501,8 +501,15 @@ func (s *Server) buildReport(iv reportInterval, minSeverity string) (reportData,
 		data.Days = append(data.Days, row)
 	}
 	sort.Slice(data.Days, func(i, j int) bool { return data.Days[i].Date > data.Days[j].Date })
+	data.Models = modelRows(models)
+	return data, nil
+}
 
-	data.Models = make([]reportModelRow, 0, len(models))
+// modelRows assembles and orders the per-model breakdown from the streamed
+// accumulators. Findings first, then cost, then name, so the table reads
+// as "who is finding what" before "who is spending what".
+func modelRows(models map[string]*modelAccumulator) []reportModelRow {
+	rows := make([]reportModelRow, 0, len(models))
 	for model, acc := range models {
 		row := reportModelRow{
 			Model:          model,
@@ -518,10 +525,10 @@ func (s *Server) buildReport(iv reportInterval, minSeverity string) (reportData,
 			row.AvgCostUSD = acc.averagedCost / n
 			row.AvgTotalTokens = float64(acc.averagedToken) / n
 		}
-		data.Models = append(data.Models, row)
+		rows = append(rows, row)
 	}
-	sort.Slice(data.Models, func(i, j int) bool {
-		a, b := data.Models[i], data.Models[j]
+	sort.Slice(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
 		if a.Findings != b.Findings {
 			return a.Findings > b.Findings
 		}
@@ -530,7 +537,7 @@ func (s *Server) buildReport(iv reportInterval, minSeverity string) (reportData,
 		}
 		return a.Model < b.Model
 	})
-	return data, nil
+	return rows
 }
 
 // reportFromRequest builds the snapshot the request asks for. Shared by the
