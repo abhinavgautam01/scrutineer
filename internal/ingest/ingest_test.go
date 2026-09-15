@@ -204,6 +204,44 @@ func TestNormaliseModel(t *testing.T) {
 	}
 }
 
+func TestNormaliseTool(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"CodeQL", "CodeQL"},
+		{"GitHub Code Scanning", "GitHub Code Scanning"},
+		{"manual", "manual"},
+		{" Snyk ", "Snyk"},
+		{"", ""},
+		// Leading formula triggers, control characters, and unbounded
+		// length become "unknown", keeping the import marked as imported
+		// without carrying the hostile text.
+		{"=HYPERLINK(\"x\")", "unknown"},
+		{"+cmd", "unknown"},
+		{"-2+3", "unknown"},
+		{"@SUM(A1)", "unknown"},
+		{"code\tql", "unknown"},
+		{"code\x00ql", "unknown"},
+		{strings.Repeat("a", 101), "unknown"},
+	}
+	for _, tc := range cases {
+		if got := normaliseTool(tc.in); got != tc.want {
+			t.Errorf("normaliseTool(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestParse_guardsHostileTool pins the guard at the Parse choke point, so
+// every format's externally supplied producer name passes through it.
+func TestParse_guardsHostileTool(t *testing.T) {
+	body := []byte(`{"repository":"https://x/y","tool":"=1+1","findings":[{"title":"t","severity":"high"}]}`)
+	results, _, err := Parse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := results[0].Tool; got != "unknown" {
+		t.Errorf("Tool = %q, want unknown", got)
+	}
+}
+
 func TestParseMinimal_dropsInvalidModel(t *testing.T) {
 	body := []byte(`{"repository":"https://x/y","findings":[
 		{"title":"a","severity":"high","model":"=1+1"},

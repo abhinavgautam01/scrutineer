@@ -75,6 +75,34 @@ func isAlphanumeric(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
 }
 
+// normaliseTool is defence in depth for the producer name, which unlike a
+// model id is a free-form label ("GitHub Code Scanning"), so it keeps
+// interior spaces and punctuation and only rejects the dangerous shapes: a
+// leading spreadsheet-formula trigger, control characters, or an unbounded
+// length. Invalid values become "unknown" rather than "" because an empty
+// Tool would unmark the finding as imported (Finding.ImportedFrom) and
+// feed an empty skill name into fingerprinting; "unknown" keeps the import
+// provenance honest without carrying the hostile text.
+func normaliseTool(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if len(s) > maxModelLen {
+		return "unknown"
+	}
+	switch s[0] {
+	case '=', '+', '-', '@':
+		return "unknown"
+	}
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return "unknown"
+		}
+	}
+	return s
+}
+
 // Result is one batch of findings against one repository from one tool.
 // A single uploaded file can yield several Results when it contains
 // multiple SARIF runs.
@@ -215,8 +243,19 @@ const (
 var ErrUnrecognised = errors.New("ingest: input matches no supported format (want SARIF 2.1.0, minimal JSON, findings CSV, or findings markdown)")
 
 // Parse sniffs data, picks a parser, and returns one Result per
-// repository-scoped batch.
+// repository-scoped batch. Every result's Tool passes through
+// normaliseTool on the way out, whichever parser produced it: SARIF
+// driver names and minimal-JSON tool fields are externally supplied and
+// flow into Scan.SkillName, Finding.ImportedFrom, and history rows.
 func Parse(data []byte) ([]Result, Format, error) {
+	rs, format, err := parseDetected(data)
+	for i := range rs {
+		rs[i].Tool = normaliseTool(rs[i].Tool)
+	}
+	return rs, format, err
+}
+
+func parseDetected(data []byte) ([]Result, Format, error) {
 	switch detect(data) {
 	case FormatSARIF:
 		rs, err := parseSARIF(data)
