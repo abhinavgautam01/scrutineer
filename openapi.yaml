@@ -1842,8 +1842,9 @@ components:
                 Model id of the scan that first produced the finding,
                 denormalised from that scan. For findings imported from a
                 scrutineer sharing bundle it is the exporting instance's
-                producing model; empty when the producing scan predates
-                model recording.
+                producing model; empty when no model attribution was
+                recorded (deterministic imports, or rows predating model
+                recording).
             fingerprint:       { type: string }
             last_seen_scan_id: { type: integer, format: int64 }
             last_seen_commit:  { type: string }

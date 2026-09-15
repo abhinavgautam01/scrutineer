@@ -193,8 +193,12 @@ type reportDayRow struct {
 // model, which may never have run a scan here, so its row shows findings
 // against little or no local scan activity. Models sort by findings, then
 // cost, so the page reads as "who is finding what" before "who is
-// spending what". An empty Model groups the rows that predate model
-// recording; the page labels it, the exports carry it as "".
+// spending what". An empty Model groups the rows with no model
+// attribution recorded: rows predating model recording, and findings
+// from the deterministic importers (SARIF/CSV/markdown), whose
+// synchronous import scan records no model — unlike the queued LLM
+// ingest fallback, which does. The page labels it, the exports carry
+// it as "".
 type reportModelRow struct {
 	Model          string
 	ScansStarted   int
@@ -672,8 +676,9 @@ func (s *Server) reportingCSV(w http.ResponseWriter, r *http.Request) {
 	}))
 	// The per-model rows sit with the summary rows, above the daily table:
 	// they slice the same period total by model, not by day. An empty model
-	// cell on a model row is real data — activity from before models were
-	// recorded — not an unfilled column.
+	// cell on a model row is real data — activity with no model attribution
+	// recorded (deterministic imports, pre-model rows) — not an unfilled
+	// column.
 	for _, m := range data.Models {
 		_ = cw.Write(row("model", "", map[string]string{
 			"model":            m.Model,
@@ -807,8 +812,8 @@ func (s *Server) reportingJSON(w http.ResponseWriter, r *http.Request) {
 		// Scan figures group by the scan row's model on the same clocks as
 		// the totals; findings group by the model that first produced each
 		// finding, which for bundle-imported findings is the exporting
-		// instance's model. A "" model groups activity recorded before
-		// models were.
+		// instance's model. A "" model groups activity with no model
+		// attribution recorded: deterministic imports and pre-model rows.
 		"activity_by_model": byModel,
 		"activity_by_day":   days,
 	}

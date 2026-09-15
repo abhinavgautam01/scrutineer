@@ -1236,7 +1236,11 @@ func (s *Server) findings(w http.ResponseWriter, r *http.Request) {
 
 	reposByID := loadRepoMap(s.DB, rows, findingRepoID)
 	anySubPath := false
-	anyModel := false
+	// The model column always renders while model sorting is active:
+	// ascending sort puts unattributed rows first, so a page of empty
+	// models would otherwise hide the column — and its direction toggle —
+	// mid-sort.
+	anyModel := sortCol == "model"
 	for _, r := range rows {
 		if r.SubPath != "" {
 			anySubPath = true

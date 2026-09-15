@@ -788,8 +788,11 @@ type Finding struct {
 	// re-observation; BackfillFindingRepository fills rows that predate
 	// the column. For findings imported from a scrutineer sharing bundle
 	// it carries the *exporting* instance's producing model when the
-	// bundle recorded one; other imports get the ingest run's model, and
-	// ImportedFrom disambiguates. Empty when the producing scan predates
+	// bundle recorded one; the deterministic importers (SARIF, CSV,
+	// markdown) run on a synchronous import scan that records no model,
+	// so their findings stay empty, while the queued LLM ingest fallback
+	// stamps its own resolved model like any skill run. ImportedFrom
+	// disambiguates. Also empty when the producing scan predates
 	// Scan.Model.
 	Model string `gorm:"index"`
 

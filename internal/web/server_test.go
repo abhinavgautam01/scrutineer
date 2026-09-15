@@ -842,6 +842,41 @@ func TestFindings_modelColumnAndSort(t *testing.T) {
 	}
 }
 
+// TestFindings_modelSortKeepsColumnVisible pins the interaction between the
+// rows-driven column toggle and model sorting: ascending model sort puts
+// unattributed rows first, and a page of empty models must not hide the
+// column — and with it the direction toggle — mid-sort. The th-sort link
+// (sort=model) only renders with the header, so its presence is the column's.
+func TestFindings_modelSortKeepsColumnVisible(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://example.com/x", Name: "x"}
+	s.DB.Create(&repo)
+	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: "security-deep-dive"}
+	s.DB.Create(&scan)
+	s.DB.Create(&db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "unattributed",
+		Severity: "High", Location: "a.go:1"})
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", "/findings"))
+	if w.Code != 200 {
+		t.Fatalf("status %d", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "sort=model") {
+		t.Errorf("model column rendered with no models on the page and no model sort")
+	}
+
+	w = httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", "/findings?sort=model"))
+	if w.Code != 200 {
+		t.Fatalf("sorted status %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "sort=model") {
+		t.Errorf("model column hidden while model sorting is active")
+	}
+}
+
 func TestFindings_categoryFilter(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
