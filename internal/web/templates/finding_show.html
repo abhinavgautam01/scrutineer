@@ -198,7 +198,10 @@
   </div>
   <div>
     <dt class="text-muted-foreground">Model</dt>
-    <dd>{{$scan.Model}}</dd>
+    {{/* The finding's own denormalized model, not $scan.Model: for a
+         bundle-imported finding it names the exporting instance's
+         producing model rather than the local ingest run. */}}
+    <dd>{{if $f.Model}}{{$f.Model}}{{else}}-{{end}}</dd>
   </div>
   <div>
     <dt class="text-muted-foreground">First seen</dt>

@@ -539,7 +539,7 @@ func (w *Worker) ingestFindings(skill *db.Skill, scan *db.Scan, report string, e
 	if err != nil {
 		return nil, err
 	}
-	findings := rep.toFindings(scan.ID, scan.RepositoryID, scan.Commit, scan.SubPath)
+	findings := rep.toFindings(scan.ID, scan.RepositoryID, scan.Commit, scan.SubPath, scan.Model)
 	findings = groupByFingerprint(findings, scan.SkillName)
 
 	if skill.MinConfidence != "" {

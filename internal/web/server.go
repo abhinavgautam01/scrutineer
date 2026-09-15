@@ -1217,6 +1217,8 @@ func (s *Server) findings(w http.ResponseWriter, r *http.Request) {
 		q = q.Order(orderByExpr("findings.repository_id", dir, false)).Order("findings.id desc")
 	case "cwe":
 		q = q.Order(orderByExpr("findings.cwe", dir, false)).Order("findings.id desc")
+	case "model":
+		q = q.Order(orderByExpr("findings.model", dir, false)).Order("findings.id desc")
 	case "scan":
 		q = q.Order(orderByExpr("findings.scan_id", dir, true)).Order("findings.id desc")
 	default:
@@ -1234,10 +1236,17 @@ func (s *Server) findings(w http.ResponseWriter, r *http.Request) {
 
 	reposByID := loadRepoMap(s.DB, rows, findingRepoID)
 	anySubPath := false
+	// The model column always renders while model sorting is active:
+	// ascending sort puts unattributed rows first, so a page of empty
+	// models would otherwise hide the column — and its direction toggle —
+	// mid-sort.
+	anyModel := sortCol == "model"
 	for _, r := range rows {
 		if r.SubPath != "" {
 			anySubPath = true
-			break
+		}
+		if r.Model != "" {
+			anyModel = true
 		}
 	}
 	missedTotal, scannerTotal := s.findingToggleCounts(r, scanners)
@@ -1245,7 +1254,7 @@ func (s *Server) findings(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "findings.html", map[string]any{
 		"Findings": rows, "Page": page, "Severity": sev, "Sort": sort,
 		"Category": category, "Categories": CWECategories(), "Uncategorized": UncategorizedCWE,
-		"Repos": reposByID, "Q": search, "AnySubPath": anySubPath,
+		"Repos": reposByID, "Q": search, "AnySubPath": anySubPath, "AnyModel": anyModel,
 		"Owner": owner, "Missed": missed, "MissedTotal": missedTotal,
 		"Scanners": scanners, "ScannerTotal": scannerTotal,
 		"Status": status, "Statuses": db.FindingLifecycles,

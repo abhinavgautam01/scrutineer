@@ -182,6 +182,35 @@ type reportDayRow struct {
 	AvgTotalTokens float64
 }
 
+// reportModelRow is one row of the per-model breakdown: the same activity
+// figures as a day row, attributed to a model instead of a date. Scan
+// figures group by the scan row's model on the same clocks the totals use;
+// findings group by Finding.Model — the model of the scan that *first
+// produced* each finding, denormalized at create time — under the same
+// created-at window and severity filter as the findings total. The two
+// dimensions can legitimately disagree: a finding imported from another
+// instance's sharing bundle carries the exporting instance's producing
+// model, which may never have run a scan here, so its row shows findings
+// against little or no local scan activity. Models sort by findings, then
+// cost, so the page reads as "who is finding what" before "who is
+// spending what". An empty Model groups the rows with no model
+// attribution recorded: rows predating model recording, and findings
+// from the deterministic importers (SARIF/CSV/markdown), whose
+// synchronous import scan records no model — unlike the queued LLM
+// ingest fallback, which does. The page labels it, the exports carry
+// it as "".
+type reportModelRow struct {
+	Model          string
+	ScansStarted   int
+	ScansCompleted int
+	Findings       int
+	CostUSD        float64
+	TotalTokens    int
+	ScansAveraged  int
+	AvgCostUSD     float64
+	AvgTotalTokens float64
+}
+
 // reportData is the whole snapshot. The page render and both exports read
 // from this one value, so no figure in a download can disagree with the
 // screen it came from — a weaker promise than carrying the same columns,
@@ -204,6 +233,7 @@ type reportData struct {
 	Period      reportAverages
 	AllTime     reportAverages
 	Days        []reportDayRow
+	Models      []reportModelRow
 }
 
 // A scan row carries two nullable timestamps this report reads: started_at,
@@ -282,6 +312,21 @@ type dayAccumulator struct {
 	averagedToken int
 }
 
+// modelAccumulator gathers one model's figures in the same streaming passes
+// the day breakdown uses, so the per-model table costs no extra query. It
+// carries no repos set: a per-model repository count would double-count a
+// repository scanned under two models and the row has no column for it.
+type modelAccumulator struct {
+	started       int
+	completed     int
+	findings      int
+	cost          float64
+	tokens        int
+	averagedScans int
+	averagedCost  float64
+	averagedToken int
+}
+
 // inWindow reports whether one of a scan's two timestamps falls inside the
 // selected window. A nil timestamp is inside no window at all: a run that
 // has not started, or not finished, has not reached that milestone yet and
@@ -337,7 +382,7 @@ func (s *Server) buildReport(iv reportInterval, minSeverity string) (reportData,
 	// begun or ended, which is every row that has anything to attribute.
 	var scans []db.Scan
 	sq := s.DB.Model(&db.Scan{}).
-		Select("repository_id", "status", "cost_usd", "input_tokens", "output_tokens",
+		Select("repository_id", "status", "model", "cost_usd", "input_tokens", "output_tokens",
 			"cache_read_tokens", "cache_write_tokens", "started_at", "finished_at").
 		Where(reportActivitySQL)
 	if data.Since != nil {
@@ -345,6 +390,16 @@ func (s *Server) buildReport(iv reportInterval, minSeverity string) (reportData,
 	}
 	if err := sq.Find(&scans).Error; err != nil {
 		return data, fmt.Errorf("scan activity: %w", err)
+	}
+
+	models := map[string]*modelAccumulator{}
+	mat := func(model string) *modelAccumulator {
+		acc := models[model]
+		if acc == nil {
+			acc = &modelAccumulator{}
+			models[model] = acc
+		}
+		return acc
 	}
 
 	repos := map[uint]struct{}{}
@@ -360,12 +415,14 @@ func (s *Server) buildReport(iv reportInterval, minSeverity string) (reportData,
 			acc := at(sc.StartedAt.UTC().Format(reportDateLayout))
 			data.Totals.ScansStarted++
 			acc.started++
+			mat(sc.Model).started++
 			active(acc, sc.RepositoryID)
 		}
 		if !data.inWindow(sc.FinishedAt) {
 			continue
 		}
 		acc := at(sc.FinishedAt.UTC().Format(reportDateLayout))
+		macc := mat(sc.Model)
 		active(acc, sc.RepositoryID)
 		// A completion is a run that reached done. Failed, cancelled and
 		// skipped runs stop here too, and their spend is counted below, but
@@ -377,6 +434,7 @@ func (s *Server) buildReport(iv reportInterval, minSeverity string) (reportData,
 		if sc.Status == db.ScanDone {
 			data.Totals.ScansCompleted++
 			acc.completed++
+			macc.completed++
 		}
 		// Spend lands on the finish day for any terminal status: the worker
 		// writes the cost and token columns when a run finalises, so an
@@ -386,21 +444,29 @@ func (s *Server) buildReport(iv reportInterval, minSeverity string) (reportData,
 		tokens := sc.InputTokens + sc.OutputTokens + sc.CacheReadTokens + sc.CacheWriteTokens
 		acc.cost += sc.CostUSD
 		acc.tokens += tokens
+		macc.cost += sc.CostUSD
+		macc.tokens += tokens
 		// Same population as reportAveragesFor, so a day's average and the
 		// period average are the same measurement at two resolutions.
 		if sc.Status == db.ScanDone && sc.CostUSD > 0 {
 			acc.averagedScans++
 			acc.averagedCost += sc.CostUSD
 			acc.averagedToken += tokens
+			macc.averagedScans++
+			macc.averagedCost += sc.CostUSD
+			macc.averagedToken += tokens
 		}
 	}
 	data.Totals.ReposScanned = len(repos)
 
 	// Findings are counted by creation time: a finding belongs to the
 	// window it was first reported in, not to a later re-observation.
-	type findingRow struct{ CreatedAt time.Time }
+	type findingRow struct {
+		CreatedAt time.Time
+		Model     string
+	}
 	var found []findingRow
-	fq := s.DB.Model(&db.Finding{}).Select("created_at")
+	fq := s.DB.Model(&db.Finding{}).Select("created_at", "model")
 	if data.Since != nil {
 		fq = fq.Where("created_at >= ?", *data.Since)
 	}
@@ -416,6 +482,7 @@ func (s *Server) buildReport(iv reportInterval, minSeverity string) (reportData,
 	for _, f := range found {
 		data.Totals.Findings++
 		at(f.CreatedAt.UTC().Format(reportDateLayout)).findings++
+		mat(f.Model).findings++
 	}
 
 	data.Days = make([]reportDayRow, 0, len(days))
@@ -438,7 +505,43 @@ func (s *Server) buildReport(iv reportInterval, minSeverity string) (reportData,
 		data.Days = append(data.Days, row)
 	}
 	sort.Slice(data.Days, func(i, j int) bool { return data.Days[i].Date > data.Days[j].Date })
+	data.Models = modelRows(models)
 	return data, nil
+}
+
+// modelRows assembles and orders the per-model breakdown from the streamed
+// accumulators. Findings first, then cost, then name, so the table reads
+// as "who is finding what" before "who is spending what".
+func modelRows(models map[string]*modelAccumulator) []reportModelRow {
+	rows := make([]reportModelRow, 0, len(models))
+	for model, acc := range models {
+		row := reportModelRow{
+			Model:          model,
+			ScansStarted:   acc.started,
+			ScansCompleted: acc.completed,
+			Findings:       acc.findings,
+			CostUSD:        acc.cost,
+			TotalTokens:    acc.tokens,
+			ScansAveraged:  acc.averagedScans,
+		}
+		if acc.averagedScans > 0 {
+			n := float64(acc.averagedScans)
+			row.AvgCostUSD = acc.averagedCost / n
+			row.AvgTotalTokens = float64(acc.averagedToken) / n
+		}
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
+		if a.Findings != b.Findings {
+			return a.Findings > b.Findings
+		}
+		if a.CostUSD != b.CostUSD {
+			return a.CostUSD > b.CostUSD
+		}
+		return a.Model < b.Model
+	})
+	return rows
 }
 
 // reportFromRequest builds the snapshot the request asks for. Shared by the
@@ -507,10 +610,17 @@ func severityFilterLabel(minSeverity string) string {
 //
 // period and minimum_severity repeat on every row so several exports can
 // be concatenated into one sheet and still be told apart.
+//
+// model sits last so a consumer that still reads the original columns by
+// position keeps getting them; it is filled only on row_type=model rows,
+// where date and repositories_scanned stay empty (a model is not a day,
+// and a per-model repository count would double-count repositories
+// scanned under two models).
 var reportCSVHeader = []string{
 	"period", "minimum_severity", "row_type", "date",
 	"repositories_scanned", "scans_started", "scans_completed", findingsField,
 	"cost_usd", "total_tokens", "scans_averaged", "avg_cost_usd", "avg_total_tokens",
+	"model",
 }
 
 func (s *Server) reportingCSV(w http.ResponseWriter, r *http.Request) {
@@ -564,6 +674,24 @@ func (s *Server) reportingCSV(w http.ResponseWriter, r *http.Request) {
 		"avg_cost_usd":     num(data.AllTime.CostUSD),
 		"avg_total_tokens": num(data.AllTime.TotalTokens),
 	}))
+	// The per-model rows sit with the summary rows, above the daily table:
+	// they slice the same period total by model, not by day. An empty model
+	// cell on a model row is real data — activity with no model attribution
+	// recorded (deterministic imports, pre-model rows) — not an unfilled
+	// column.
+	for _, m := range data.Models {
+		_ = cw.Write(row("model", "", map[string]string{
+			"model":            csvGuardCell(m.Model),
+			"scans_started":    strconv.Itoa(m.ScansStarted),
+			"scans_completed":  strconv.Itoa(m.ScansCompleted),
+			findingsField:      strconv.Itoa(m.Findings),
+			"cost_usd":         num(m.CostUSD),
+			"total_tokens":     strconv.Itoa(m.TotalTokens),
+			"scans_averaged":   strconv.Itoa(m.ScansAveraged),
+			"avg_cost_usd":     num(m.AvgCostUSD),
+			"avg_total_tokens": num(m.AvgTotalTokens),
+		}))
+	}
 	for _, d := range data.Days {
 		_ = cw.Write(row("day", d.Date, map[string]string{
 			"repositories_scanned": strconv.Itoa(d.ReposScanned),
@@ -577,6 +705,27 @@ func (s *Server) reportingCSV(w http.ResponseWriter, r *http.Request) {
 			"avg_total_tokens":     num(d.AvgTotalTokens),
 		}))
 	}
+}
+
+// csvGuardCell neutralises spreadsheet formula interpretation (CWE-1236)
+// for a free-text CSV cell: a value starting with `=`, `+`, `-`, `@`, tab,
+// or CR is evaluated by Excel/LibreOffice/Sheets even when quoted, so it
+// gets a leading apostrophe, which spreadsheets render as a text marker.
+// Every free-text column in a CSV export MUST pass through this — today
+// that is only the model cell, whose value can arrive from an externally
+// supplied sharing bundle (the ingest boundary also drops non-model-id
+// values, but this sink defends itself). The numeric and enumerated
+// columns are machine-formatted and deliberately not guarded: an
+// apostrophe on a future negative number would corrupt real data.
+func csvGuardCell(s string) string {
+	if s == "" {
+		return s
+	}
+	switch s[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + s
+	}
+	return s
 }
 
 // csvRecord renders one record in reportCSVHeader order. The result is
@@ -626,6 +775,20 @@ func (s *Server) reportingJSON(w http.ResponseWriter, r *http.Request) {
 			"avg_total_tokens":     d.AvgTotalTokens,
 		})
 	}
+	byModel := make([]map[string]any, 0, len(data.Models))
+	for _, m := range data.Models {
+		byModel = append(byModel, map[string]any{
+			"model":            m.Model,
+			"scans_started":    m.ScansStarted,
+			"scans_completed":  m.ScansCompleted,
+			findingsField:      m.Findings,
+			"cost_usd":         m.CostUSD,
+			"total_tokens":     m.TotalTokens,
+			"scans_averaged":   m.ScansAveraged,
+			"avg_cost_usd":     m.AvgCostUSD,
+			"avg_total_tokens": m.AvgTotalTokens,
+		})
+	}
 	period := map[string]any{
 		"key":       data.Interval.Key,
 		"label":     data.Interval.Label,
@@ -667,7 +830,13 @@ func (s *Server) reportingJSON(w http.ResponseWriter, r *http.Request) {
 			"in_period":  averageJSON(data.Period),
 			"all_time":   averageJSON(data.AllTime),
 		},
-		"activity_by_day": days,
+		// Scan figures group by the scan row's model on the same clocks as
+		// the totals; findings group by the model that first produced each
+		// finding, which for bundle-imported findings is the exporting
+		// instance's model. A "" model groups activity with no model
+		// attribution recorded: deterministic imports and pre-model rows.
+		"activity_by_model": byModel,
+		"activity_by_day":   days,
 	}
 	w.Header().Set("Content-Disposition", `attachment; filename="`+reportFilename(data, "json")+`"`)
 	writeJSON(w, http.StatusOK, out)

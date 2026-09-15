@@ -1836,6 +1836,15 @@ components:
         - type: object
           properties:
             commit:            { type: string }
+            model:
+              type: string
+              description: |
+                Model id of the scan that first produced the finding,
+                denormalised from that scan. For findings imported from a
+                scrutineer sharing bundle it is the exporting instance's
+                producing model; empty when no model attribution was
+                recorded (deterministic imports, or rows predating model
+                recording).
             fingerprint:       { type: string }
             last_seen_scan_id: { type: integer, format: int64 }
             last_seen_commit:  { type: string }
@@ -1885,6 +1894,7 @@ components:
               reach:        { type: string }
               rating:       { type: string }
               fix_commit:   { type: string, description: "Base revision the patch applies to." }
+              model:        { type: string, description: "Model id of the scan that produced the finding on the exporting instance; preserved as the finding's model on import. Dropped unless it looks like a model id (leading alphanumeric, id charset, at most 100 chars) — bundle text is externally supplied and this field feeds the reporting CSV." }
               # Archival fields, emitted only with include=all: the operator's
               # enrichment, disclosure work product, and child records.
               snippet:                    { type: string }

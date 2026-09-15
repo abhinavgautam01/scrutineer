@@ -147,11 +147,13 @@
       {{if .AnySubPath}}<th class="w-32">Sub-path</th>{{end}}
       {{template "th-sort" (dict "Sorter" .Sorter "Key" "cwe" "Def" "asc" "Label" "CWE" "Class" "w-44")}}
       <th class="w-56">Location</th>
+      {{if .AnyModel}}{{template "th-sort" (dict "Sorter" .Sorter "Key" "model" "Def" "asc" "Label" "Model" "Class" "w-28")}}{{end}}
       {{template "th-sort" (dict "Sorter" .Sorter "Key" "scan" "Def" "desc" "Label" "Scan" "Class" "w-16")}}
     </tr></thead>
     <tbody>
     {{$repos := .Repos}}
     {{$showSub := .AnySubPath}}
+    {{$showModel := .AnyModel}}
     {{range .Findings}}
       {{$repo := index $repos .RepositoryID}}
       <tr id="finding-{{.ID}}">
@@ -177,6 +179,9 @@
           {{if .CWE}}<span data-tooltip="{{cwename .CWE}}">{{with cwecatid .CWE}}<span class="text-muted-foreground">{{.}} ›</span> {{end}}{{.CWE}}</span>{{end}}
         </td>
         <td class="whitespace-normal">{{template "loc-link" (dict "RepoID" $repo.ID "Commit" .Commit "Location" .Location "Extra" .ExtraLocationCount)}}</td>
+        {{if $showModel}}
+          <td class="text-muted-foreground text-xs truncate">{{if .Model}}{{.Model}}{{else}}-{{end}}</td>
+        {{end}}
         <td class="text-muted-foreground">#{{.ScanID}}</td>
       </tr>
     {{end}}

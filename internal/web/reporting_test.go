@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +56,7 @@ func seedReportCorpus(t *testing.T, s *Server) {
 		started := finished.Add(-ranFor)
 		sc := db.Scan{
 			RepositoryID: repo.ID, Kind: "skill", Status: status, SkillName: "vuln-scan",
+			Model:   "model-a",
 			CostUSD: cost, InputTokens: in, OutputTokens: out,
 			CacheReadTokens: cr, CacheWriteTokens: cw,
 			StartedAt: &started, FinishedAt: &finished, CreatedAt: started.Add(-time.Minute),
@@ -77,8 +79,12 @@ func seedReportCorpus(t *testing.T, s *Server) {
 	// activity, and must be counted in no window. A running one has only a
 	// start, and is counted as one.
 	mkPending := func(repo db.Repository, status db.ScanStatus, startedAgo time.Duration) {
+		// A second model, so the by-model breakdown has something to group:
+		// the running row contributes one start under model-b and nothing
+		// else, while every terminal row above is model-a.
 		sc := db.Scan{
 			RepositoryID: repo.ID, Kind: "skill", Status: status, SkillName: "vuln-scan",
+			Model:     "model-b",
 			CreatedAt: now.Add(-time.Hour),
 		}
 		if startedAgo > 0 {
@@ -104,6 +110,7 @@ func seedReportCorpus(t *testing.T, s *Server) {
 	} {
 		row := db.Finding{
 			RepositoryID: r1.ID, ScanID: inWindow.ID, Title: "x",
+			Model:    "model-a",
 			Severity: f.severity, CreatedAt: f.at,
 		}
 		if err := s.DB.Create(&row).Error; err != nil {
@@ -876,12 +883,14 @@ func TestReportingCSVRowsFillTheirColumns(t *testing.T) {
 		index[col] = i
 	}
 
-	// The all-time row deliberately leaves the activity columns blank; every
-	// other column of every other row carries a value.
+	// The all-time row deliberately leaves the activity columns blank, the
+	// model column is filled only on model rows, and a model row has no
+	// date or repository count; every other column of every other row
+	// carries a value.
 	blankForAllTime := map[string]bool{
 		"date": true, "repositories_scanned": true, "scans_started": true,
 		"scans_completed": true, findingsField: true, "cost_usd": true,
-		"total_tokens": true,
+		"total_tokens": true, "model": true,
 	}
 	seen := map[string]bool{}
 	for _, row := range rows[1:] {
@@ -889,8 +898,10 @@ func TestReportingCSVRowsFillTheirColumns(t *testing.T) {
 		seen[rowType] = true
 		for col, i := range index {
 			// period_total covers the whole window, so it has no single date.
-			wantBlank := (rowType == "period_total" && col == "date") ||
-				(rowType == "all_time_average" && blankForAllTime[col])
+			wantBlank := (rowType == "period_total" && (col == "date" || col == "model")) ||
+				(rowType == "all_time_average" && blankForAllTime[col]) ||
+				(rowType == "day" && col == "model") ||
+				(rowType == "model" && (col == "date" || col == "repositories_scanned"))
 			if wantBlank {
 				if row[i] != "" {
 					t.Errorf("%s: column %q = %q, want empty", rowType, col, row[i])
@@ -902,9 +913,149 @@ func TestReportingCSVRowsFillTheirColumns(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{"period_total", "all_time_average", "day"} {
+	for _, want := range []string{"period_total", "all_time_average", "model", "day"} {
 		if !seen[want] {
 			t.Errorf("no %s row emitted", want)
+		}
+	}
+}
+
+func TestReportingJSONModelBreakdown(t *testing.T) {
+	s, cleanup := newTestServer(t)
+	defer cleanup()
+	seedReportCorpus(t, s)
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", "/reporting/report.json?interval=all"))
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	var out struct {
+		ByModel []struct {
+			Model          string  `json:"model"`
+			ScansStarted   int     `json:"scans_started"`
+			ScansCompleted int     `json:"scans_completed"`
+			Findings       int     `json:"findings"`
+			CostUSD        float64 `json:"cost_usd"`
+		} `json:"activity_by_model"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.ByModel) != 2 {
+		t.Fatalf("got %d model rows, want 2: %+v", len(out.ByModel), out.ByModel)
+	}
+	// model-a leads: rows sort by findings first. It owns every terminal
+	// run (4 done + 1 failed = 5 starts, 4 completions, all the spend) and
+	// all three findings; model-b's only activity is the running scan's
+	// start, so its other figures hold zero rather than going blank.
+	a, b := out.ByModel[0], out.ByModel[1]
+	if a.Model != "model-a" || a.ScansStarted != 5 || a.ScansCompleted != 4 || a.Findings != 3 || a.CostUSD != 21.00 {
+		t.Errorf("model-a row = %+v, want started 5, completed 4, findings 3, cost 21.00", a)
+	}
+	if b.Model != "model-b" || b.ScansStarted != 1 || b.ScansCompleted != 0 || b.Findings != 0 {
+		t.Errorf("model-b row = %+v, want started 1, completed 0, findings 0", b)
+	}
+}
+
+func TestCSVGuardCell(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"claude-opus-4-1", "claude-opus-4-1"},
+		{"", ""},
+		{"=1+1", "'=1+1"},
+		{"+cmd", "'+cmd"},
+		{"-2+3", "'-2+3"},
+		{"@SUM(A1)", "'@SUM(A1)"},
+		{"\tx", "'\tx"},
+		{"\rx", "'\rx"},
+	}
+	for _, tc := range cases {
+		if got := csvGuardCell(tc.in); got != tc.want {
+			t.Errorf("csvGuardCell(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestReportingCSVGuardsHostileModel proves the CSV sink defends itself:
+// the hostile model is seeded directly in the database, bypassing the
+// ingest normalisation that would normally drop it, and must still come
+// out neutralised. Weakening either layer alone keeps a test failing.
+func TestReportingCSVGuardsHostileModel(t *testing.T) {
+	s, cleanup := newTestServer(t)
+	defer cleanup()
+	repo := db.Repository{URL: "https://example.test/hostile", Name: "hostile"}
+	s.DB.Create(&repo)
+	now := time.Now().UTC()
+	started := now.Add(-time.Hour)
+	s.DB.Create(&db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone,
+		SkillName: "vuln-scan", Model: "=2+5", StartedAt: &started, FinishedAt: &now})
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", "/reporting/report.csv?interval=all"))
+	rows, err := csv.NewReader(strings.NewReader(w.Body.String())).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelCol := slices.Index(rows[0], "model")
+	var seen bool
+	for _, row := range rows[1:] {
+		if row[slices.Index(rows[0], "row_type")] != "model" {
+			continue
+		}
+		seen = true
+		if got := row[modelCol]; got != "'=2+5" {
+			t.Errorf("model cell = %q, want neutralised '=2+5", got)
+		}
+	}
+	if !seen {
+		t.Fatal("no model row emitted")
+	}
+}
+
+// TestImportedModelCannotInjectCSVFormula is the import-to-CSV regression:
+// a sharing bundle carrying a formula as its model must reach neither the
+// finding row nor the reporting CSV. The ingest boundary drops it, so the
+// finding imports unattributed and no CSV cell leads with a formula
+// trigger.
+func TestImportedModelCannotInjectCSVFormula(t *testing.T) {
+	s, cleanup := newTestServer(t)
+	defer cleanup()
+
+	body := `{"repository":"https://example.test/injected","findings":[
+		{"title":"t","severity":"high","location":"a.go:1","model":"=1+1"}]}`
+	r := httptest.NewRequest("POST", "/api/v1/import", strings.NewReader(body))
+	r.Host = testHost
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	if w.Code != 201 {
+		t.Fatalf("import status %d: %s", w.Code, w.Body)
+	}
+	var f db.Finding
+	if err := s.DB.First(&f).Error; err != nil {
+		t.Fatal(err)
+	}
+	if f.Model != "" {
+		t.Errorf("imported Finding.Model = %q, want dropped", f.Model)
+	}
+
+	w = httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", "/reporting/report.csv?interval=all"))
+	if strings.Contains(w.Body.String(), "=1+1") {
+		t.Error("hostile model text reached the reporting CSV")
+	}
+	rows, err := csv.NewReader(strings.NewReader(w.Body.String())).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, row := range rows[1:] {
+		for j, cell := range row {
+			if cell == "" {
+				continue
+			}
+			switch cell[0] {
+			case '=', '+', '-', '@', '\t', '\r':
+				t.Errorf("row %d column %q starts with formula trigger: %q", i+1, rows[0][j], cell)
+			}
 		}
 	}
 }

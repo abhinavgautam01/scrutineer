@@ -296,6 +296,10 @@ type sharingFinding struct {
 	Reach        string `json:"reach,omitempty"`
 	Rating       string `json:"rating,omitempty"`
 	FixCommit    string `json:"fix_commit,omitempty"`
+	// Model is provenance like Commit and VID — which model produced the
+	// finding on the exporting instance — so it rides the default bundle
+	// and survives the round-trip into the receiver's Finding.Model.
+	Model string `json:"model,omitempty"`
 
 	// Sinks rides the default bundle. Everything below it is populated only for
 	// include=all; omitempty keeps a default bundle byte-identical to the
@@ -413,6 +417,7 @@ func (s *Server) apiExportRepoBundle(w http.ResponseWriter, r *http.Request, rep
 			Reach:        f.Reach,
 			Rating:       f.Rating,
 			FixCommit:    f.SuggestedFixCommit,
+			Model:        f.Model,
 			Sinks:        f.Sinks,
 		}
 		if includeAll {
@@ -790,6 +795,7 @@ func findingExport(f db.Finding) map[string]any {
 		"repository_id":                   f.RepositoryID,
 		"commit":                          f.Commit,
 		"sub_path":                        f.SubPath,
+		"model":                           f.Model,
 		"fingerprint":                     f.Fingerprint,
 		"last_seen_scan_id":               f.LastSeenScanID,
 		"last_seen_commit":                f.LastSeenCommit,

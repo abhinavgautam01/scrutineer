@@ -19,7 +19,7 @@ func TestToFindings_carriesReachabilityAndQualityTier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := rep.toFindings(1, 1, "abc", "")
+	got := rep.toFindings(1, 1, "abc", "", "model-x")
 	if len(got) != 1 {
 		t.Fatalf("got %d findings, want 1", len(got))
 	}
@@ -28,6 +28,9 @@ func TestToFindings_carriesReachabilityAndQualityTier(t *testing.T) {
 	}
 	if got[0].QualityTier != "high" {
 		t.Errorf("QualityTier = %q, want high", got[0].QualityTier)
+	}
+	if got[0].Model != "model-x" {
+		t.Errorf("Model = %q, want model-x", got[0].Model)
 	}
 }
 
@@ -66,7 +69,7 @@ func TestToFindings_foldsDiscoveredViaIntoPriorArt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := rep.toFindings(1, 1, "abc", "")
+	got := rep.toFindings(1, 1, "abc", "", "")
 	if len(got) != 3 {
 		t.Fatalf("got %d findings, want 3", len(got))
 	}
@@ -93,7 +96,7 @@ func TestToFindings_carriesDupCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := rep.toFindings(1, 1, "abc", "")
+	got := rep.toFindings(1, 1, "abc", "", "")
 	if len(got) != 2 {
 		t.Fatalf("got %d findings, want 2", len(got))
 	}
@@ -121,7 +124,7 @@ func TestToFindings_carriesReferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := rep.toFindings(1, 1, "abc", "")
+	got := rep.toFindings(1, 1, "abc", "", "")
 	if len(got) != 1 {
 		t.Fatalf("got %d findings, want 1", len(got))
 	}
@@ -156,7 +159,7 @@ func TestToFindings_dedupesReferencesByURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	refs := rep.toFindings(1, 1, "abc", "")[0].References
+	refs := rep.toFindings(1, 1, "abc", "", "")[0].References
 	if len(refs) != 2 {
 		t.Fatalf("references = %d, want 2: %+v", len(refs), refs)
 	}
