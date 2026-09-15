@@ -681,7 +681,7 @@ func (s *Server) reportingCSV(w http.ResponseWriter, r *http.Request) {
 	// column.
 	for _, m := range data.Models {
 		_ = cw.Write(row("model", "", map[string]string{
-			"model":            m.Model,
+			"model":            csvGuardCell(m.Model),
 			"scans_started":    strconv.Itoa(m.ScansStarted),
 			"scans_completed":  strconv.Itoa(m.ScansCompleted),
 			findingsField:      strconv.Itoa(m.Findings),
@@ -705,6 +705,27 @@ func (s *Server) reportingCSV(w http.ResponseWriter, r *http.Request) {
 			"avg_total_tokens":     num(d.AvgTotalTokens),
 		}))
 	}
+}
+
+// csvGuardCell neutralises spreadsheet formula interpretation (CWE-1236)
+// for a free-text CSV cell: a value starting with `=`, `+`, `-`, `@`, tab,
+// or CR is evaluated by Excel/LibreOffice/Sheets even when quoted, so it
+// gets a leading apostrophe, which spreadsheets render as a text marker.
+// Every free-text column in a CSV export MUST pass through this — today
+// that is only the model cell, whose value can arrive from an externally
+// supplied sharing bundle (the ingest boundary also drops non-model-id
+// values, but this sink defends itself). The numeric and enumerated
+// columns are machine-formatted and deliberately not guarded: an
+// apostrophe on a future negative number would corrupt real data.
+func csvGuardCell(s string) string {
+	if s == "" {
+		return s
+	}
+	switch s[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + s
+	}
+	return s
 }
 
 // csvRecord renders one record in reportCSVHeader order. The result is

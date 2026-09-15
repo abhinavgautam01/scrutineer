@@ -171,6 +171,55 @@ func TestNormaliseSeverity(t *testing.T) {
 	}
 }
 
+func TestNormaliseModel(t *testing.T) {
+	long := strings.Repeat("a", maxModelLen)
+	cases := []struct{ in, want string }{
+		{"claude-opus-4-1", "claude-opus-4-1"},
+		{"anthropic/claude-sonnet-5", "anthropic/claude-sonnet-5"},
+		{"gpt-5.2", "gpt-5.2"},
+		{"provider@2026-01", "provider@2026-01"},
+		{"llama_3:70b+tuned", "llama_3:70b+tuned"},
+		{" claude-opus-4-1 ", "claude-opus-4-1"},
+		{long, long},
+		{"", ""},
+		// Formula triggers (CWE-1236) and other non-id shapes are dropped,
+		// not stripped: a partial value would be fabricated attribution.
+		{"=1+1", ""},
+		{"+cmd", ""},
+		{"-2+3", ""},
+		{"@SUM(A1)", ""},
+		// Leading whitespace trims away before validation, so what is
+		// stored can never lead with a trigger character either way.
+		{"\tgpt-5", "gpt-5"},
+		{"\r=1+1", ""},
+		{"'quoted'", ""},
+		{"claude opus", ""},
+		{"model;drop", ""},
+		{long + "a", ""},
+	}
+	for _, tc := range cases {
+		if got := normaliseModel(tc.in); got != tc.want {
+			t.Errorf("normaliseModel(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestParseMinimal_dropsInvalidModel(t *testing.T) {
+	body := []byte(`{"repository":"https://x/y","findings":[
+		{"title":"a","severity":"high","model":"=1+1"},
+		{"title":"b","severity":"high","model":"claude-opus-4-1"}]}`)
+	results, _, err := Parse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := results[0].Findings[0].Model; got != "" {
+		t.Errorf("hostile model = %q, want dropped", got)
+	}
+	if got := results[0].Findings[1].Model; got != "claude-opus-4-1" {
+		t.Errorf("valid model = %q, want claude-opus-4-1", got)
+	}
+}
+
 func TestParseCSV_skipsEmptyRepositoryRows(t *testing.T) {
 	body := []byte("\"Severity\",\"Repository\",\"Name\",\"Description\"\n" +
 		"\"MEDIUM\",\"\",\"orphan\",\"row with no repo\"\n" +

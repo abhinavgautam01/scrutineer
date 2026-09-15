@@ -43,6 +43,38 @@ func normaliseSeverity(s string) string {
 	return strings.TrimSpace(s)
 }
 
+// maxModelLen bounds an imported model id. Real ids are a few dozen
+// characters; anything longer is not attribution.
+const maxModelLen = 100
+
+// normaliseModel admits an imported model only when it looks like a model
+// id: leading alphanumeric, the id charset, bounded length. Anything else
+// is dropped to "" — the finding imports as unattributed — because bundle
+// text is externally supplied and a partially-stripped value would be
+// fabricated attribution. Unlike severity, invalid values do NOT pass
+// through: this field ends up in the reporting CSV, where a value with a
+// leading `=`, `+`, `-`, `@`, tab, or CR reads as a spreadsheet formula
+// (CWE-1236), and the leading-alphanumeric rule is what rules those out.
+func normaliseModel(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" || len(s) > maxModelLen {
+		return ""
+	}
+	if !isAlphanumeric(rune(s[0])) {
+		return ""
+	}
+	for _, r := range s {
+		if !isAlphanumeric(r) && !strings.ContainsRune("._:/@+-_", r) {
+			return ""
+		}
+	}
+	return s
+}
+
+func isAlphanumeric(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+}
+
 // Result is one batch of findings against one repository from one tool.
 // A single uploaded file can yield several Results when it contains
 // multiple SARIF runs.

@@ -136,7 +136,7 @@ func parseMinimal(data []byte) ([]Result, error) {
 			Reach:                   f.Reach,
 			Rating:                  f.Rating,
 			FixCommit:               f.FixCommit,
-			Model:                   f.Model,
+			Model:                   normaliseModel(f.Model),
 			Sinks:                   f.Sinks,
 			Snippet:                 f.Snippet,
 			Affected:                f.Affected,

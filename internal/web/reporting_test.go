@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -954,6 +955,108 @@ func TestReportingJSONModelBreakdown(t *testing.T) {
 	}
 	if b.Model != "model-b" || b.ScansStarted != 1 || b.ScansCompleted != 0 || b.Findings != 0 {
 		t.Errorf("model-b row = %+v, want started 1, completed 0, findings 0", b)
+	}
+}
+
+func TestCSVGuardCell(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"claude-opus-4-1", "claude-opus-4-1"},
+		{"", ""},
+		{"=1+1", "'=1+1"},
+		{"+cmd", "'+cmd"},
+		{"-2+3", "'-2+3"},
+		{"@SUM(A1)", "'@SUM(A1)"},
+		{"\tx", "'\tx"},
+		{"\rx", "'\rx"},
+	}
+	for _, tc := range cases {
+		if got := csvGuardCell(tc.in); got != tc.want {
+			t.Errorf("csvGuardCell(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestReportingCSVGuardsHostileModel proves the CSV sink defends itself:
+// the hostile model is seeded directly in the database, bypassing the
+// ingest normalisation that would normally drop it, and must still come
+// out neutralised. Weakening either layer alone keeps a test failing.
+func TestReportingCSVGuardsHostileModel(t *testing.T) {
+	s, cleanup := newTestServer(t)
+	defer cleanup()
+	repo := db.Repository{URL: "https://example.test/hostile", Name: "hostile"}
+	s.DB.Create(&repo)
+	now := time.Now().UTC()
+	started := now.Add(-time.Hour)
+	s.DB.Create(&db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone,
+		SkillName: "vuln-scan", Model: "=2+5", StartedAt: &started, FinishedAt: &now})
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", "/reporting/report.csv?interval=all"))
+	rows, err := csv.NewReader(strings.NewReader(w.Body.String())).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelCol := slices.Index(rows[0], "model")
+	var seen bool
+	for _, row := range rows[1:] {
+		if row[slices.Index(rows[0], "row_type")] != "model" {
+			continue
+		}
+		seen = true
+		if got := row[modelCol]; got != "'=2+5" {
+			t.Errorf("model cell = %q, want neutralised '=2+5", got)
+		}
+	}
+	if !seen {
+		t.Fatal("no model row emitted")
+	}
+}
+
+// TestImportedModelCannotInjectCSVFormula is the import-to-CSV regression:
+// a sharing bundle carrying a formula as its model must reach neither the
+// finding row nor the reporting CSV. The ingest boundary drops it, so the
+// finding imports unattributed and no CSV cell leads with a formula
+// trigger.
+func TestImportedModelCannotInjectCSVFormula(t *testing.T) {
+	s, cleanup := newTestServer(t)
+	defer cleanup()
+
+	body := `{"repository":"https://example.test/injected","findings":[
+		{"title":"t","severity":"high","location":"a.go:1","model":"=1+1"}]}`
+	r := httptest.NewRequest("POST", "/api/v1/import", strings.NewReader(body))
+	r.Host = testHost
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	if w.Code != 201 {
+		t.Fatalf("import status %d: %s", w.Code, w.Body)
+	}
+	var f db.Finding
+	if err := s.DB.First(&f).Error; err != nil {
+		t.Fatal(err)
+	}
+	if f.Model != "" {
+		t.Errorf("imported Finding.Model = %q, want dropped", f.Model)
+	}
+
+	w = httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", "/reporting/report.csv?interval=all"))
+	if strings.Contains(w.Body.String(), "=1+1") {
+		t.Error("hostile model text reached the reporting CSV")
+	}
+	rows, err := csv.NewReader(strings.NewReader(w.Body.String())).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, row := range rows[1:] {
+		for j, cell := range row {
+			if cell == "" {
+				continue
+			}
+			switch cell[0] {
+			case '=', '+', '-', '@', '\t', '\r':
+				t.Errorf("row %d column %q starts with formula trigger: %q", i+1, rows[0][j], cell)
+			}
+		}
 	}
 }
 
