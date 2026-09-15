@@ -21,6 +21,8 @@ import (
 	"filippo.io/age/plugin"
 
 	"scrutineer/internal/db"
+	"scrutineer/internal/ingest"
+	"scrutineer/internal/worker"
 )
 
 const sevHigh = "High"
@@ -1060,10 +1062,10 @@ func TestExportBundleRoundTripPreservesModel(t *testing.T) {
 
 	repo := db.Repository{URL: "https://github.com/test/model-roundtrip", Name: "model-roundtrip"}
 	s.DB.Create(&repo)
-	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: "security-deep-dive", Commit: "aaa111", Model: "model-orig"}
+	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: "security-deep-dive", Commit: "aaa111", Model: "claude-fable-5-1[1m]"}
 	s.DB.Create(&scan)
 	s.DB.Create(&db.Finding{
-		ScanID: scan.ID, RepositoryID: repo.ID, Commit: "aaa111", Model: "model-orig",
+		ScanID: scan.ID, RepositoryID: repo.ID, Commit: "aaa111", Model: "claude-fable-5-1[1m]",
 		Title: "SQL Injection in login", Severity: sevHigh, Confidence: "high",
 		CWE: "CWE-89", Location: "auth/login.go:42",
 		Trace: "Unsanitised user input reaches the query builder.",
@@ -1084,8 +1086,8 @@ func TestExportBundleRoundTripPreservesModel(t *testing.T) {
 	if len(findings) != 1 {
 		t.Fatalf("got %d bundle findings, want 1", len(findings))
 	}
-	if got := findings[0].(map[string]any)["model"]; got != "model-orig" {
-		t.Fatalf("bundle finding model = %v, want model-orig", got)
+	if got := findings[0].(map[string]any)["model"]; got != "claude-fable-5-1[1m]" {
+		t.Fatalf("bundle finding model = %v, want claude-fable-5-1[1m]", got)
 	}
 
 	// Re-point the bundle at a fresh repository so the import creates a new
@@ -1111,8 +1113,37 @@ func TestExportBundleRoundTripPreservesModel(t *testing.T) {
 	if err := s.DB.Where("repository_id = ?", imported.ID).First(&f).Error; err != nil {
 		t.Fatalf("imported finding: %v", err)
 	}
-	if f.Model != "model-orig" {
-		t.Errorf("imported Finding.Model = %q, want model-orig (the exporting instance's producer, not the ingest run)", f.Model)
+	if f.Model != "claude-fable-5-1[1m]" {
+		t.Errorf("imported Finding.Model = %q, want claude-fable-5-1[1m] (the exporting instance's producer, not the ingest run)", f.Model)
+	}
+}
+
+// TestBundleImportPreservesBuiltinModelIDs locks the ingest model allowlist
+// to the ids scrutineer actually ships: every built-in id of every
+// registered backend must survive a bundle import unchanged, so a future
+// catalog entry with an unanticipated character (the [1m] suffix was the
+// first) fails here instead of silently importing findings unattributed.
+func TestBundleImportPreservesBuiltinModelIDs(t *testing.T) {
+	var checked int
+	for _, backend := range []string{"claude", "codex", "opencode", "copilot"} {
+		h, err := worker.HarnessByName(backend)
+		if err != nil {
+			continue // backend not registered in this build
+		}
+		for _, m := range worker.DefaultModelsFor(h) {
+			body := `{"repository":"https://x/y","findings":[{"title":"t","severity":"high","model":` + strconv.Quote(m.ID) + `}]}`
+			results, _, err := ingest.Parse([]byte(body))
+			if err != nil {
+				t.Fatalf("%s %s: %v", backend, m.ID, err)
+			}
+			checked++
+			if got := results[0].Findings[0].Model; got != m.ID {
+				t.Errorf("%s: built-in id %q imported as %q, want preserved", backend, m.ID, got)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no built-in model ids checked; is the harness registry empty?")
 	}
 }
 

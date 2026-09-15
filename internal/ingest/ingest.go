@@ -64,7 +64,10 @@ func normaliseModel(s string) string {
 		return ""
 	}
 	for _, r := range s {
-		if !isAlphanumeric(r) && !strings.ContainsRune("._:/@+-_", r) {
+		// Brackets carry the context-window suffix on built-in claude ids
+		// (claude-fable-5-1[1m]); they are inert in spreadsheets without a
+		// leading trigger, which the leading-alphanumeric rule prevents.
+		if !isAlphanumeric(r) && !strings.ContainsRune("._:/@+-_[]", r) {
 			return ""
 		}
 	}

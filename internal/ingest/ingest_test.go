@@ -179,6 +179,10 @@ func TestNormaliseModel(t *testing.T) {
 		{"gpt-5.2", "gpt-5.2"},
 		{"provider@2026-01", "provider@2026-01"},
 		{"llama_3:70b+tuned", "llama_3:70b+tuned"},
+		// Built-in claude ids carry a bracketed context-window suffix.
+		{"claude-fable-5[1m]", "claude-fable-5[1m]"},
+		{"claude-fable-5-1[1m]", "claude-fable-5-1[1m]"},
+		{"[1m]", ""}, // leading bracket is still not an id
 		{" claude-opus-4-1 ", "claude-opus-4-1"},
 		{long, long},
 		{"", ""},
