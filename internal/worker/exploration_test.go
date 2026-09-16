@@ -107,7 +107,18 @@ func TestStageExplorationOmitsModelInputs(t *testing.T) {
 		ExplorationMode: ExplorationRandomDig, ExplorationPath: "lib", SubPath: "lib",
 		Repository: db.Repository{URL: "https://example.com/repo", ThreatModel: `{"secret":"MODEL-CANARY"}`, ScanConfig: "attack_surface: CONFIG-CANARY"},
 	}
-	if err := StageWorkspace(work, skillDir, "http://localhost/api", "", "metadata-canary", &scan, skill); err != nil {
+	document, err := stageWorkspaceWithInputs(work, skillDir, "http://localhost/api", "", "metadata-canary", &scan, skill, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, _ := newStreamWorker(t)
+	if err := w.DB.Create(&scan).Error; err != nil {
+		t.Fatal(err)
+	}
+	skill.RequiresCommands = "sh"
+	sj := SkillJob{WorkRoot: work, SkillDir: skillDir}
+	w.configureCapabilityPreflight(t.Context(), &scan, skill, &sj, document)
+	if err := sj.checkCapabilities(t.Context(), nil, false, func(Event) {}); err != nil {
 		t.Fatal(err)
 	}
 	for _, dir := range []string{work, skillDir} {
@@ -121,6 +132,9 @@ func TestStageExplorationOmitsModelInputs(t *testing.T) {
 		}
 		if got.Scrutineer.ScanConfig != nil || got.Scrutineer.Exploration == nil || got.Scrutineer.Exploration.Path != "lib" || got.Scrutineer.ScanSubPath != "lib" {
 			t.Fatalf("wrong context: %s", b)
+		}
+		if got.Scrutineer.Preflight == nil {
+			t.Fatal("capability preflight was not staged")
 		}
 		if strings.Contains(string(b), "CANARY") || strings.Contains(string(b), "metadata-canary") {
 			t.Fatalf("model input leaked: %s", b)

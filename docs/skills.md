@@ -118,6 +118,27 @@ metadata:
 
 `min_confidence`, `report_on`, and `fail_on` only apply when `output_kind` is `findings`.
 
+## Runtime capability preflight
+
+Skills can declare static runtime requirements in frontmatter:
+
+```yaml
+metadata:
+  scrutineer.requires_commands: [cargo]
+  scrutineer.requires_features: [network-egress]
+  scrutineer.degraded_mode: true
+```
+
+`scrutineer.requires_commands` lists executable names to resolve on `PATH` without running them. `scrutineer.requires_features` lists required runner features. `scrutineer.degraded_mode` defaults to false; enable it only when the skill documents a useful fallback for missing capabilities.
+
+The worker probes once before the first agent run, using the selected image, user, workspace mount, working directory and network policy, but without model credentials or agent state mounts; local runs check the host environment. Fallback and repair runs reuse the result, while a new scan attempt probes again. Skills without requirements skip the probe.
+
+Supported features are `network-egress`, `docker-in-docker`, and `fuse`. `network-egress` means policy permits a proxy path (or local host networking), not verified connectivity, credentials or model availability; allowlists still apply. Current runners report Docker-in-Docker and FUSE as unavailable because their required runtime support is not provisioned. Declarations never grant privileges or relax network policy.
+
+The worker records `ready`, `blocked`, or `degraded` in coverage and `scrutineer.preflight` in both copies of `context.json`. Missing requirements block execution unless degraded mode is enabled; blocked and degraded results cap coverage at partial. A ready result does not mean analysis is complete. Probe errors, cancellation, malformed output and persistence failures always stop execution.
+
+Declare only requirements that apply to every invocation, not repository-specific tools such as `cargo` for all generic `verify` runs.
+
 ## Path filtering
 
 Before each scan, scrutineer prunes `workRoot/src/` so the skill only sees the files it cares about. The default filter drops lockfiles, minified bundles, build outputs, and generated trees:

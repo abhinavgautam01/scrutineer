@@ -47,6 +47,10 @@ func TestBuildRunArgs_CodexAccountAuthMount(t *testing.T) {
 		Harness:          h,
 		CodexAccountAuth: NewCodexAccountAuth("/secure/codex/auth.json"),
 	}
+	probe := strings.Join(d.buildContainerBaseArgs("/work/abs", hardenedNet{}, "/work"), " ")
+	if strings.Contains(probe, "auth.json") || strings.Contains(probe, "/harness-state") || strings.Contains(probe, "CODEX_HOME") {
+		t.Fatalf("capability probe received Codex credentials or state: %s", probe)
+	}
 	got := d.buildRunArgs("img:latest", hardenedNet{}, "/data/harness-state/scan-7")
 	if !hasAdjacent(got, "-v", "/secure/codex/auth.json:/harness-state/auth.json") {
 		t.Errorf("expected the shared Codex auth file mount in %v", got)
