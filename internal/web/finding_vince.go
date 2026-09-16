@@ -254,6 +254,9 @@ func (s *Server) loadVINCEFinding(w http.ResponseWriter, r *http.Request) (vince
 }
 
 func vinceEligibility(f db.Finding, notes []db.FindingNote, refs []db.FindingReference) error {
+	if db.FindingDisclosureBlocked(f) {
+		return db.ErrFindingNonViable
+	}
 	if strings.TrimSpace(f.DisclosureDraft) == "" {
 		return fmt.Errorf("a reviewed disclosure draft is required before VINCE submission")
 	}
@@ -654,7 +657,7 @@ func attachmentHash(attachment *vince.Attachment) string {
 }
 
 func (s *Server) persistVINCESubmission(findingID uint, vrfID, reportsURL, attachmentName string) error {
-	return s.DB.Transaction(func(tx *gorm.DB) error {
+	return db.FindingWriteTransaction(s.DB, findingID, func(tx *gorm.DB) error {
 		var refs []db.FindingReference
 		if err := tx.Where("finding_id = ?", findingID).Find(&refs).Error; err != nil {
 			return err

@@ -4,6 +4,24 @@ Entries are grouped by release, newest first. Each entry is a summary written fo
 
 ## Unreleased
 
+- Each finding now records which model first produced it. The model appears on the findings list and finding pages, in the JSONL findings exports and sharing bundles (surviving import into another instance), and the reporting page adds a per-model breakdown of scans, findings, and cost. Existing findings are attributed to their producing scan's model on upgrade.
+
+## 2026-09-12
+
+- Closed a proxy bypass that let a scan container access controls reserved for the operator. Hardened deployments using proxy sidecars now require an updated runner image; pull or rebuild it when updating the host binary. ([#1034](https://github.com/alpha-omega-security/scrutineer/pull/1034), [@p-linnane](https://github.com/p-linnane))
+- Codex scans and chat sessions can now use a dedicated ChatGPT subscription login, with account-backed work running one at a time to prevent conflicting credential refreshes. ([#1017](https://github.com/alpha-omega-security/scrutineer/pull/1017), [@p-linnane](https://github.com/p-linnane))
+- Codex's model list now includes GPT-5.6 and GPT-6 Astra. Cost reporting adds estimates for Astra and Daybreak Blue and corrects understated GPT-5.6 Sol costs. ([#1014](https://github.com/alpha-omega-security/scrutineer/pull/1014) [#1018](https://github.com/alpha-omega-security/scrutineer/pull/1018), [@p-linnane](https://github.com/p-linnane))
+- The home page and repository list now load much faster on installations with large amounts of cached repository data. ([#1009](https://github.com/alpha-omega-security/scrutineer/pull/1009), [@p-linnane](https://github.com/p-linnane))
+- Findings marked as not viable in production are now blocked before disclosure is sent to CERT/CC through VINCE. ([#1006](https://github.com/alpha-omega-security/scrutineer/pull/1006), [@abhinavgautam01](https://github.com/abhinavgautam01))
+- Repository findings exported as JSONL can now be limited to the Findings tab's results, leaving out separate scanner output. ([#1010](https://github.com/alpha-omega-security/scrutineer/pull/1010), [@alexandre-daubois](https://github.com/alexandre-daubois))
+- Saving a finding now retries while another operation holds the database lock, reducing failed analyst edits and scan updates; a lock that outlasts the retry window is reported as a temporary failure. ([#1022](https://github.com/alpha-omega-security/scrutineer/pull/1022), [@p-linnane](https://github.com/p-linnane))
+- Fixed Codex scans falling back to reduced tool support because the runner image was missing the Code Mode helper. ([#1018](https://github.com/alpha-omega-security/scrutineer/pull/1018), [@p-linnane](https://github.com/p-linnane))
+- Fixed the runner restart action doing nothing when the configured concurrency had not changed. ([#1017](https://github.com/alpha-omega-security/scrutineer/pull/1017), [@p-linnane](https://github.com/p-linnane))
+- Fixed an authentication error when exporting findings from a sub-package's page. ([#1003](https://github.com/alpha-omega-security/scrutineer/pull/1003), [@be-student](https://github.com/be-student))
+- CSAF advisory exports now report a database lookup failure instead of silently omitting information or claiming that an existing finding is missing. ([#1007](https://github.com/alpha-omega-security/scrutineer/pull/1007), [@alexandre-daubois](https://github.com/alexandre-daubois))
+
+## 2026-09-08
+
 - Native code bundled inside a project, whether pulled in as a git submodule or built as a compiled extension, is now mapped and audited alongside the main language, and a defect in a vendored component is attributed to its upstream source. ([#908](https://github.com/alpha-omega-security/scrutineer/pull/908) [#909](https://github.com/alpha-omega-security/scrutineer/pull/909), [@andrew](https://github.com/andrew))
 - Every confirmed finding is now assessed for whether it can be reached in a released build, so a flaw that only exists in test or example code is marked as such rather than treated the same as one on a shipped path. ([#900](https://github.com/alpha-omega-security/scrutineer/pull/900), [@abhinavgautam01](https://github.com/abhinavgautam01))
 - A finding's severity is now capped when verification shows a protection recorded in the project's threat model stopped the attack, or that exploiting it would need access as damaging as the flaw itself, and the evidence behind each cap is kept with the finding. ([#936](https://github.com/alpha-omega-security/scrutineer/pull/936) [#938](https://github.com/alpha-omega-security/scrutineer/pull/938) [#955](https://github.com/alpha-omega-security/scrutineer/pull/955), [@abhinavgautam01](https://github.com/abhinavgautam01))

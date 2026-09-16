@@ -813,6 +813,70 @@ func TestFindingsSearchFilters(t *testing.T) {
 	}
 }
 
+func TestFindings_modelColumnAndSort(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://example.com/x", Name: "x"}
+	s.DB.Create(&repo)
+	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: "security-deep-dive", Model: "model-col-test"}
+	s.DB.Create(&scan)
+	f := db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "SSRF in image fetcher",
+		Severity: "High", Location: "fetch.go:42", Model: "model-col-test"}
+	s.DB.Create(&f)
+
+	for _, path := range []string{
+		"/findings",                       // list renders the model column once any row has one
+		"/findings?sort=model",            // and the column sorts without erroring
+		fmt.Sprintf("/findings/%d", f.ID), // detail page shows the finding's own model
+	} {
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, localReq("GET", path))
+		if w.Code != 200 {
+			t.Errorf("%s status %d", path, w.Code)
+			continue
+		}
+		if !strings.Contains(w.Body.String(), "model-col-test") {
+			t.Errorf("%s does not show the finding's model", path)
+		}
+	}
+}
+
+// TestFindings_modelSortKeepsColumnVisible pins the interaction between the
+// rows-driven column toggle and model sorting: ascending model sort puts
+// unattributed rows first, and a page of empty models must not hide the
+// column — and with it the direction toggle — mid-sort. The th-sort link
+// (sort=model) only renders with the header, so its presence is the column's.
+func TestFindings_modelSortKeepsColumnVisible(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://example.com/x", Name: "x"}
+	s.DB.Create(&repo)
+	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: "security-deep-dive"}
+	s.DB.Create(&scan)
+	s.DB.Create(&db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "unattributed",
+		Severity: "High", Location: "a.go:1"})
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", "/findings"))
+	if w.Code != 200 {
+		t.Fatalf("status %d", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "sort=model") {
+		t.Errorf("model column rendered with no models on the page and no model sort")
+	}
+
+	w = httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", "/findings?sort=model"))
+	if w.Code != 200 {
+		t.Fatalf("sorted status %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "sort=model") {
+		t.Errorf("model column hidden while model sorting is active")
+	}
+}
+
 func TestFindings_categoryFilter(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
@@ -1549,7 +1613,7 @@ func TestFindingShow_disablesVerifyActionWhenVerifyInFlight(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", w.Code, body)
 	}
-	if strings.Contains(body, "Run verification") || strings.Contains(body, "Rerun verification") {
+	if strings.Contains(body, "Run verification</button>") || strings.Contains(body, "Rerun verification</button>") {
 		t.Error("finding page should not render a verify submit button while verify is in flight")
 	}
 	if !strings.Contains(body, `maxlength="4000" disabled`) || !strings.Contains(body, `button type="button" class="btn-outline" disabled`) || !strings.Contains(body, "Verification in progress") {
@@ -4310,6 +4374,15 @@ func TestRetry_preservesScanFields(t *testing.T) {
 				t.Errorf("retry lost focus area: %q", f.FocusArea)
 			}
 		}},
+		{"exploration", func(sc *db.Scan) {
+			sc.TriageScanID = new(uint(17))
+			sc.ExplorationMode = worker.ExplorationRandomDig
+			sc.ExplorationPath = "lib"
+		}, func(t *testing.T, f db.Scan) {
+			if f.TriageScanID == nil || *f.TriageScanID != 17 || f.ExplorationMode != worker.ExplorationRandomDig || f.ExplorationPath != "lib" {
+				t.Errorf("retry lost exploratory inputs: %+v", f)
+			}
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -4318,7 +4391,7 @@ func TestRetry_preservesScanFields(t *testing.T) {
 
 			repo := db.Repository{URL: "https://github.com/apache/airflow.git", Name: "airflow"}
 			s.DB.Create(&repo)
-			skill := db.Skill{Name: "security-deep-dive", Description: "x", Body: "b", Active: true, Source: "ui", Version: 1}
+			skill := db.Skill{Name: "security-deep-dive", Description: "x", Body: "b", Active: true, Source: "disk", SourcePath: "../../skills/security-deep-dive", Version: 1}
 			s.DB.Create(&skill)
 			orig := db.Scan{
 				RepositoryID: repo.ID, Kind: "skill", Status: db.ScanFailed,
@@ -5735,5 +5808,71 @@ func TestRepoCreate_existingRepoWithoutBranchDoesNotEnqueue(t *testing.T) {
 	s.DB.Model(&db.Scan{}).Count(&count)
 	if count != 0 {
 		t.Errorf("expected no scan for plain re-add, got %d", count)
+	}
+}
+
+// The workflow card must say which actions enqueue a model job and which only
+// record a decision, so a regression to the ambiguous Verify and Triage labels
+// fails here rather than on an operator's token bill.
+func TestFindingShow_workflowActionsStateTheirEffect(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	lib := db.Repository{URL: "https://github.com/foo/lib", Name: "lib"}
+	app := db.Repository{URL: "https://github.com/foo/app", Name: "app"}
+	for _, repo := range []*db.Repository{&lib, &app} {
+		s.DB.Create(repo)
+	}
+	s.DB.Create(&db.Dependent{RepositoryID: lib.ID, Name: "downstream", Ecosystem: "npm"})
+
+	triagedCost := "Draft disclosure, Reassess viability, Propose patch and Draft mitigation each start a model job and use tokens"
+	cases := []struct {
+		name    string
+		repo    db.Repository
+		status  db.FindingLifecycle
+		actions []string
+		want    []string
+		gone    []string
+	}{
+		{"new", app, db.FindingNew, []string{"verify", "status"},
+			[]string{"Run verification", "Mark triaged", "starts a model job to check this finding and uses tokens", "mark it triaged to save your review decision"},
+			[]string{"Skip to triage"}},
+		{"enriched", app, db.FindingEnriched, []string{"critic", "status"},
+			[]string{"Mark triaged", "Assess viability", "Mark triaged saves your review decision", "Assess viability starts a model job and uses tokens"},
+			[]string{"</i> Triage\n"}},
+		{"triaged with dependents", lib, db.FindingTriaged, []string{"disclose", "critic", "patch", "mitigate"},
+			[]string{"Draft disclosure", "Review and edit the generated draft", triagedCost},
+			nil},
+		{"triaged without dependents", app, db.FindingTriaged, []string{"disclose", "critic", "patch", "mitigate"},
+			[]string{"Draft disclosure", "patch or mitigation", triagedCost},
+			nil},
+	}
+	for _, tc := range cases {
+		scan := db.Scan{RepositoryID: tc.repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName}
+		s.DB.Create(&scan)
+		f := db.Finding{ScanID: scan.ID, RepositoryID: tc.repo.ID, Title: tc.name + " finding", Severity: "High", Status: tc.status}
+		s.DB.Create(&f)
+
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, localReq("GET", fmt.Sprintf("/findings/%d", f.ID)))
+		body := w.Body.String()
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s status %d: %s", tc.name, w.Code, body)
+		}
+		for _, action := range tc.actions {
+			if target := fmt.Sprintf(`hx-post="/findings/%d/%s"`, f.ID, action); !strings.Contains(body, target) {
+				t.Errorf("%s finding page missing action %s", tc.name, target)
+			}
+		}
+		for _, want := range tc.want {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s finding page missing workflow text %q", tc.name, want)
+			}
+		}
+		for _, gone := range tc.gone {
+			if strings.Contains(body, gone) {
+				t.Errorf("%s finding page still renders retired label %q", tc.name, gone)
+			}
+		}
 	}
 }

@@ -191,7 +191,7 @@ func TestVerifyFeedbackFormForNewFinding(t *testing.T) {
 			t.Errorf("verify %s count = %d, want one feedback-enabled entry point", attr, count)
 		}
 	}
-	for _, want := range []string{`name="feedback"`, "Run verification", "Skip to triage", "Reject"} {
+	for _, want := range []string{`name="feedback"`, "Run verification", "Mark triaged", "Reject"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q", want)
 		}

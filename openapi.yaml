@@ -989,7 +989,7 @@ paths:
             application/x-ndjson:
               schema: { $ref: '#/components/schemas/RepositoryExport' }
         '400':
-          description: Unsupported format query value, or `encrypt`/`scope`/`include` requested (only valid on per-repository bundle exports).
+          description: Unsupported format query value, or `encrypt`/`scope`/`include` requested (`scope` is only valid on per-repository exports, `encrypt`/`include` on per-repository bundle exports).
         '403':
           description: Host header is not localhost
 
@@ -1040,10 +1040,10 @@ paths:
         snippet embeds verbatim source, which a cross-party share must not leak.
 
         Adding `encrypt=1` (bundle only) wraps the bundle in armored age,
-        encrypted to every configured recipient. Adding `scope=findings` (bundle
-        only) curates the bundle to the Findings bucket (deep-dive and vuln-scan
-        audits plus operator imports), dropping per-repo scanner noise. No bearer
-        token; localhost-only.
+        encrypted to every configured recipient. Adding `scope=findings` (either
+        format) curates the export to the Findings bucket (deep-dive and
+        vuln-scan audits plus operator imports), dropping per-repo scanner
+        noise. No bearer token; localhost-only.
       operationId: exportRepositoryFindings
       security: []
       parameters:
@@ -1064,11 +1064,12 @@ paths:
         - name: scope
           in: query
           description: |
-            `findings` curates a `format=bundle` export to the Findings bucket
-            (deep-dive and vuln-scan audits plus operator imports), excluding
-            per-repo scanner noise. Requires `format=bundle`; any other value,
-            or use on the cross-repo `/v1/findings` and `/v1/scans` endpoints,
-            gets a 400. Omitted: the bundle carries every finding.
+            `findings` curates a `jsonl` or `bundle` export to the Findings
+            bucket (deep-dive and vuln-scan audits plus operator imports),
+            excluding per-repo scanner noise. It combines with `severity` and
+            `status`. Any other value, or use on the cross-repo
+            `/v1/repositories`, `/v1/findings` and `/v1/scans` endpoints, gets
+            a 400. Omitted: the export carries every finding.
           schema: { type: string, enum: [findings] }
         - name: include
           in: query
@@ -1105,7 +1106,7 @@ paths:
                 type: string
                 description: Armored age ciphertext, starting `-----BEGIN AGE ENCRYPTED FILE-----`.
         '400':
-          description: Unsupported `format`, `encrypt`/`scope`/`include` without `format=bundle`, an unknown `scope`/`include` value, or encryption requested with no recipients configured.
+          description: Unsupported `format`, `encrypt`/`include` without `format=bundle`, an unknown `scope`/`include` value, or encryption requested with no recipients configured.
         '403':
           description: Host header is not localhost
         '404':
@@ -1139,7 +1140,7 @@ paths:
             application/x-ndjson:
               schema: { $ref: '#/components/schemas/FindingExport' }
         '400':
-          description: Unsupported format query value, or `encrypt`/`scope`/`include` requested (only valid on per-repository bundle exports).
+          description: Unsupported format query value, or `encrypt`/`scope`/`include` requested (`scope` is only valid on per-repository exports, `encrypt`/`include` on per-repository bundle exports).
         '403':
           description: Host header is not localhost
 
@@ -1187,6 +1188,26 @@ paths:
         - name: skill
           in: query
           schema: { type: string }
+        - name: repository_id
+          in: query
+          description: Restrict scans to this repository. A nonexistent ID returns an empty stream.
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: kind
+          in: query
+          description: |
+            Exact, case-sensitive match against the stored scan kind (for example,
+            `skill`, `exposure`, `import` or `schedule`). Any nonempty string is accepted;
+            unknown values return an empty stream. Empty means no kind filter.
+          schema: { type: string }
+        - name: since
+          in: query
+          description: |
+            Include scans whose `created_at` is greater than or equal to this
+            RFC3339 timestamp. UTC and numeric offsets represent the same instant;
+            fractional seconds are preserved to nanosecond precision. Combine
+            with any other filters using AND. This filters creation time, so it
+            does not include older scans merely because they were updated later.
+          schema: { type: string, format: date-time }
       responses:
         '200':
           description: JSONL stream of ScanExport objects, one per line.
@@ -1194,7 +1215,7 @@ paths:
             application/x-ndjson:
               schema: { $ref: '#/components/schemas/ScanExport' }
         '400':
-          description: Unsupported format query value, or `encrypt`/`scope`/`include` requested (only valid on per-repository bundle exports).
+          description: Invalid or empty repository_id or since, unsupported format query value, or `encrypt`/`scope`/`include` requested (`scope` is only valid on per-repository exports, `encrypt`/`include` on per-repository bundle exports). Validation completes before streaming starts.
         '403':
           description: Host header is not localhost
 
@@ -1415,6 +1436,18 @@ components:
           type: string
           enum: [full, diff]
           description: Requested or resolved scan mode.
+        triage_scan_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: Triage invocation that requested this pipeline scan.
+        exploration_mode:
+          type: string
+          enum: ['', random-dig]
+          description: Empty or omitted for planned scans. Random-dig scans have no threat-model context and may only validate their own report through the callback API.
+        exploration_path:
+          type: string
+          description: Repository-relative directory selected for a random dig, or dot for root-level source. Empty until the worker selects a target.
         diff_base_scan_id:
           type: integer
           format: int64
@@ -1818,6 +1851,15 @@ components:
         - type: object
           properties:
             commit:            { type: string }
+            model:
+              type: string
+              description: |
+                Model id of the scan that first produced the finding,
+                denormalised from that scan. For findings imported from a
+                scrutineer sharing bundle it is the exporting instance's
+                producing model; empty when no model attribution was
+                recorded (deterministic imports, or rows predating model
+                recording).
             fingerprint:       { type: string }
             last_seen_scan_id: { type: integer, format: int64 }
             last_seen_commit:  { type: string }
@@ -1867,6 +1909,7 @@ components:
               reach:        { type: string }
               rating:       { type: string }
               fix_commit:   { type: string, description: "Base revision the patch applies to." }
+              model:        { type: string, description: "Model id of the scan that produced the finding on the exporting instance; preserved as the finding's model on import. Dropped unless it looks like a model id (leading alphanumeric, id charset, at most 100 chars) — bundle text is externally supplied and this field feeds the reporting CSV." }
               # Archival fields, emitted only with include=all: the operator's
               # enrichment, disclosure work product, and child records.
               snippet:                    { type: string }

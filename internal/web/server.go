@@ -835,12 +835,25 @@ func paginate(r *http.Request, total int64) Page {
 	return Page{N: n, Pages: pages, Total: total, Path: r.URL.Path, Query: r.URL.Query()}
 }
 
+// repoListFields is the complete Repository surface rendered by
+// repo_list.html. Querying into this narrow type makes GORM derive the SELECT
+// list from the template's data contract while keeping the potentially large
+// Repository cache fields out. A template reference to an unlisted field then
+// fails loudly instead of silently rendering an unhydrated zero value.
+type repoListFields struct {
+	ID         uint
+	URL        string
+	Languages  string
+	Health     db.RepositoryHealth
+	CloneError string
+	DiskBytes  int64
+}
+
 type repoRow struct {
-	db.Repository
+	repoListFields
 	LastScan      *db.Scan
 	StatusScan    *db.Scan
 	FindingsTotal int
-	DiskBytes     int64
 	// Branches lists the distinct non-default refs this repo has been
 	// scanned on, for the branch tags next to its name. Empty when every
 	// scan ran on the default branch.
@@ -927,7 +940,7 @@ func (s *Server) repoList(w http.ResponseWriter, r *http.Request) {
 	q.Count(&total)
 	page := paginate(r, total)
 
-	var repos []db.Repository
+	var repos []repoListFields
 	q.Limit(perPage).Offset((page.N - 1) * perPage).Find(&repos)
 
 	// Batch-load findings count and last scan per page (N rows) rather
@@ -1023,15 +1036,11 @@ func (s *Server) repoList(w http.ResponseWriter, r *http.Request) {
 	rows := make([]repoRow, 0, len(repos))
 	for _, repo := range repos {
 		rows = append(rows, repoRow{
-			Repository:    repo,
-			LastScan:      lastScans[repo.ID],
-			StatusScan:    statusScans[repo.ID],
-			FindingsTotal: findingCounts[repo.ID],
-			// Read the cached size from the row; the worker refreshes it on
-			// each scan and a startup backfill seeds it, so the list never
-			// walks the clone cache per row (#126).
-			DiskBytes: repo.DiskBytes,
-			Branches:  branchesByRepo[repo.ID],
+			repoListFields: repo,
+			LastScan:       lastScans[repo.ID],
+			StatusScan:     statusScans[repo.ID],
+			FindingsTotal:  findingCounts[repo.ID],
+			Branches:       branchesByRepo[repo.ID],
 		})
 	}
 	languages := distinctLanguages(s.DB)
@@ -1208,6 +1217,8 @@ func (s *Server) findings(w http.ResponseWriter, r *http.Request) {
 		q = q.Order(orderByExpr("findings.repository_id", dir, false)).Order("findings.id desc")
 	case "cwe":
 		q = q.Order(orderByExpr("findings.cwe", dir, false)).Order("findings.id desc")
+	case "model":
+		q = q.Order(orderByExpr("findings.model", dir, false)).Order("findings.id desc")
 	case "scan":
 		q = q.Order(orderByExpr("findings.scan_id", dir, true)).Order("findings.id desc")
 	default:
@@ -1225,10 +1236,17 @@ func (s *Server) findings(w http.ResponseWriter, r *http.Request) {
 
 	reposByID := loadRepoMap(s.DB, rows, findingRepoID)
 	anySubPath := false
+	// The model column always renders while model sorting is active:
+	// ascending sort puts unattributed rows first, so a page of empty
+	// models would otherwise hide the column — and its direction toggle —
+	// mid-sort.
+	anyModel := sortCol == "model"
 	for _, r := range rows {
 		if r.SubPath != "" {
 			anySubPath = true
-			break
+		}
+		if r.Model != "" {
+			anyModel = true
 		}
 	}
 	missedTotal, scannerTotal := s.findingToggleCounts(r, scanners)
@@ -1236,7 +1254,7 @@ func (s *Server) findings(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "findings.html", map[string]any{
 		"Findings": rows, "Page": page, "Severity": sev, "Sort": sort,
 		"Category": category, "Categories": CWECategories(), "Uncategorized": UncategorizedCWE,
-		"Repos": reposByID, "Q": search, "AnySubPath": anySubPath,
+		"Repos": reposByID, "Q": search, "AnySubPath": anySubPath, "AnyModel": anyModel,
 		"Owner": owner, "Missed": missed, "MissedTotal": missedTotal,
 		"Scanners": scanners, "ScannerTotal": scannerTotal,
 		"Status": status, "Statuses": db.FindingLifecycles,
@@ -1577,12 +1595,12 @@ func (s *Server) findingStatus(w http.ResponseWriter, r *http.Request) {
 	case db.FindingNew, db.FindingEnriched, db.FindingTriaged, db.FindingReady,
 		db.FindingReported, db.FindingAcknowledged, db.FindingFixed, db.FindingPublished,
 		db.FindingRejected, db.FindingDuplicate:
-		if err := db.WriteFindingField(s.DB, f.ID, statusKey, string(status), db.SourceAnalyst, ""); err != nil {
+		if err := db.WriteFindingField(s.DB.WithContext(r.Context()), f.ID, statusKey, string(status), db.SourceAnalyst, ""); err != nil {
 			if errors.Is(err, db.ErrFindingNonViable) {
 				http.Error(w, err.Error(), http.StatusPreconditionFailed)
 				return
 			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, err.Error(), findingWriteErrorStatus(err, http.StatusInternalServerError))
 			return
 		}
 	default:
@@ -1612,12 +1630,13 @@ func (s *Server) findingExploitedInWild(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	evidence := strings.TrimSpace(r.FormValue("exploited_in_wild_evidence"))
-	if err := db.WriteFindingField(s.DB, f.ID, "exploited_in_wild", status, db.SourceAnalyst, ""); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	gdb := s.DB.WithContext(r.Context())
+	if err := db.WriteFindingField(gdb, f.ID, "exploited_in_wild", status, db.SourceAnalyst, ""); err != nil {
+		http.Error(w, err.Error(), findingWriteErrorStatus(err, http.StatusInternalServerError))
 		return
 	}
-	if err := db.WriteFindingField(s.DB, f.ID, "exploited_in_wild_evidence", evidence, db.SourceAnalyst, ""); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if err := db.WriteFindingField(gdb, f.ID, "exploited_in_wild_evidence", evidence, db.SourceAnalyst, ""); err != nil {
+		http.Error(w, err.Error(), findingWriteErrorStatus(err, http.StatusInternalServerError))
 		return
 	}
 	s.redirect(w, r, fmt.Sprintf("/findings/%d", f.ID))
@@ -3290,7 +3309,10 @@ type ScanOpts struct {
 	ScanGroup string
 	// FocusArea is the complete audit focus serialized as JSON. It is an
 	// internal orchestration input, not an operator-supplied API field.
-	FocusArea string
+	FocusArea       string
+	TriageScanID    *uint
+	ExplorationMode string
+	ExplorationPath string
 	// SessionID and ResumedFromScanID carry a failed scan's claude session
 	// into its retry so the new run continues the conversation with
 	// `claude -p --resume` instead of restarting from turn 0. Both empty
@@ -3431,6 +3453,9 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 		ScopeMode:            opts.ScopeMode,
 		ScanGroup:            opts.ScanGroup,
 		FocusArea:            opts.FocusArea,
+		TriageScanID:         opts.TriageScanID,
+		ExplorationMode:      opts.ExplorationMode,
+		ExplorationPath:      opts.ExplorationPath,
 		Ref:                  opts.Ref,
 		RescanMode:           opts.RescanMode,
 		DiffBaseScanID:       opts.DiffBaseScanID,
@@ -3443,6 +3468,9 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 		SkillsRepoSHA:        s.SkillsRepoSHA,
 		APIToken:             NewAPIToken(),
 	}
+	if err := s.validateExploratoryEnqueue(&scan, &sk); err != nil {
+		return 0, err
+	}
 	// The opt-out check at the top of this function ran before every field above
 	// was resolved, so re-check it inside the creating transaction: the row is
 	// write-locked from the INSERT until commit, which leaves an opt-out only two
@@ -3452,6 +3480,9 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 	// back where it was, just narrower.
 	if err := s.DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&scan).Error; err != nil {
+			return err
+		}
+		if err := checkExploratoryDuplicate(tx, &scan); err != nil {
 			return err
 		}
 		var live db.Repository
@@ -3492,7 +3523,7 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 
 func (s *Server) skillEnqueuePreflight(repo db.Repository, skillID uint, opts ScanOpts) (db.Skill, bool, error) {
 	var sk db.Skill
-	hasSkill := s.DB.Select("name, version, metadata, requires_remote, requires_profile, model").First(&sk, skillID).Error == nil
+	hasSkill := s.DB.Select("name, version, metadata, requires_remote, requires_profile, model, source_path").First(&sk, skillID).Error == nil
 	if hasSkill && opts.FindingID != nil {
 		if err := s.ensureFindingReportable(*opts.FindingID, sk.Name); err != nil {
 			return db.Skill{}, false, err

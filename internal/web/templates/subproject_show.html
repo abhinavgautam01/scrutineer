@@ -18,7 +18,7 @@
     <input type="hidden" name="sub_path" value="{{.Sub.Path}}">
     <button type="submit" class="btn-sm-outline"><i data-lucide="play"></i> Scan this sub-package</button>
   </form>
-  <a class="btn-sm-outline" href="/api/repositories/{{.Repo.ID}}/findings?sub_path={{.Sub.Path}}"><i data-lucide="download"></i> Export findings</a>
+  <a class="btn-sm-outline" href="/api/v1/repositories/{{.Repo.ID}}/findings?sub_path={{.Sub.Path}}"><i data-lucide="download"></i> Export findings</a>
 </div>
 
 <div class="mb-6 max-w-3xl">

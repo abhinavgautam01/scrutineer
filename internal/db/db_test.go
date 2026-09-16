@@ -259,6 +259,47 @@ func TestBackfillFindingRepositoryFillsCommit(t *testing.T) {
 	}
 }
 
+func TestBackfillFindingRepositoryFillsModel(t *testing.T) {
+	gdb, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := Repository{URL: "https://example.com/x", Name: "x"}
+	if err := gdb.Create(&r).Error; err != nil {
+		t.Fatal(err)
+	}
+	s := Scan{RepositoryID: r.ID, Kind: "skill", Status: ScanDone, Model: "model-x"}
+	if err := gdb.Create(&s).Error; err != nil {
+		t.Fatal(err)
+	}
+	// One pre-column row to fill, and one bundle-imported row whose model
+	// names the exporting instance's producer and must not be overwritten
+	// with the local scan's.
+	legacy := Finding{ScanID: s.ID, RepositoryID: r.ID, Title: "legacy", Severity: "Low"}
+	imported := Finding{ScanID: s.ID, RepositoryID: r.ID, Title: "imported", Severity: "Low", Model: "model-orig"}
+	for _, f := range []*Finding{&legacy, &imported} {
+		if err := gdb.Create(f).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	BackfillFindingRepository(gdb)
+
+	var gotLegacy, gotImported Finding
+	if err := gdb.First(&gotLegacy, legacy.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if gotLegacy.Model != "model-x" {
+		t.Errorf("legacy Finding.Model = %q, want %q", gotLegacy.Model, "model-x")
+	}
+	if err := gdb.First(&gotImported, imported.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if gotImported.Model != "model-orig" {
+		t.Errorf("imported Finding.Model = %q, want %q (must not be overwritten)", gotImported.Model, "model-orig")
+	}
+}
+
 func TestOpenAndMigrate(t *testing.T) {
 	gdb, err := Open(":memory:")
 	if err != nil {
@@ -740,6 +781,43 @@ func TestWithPragmas_joinsOnExistingQuery(t *testing.T) {
 		if got := withPragmas(in); got != want {
 			t.Errorf("withPragmas(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestOpen_addsRepositoryUpdatedAtIndexToExistingDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "existing.db")
+	gdb, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqldb, err := gdb.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sqldb.Close() }()
+	if err := gdb.Migrator().DropIndex(&Repository{}, "idx_repositories_updated_at"); err != nil {
+		t.Fatal(err)
+	}
+	// Prove the precondition: without this the reopen below could pass on an
+	// index the drop never removed, and the test would assert nothing.
+	if gdb.Migrator().HasIndex(&Repository{}, "idx_repositories_updated_at") {
+		t.Fatal("DropIndex left idx_repositories_updated_at in place")
+	}
+	if err := sqldb.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopenedSQL, err := reopened.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopenedSQL.Close() }()
+	if !reopened.Migrator().HasIndex(&Repository{}, "idx_repositories_updated_at") {
+		t.Fatal("Open did not add idx_repositories_updated_at to an existing database")
 	}
 }
 

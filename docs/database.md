@@ -55,7 +55,7 @@ The central entity. One row per git URL.
 | upstream_url | text | Upstream this repository is a pushed staging copy of (no forge fork relationship). When set, the scheduler force-syncs the repository from it (a mirror push that overwrites local-only commits) before the new-commit check. Empty for ordinary repos. |
 | next_scheduled_scan_at | datetime | Scheduler bookkeeping: when the next scheduled run is due. Null means "recompute on the next tick"; schedule edits reset it instead of computing inline. |
 | created_at | datetime | |
-| updated_at | datetime | |
+| updated_at | datetime | Indexed for the repository list's default newest-first order. |
 
 ## audit_events
 
@@ -124,6 +124,9 @@ One row per skill execution or external import. `skill_name` / `skill_version` p
 | coverage | text | JSON coverage metadata. Diff scans record requested versus actual mode and fallback reasons; threat-model scans also record whether the repository working model was updated or skipped for a small diff. |
 | scan_group | text | Groups a cohort of scans launched as one batch (Scan-all-subprojects, a single New-scan run, or a Diff rescan group). Each sibling streams a finding to `POST /repositories/{id}/findings` the moment it confirms it and reads `GET /repositories/{id}/findings?scan_group=...` before reporting, so an in-flight skill sees what a sibling has filed so far — not only after that sibling finishes — and can avoid re-filing it. Empty when not part of a batch. |
 | focus_area | text | Normalized JSON snapshot of the input-processing focus area assigned to a split `security-deep-dive`. It keeps queued work reproducible if repository `scan_config` changes. Empty means the scan is unscoped and covers its normal repository or subproject scope. |
+| triage_scan_id | integer | Nullable ID of the triage scan that requested the pipeline child. Preserved through threat-model fan-out and retries; used to bound automatic exploration to one extra audit per triage invocation. |
+| exploration_mode | text | Empty for ordinary scans; `random-dig` for an independent source audit without threat-model context. Its callback token only permits validating its own report. Exploratory scans cannot serve as diff baselines. |
+| exploration_path | text | Repository-relative source directory chosen after path filtering, or `.` for root-level source. Persisted before the agent starts and preserved on retries. Empty until selection occurs. |
 | profile | text | Runner profile that ran the scan (e.g. `php`). Empty = the default runner image. Set explicitly via `?profile=` or auto-detected from the clone by `brief` before launch; persisted so retries reuse the choice. |
 | backend | text | Agent CLI (`-backend`) that ran the scan: `claude`, `codex`, `opencode`, or `copilot`. Stamped by the worker so a retry after switching `-backend` starts fresh instead of passing one harness's session id to another's resume command. Empty on rows predating the column or that never reached the runner. |
 | provider | text | Provider prefix selected from an OpenCode model id, such as `groq` or `kiro`. Empty for other backends. |
@@ -205,6 +208,7 @@ One row per vulnerability. Lifecycle columns are mutated through `db.WriteFindin
 | repository_id | integer FK | Denormalised from scan so list queries skip the join. |
 | commit | text | Denormalised from scan. |
 | sub_path | text | Denormalised from scan; sub-folder the finding's `location` is relative to. |
+| model | text | Model that first produced the finding, denormalised from the producing scan. For bundle imports it is the exporting instance's producing model. Deterministic imports (SARIF, CSV, markdown) record no model — their synchronous import scan carries none — while the queued `ingest` skill fallback records its own ingest model. Backfilled on startup; empty when the producing scan recorded no model. |
 | fingerprint | text | Content hash for cross-scan dedupe; `(repository_id, fingerprint)` is indexed. |
 | last_seen_scan_id | integer | Most recent scan that re-observed this fingerprint. |
 | last_seen_commit | text | Commit at re-observation. |

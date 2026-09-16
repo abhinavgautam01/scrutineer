@@ -6,7 +6,7 @@ toolchain go1.27.1
 
 require (
 	filippo.io/age v1.3.1
-	github.com/alpha-omega-security/harness v0.1.14
+	github.com/alpha-omega-security/harness v0.1.15
 	github.com/ecosyste-ms/ecosystems-go v0.4.0
 	github.com/git-pkgs/clone v0.7.3
 	github.com/git-pkgs/clone/gogit v0.1.1
@@ -25,6 +25,7 @@ require (
 	github.com/yuin/goldmark v1.8.5
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/crypto v0.55.0
+	golang.org/x/net v0.58.0
 	golang.org/x/term v0.45.0
 	gorm.io/gorm v1.31.2
 	maragu.dev/goqite v0.4.0
@@ -57,7 +58,6 @@ require (
 	github.com/pandatix/go-cvss v0.6.4 // indirect
 	github.com/pjbgf/sha1cd v0.6.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect

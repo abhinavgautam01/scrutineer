@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -20,6 +21,8 @@ import (
 	"filippo.io/age/plugin"
 
 	"scrutineer/internal/db"
+	"scrutineer/internal/ingest"
+	"scrutineer/internal/worker"
 )
 
 const sevHigh = "High"
@@ -40,6 +43,22 @@ func seedFindings(t *testing.T, s *Server) db.Repository {
 	s.DB.Create(&db.Finding{ScanID: scanA.ID, RepositoryID: repoA.ID, Title: "F2", Severity: "Low", Status: db.FindingNew})
 	s.DB.Create(&db.Finding{ScanID: scanB.ID, RepositoryID: repoB.ID, Title: "G1", Severity: sevHigh, Status: db.FindingNew})
 	return repoA
+}
+
+// seedScopedFindings seeds one repository with a deep-dive scan and a semgrep
+// scan, one High finding on each; the semgrep row is triaged under sub-path
+// "pkg" so status and sub_path filters keep a scanner row for scope to drop.
+func seedScopedFindings(t *testing.T, s *Server) db.Repository {
+	t.Helper()
+	repo := db.Repository{URL: "https://example.com/scoped", Name: "scoped"}
+	s.DB.Create(&repo)
+	dd := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName}
+	sg := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: "semgrep"}
+	s.DB.Create(&dd)
+	s.DB.Create(&sg)
+	s.DB.Create(&db.Finding{ScanID: dd.ID, RepositoryID: repo.ID, Title: "audit finding", Severity: sevHigh})
+	s.DB.Create(&db.Finding{ScanID: sg.ID, RepositoryID: repo.ID, Title: "semgrep noise", Severity: sevHigh, Status: db.FindingTriaged, SubPath: "pkg"})
+	return repo
 }
 
 func readJSONL(t *testing.T, body string) []map[string]any {
@@ -84,7 +103,7 @@ func TestExportRepoFindings(t *testing.T) {
 		if row["repository_id"] != float64(repoA.ID) {
 			t.Errorf("row has repository_id %v, want %d", row["repository_id"], repoA.ID)
 		}
-		for _, k := range []string{"missed_count", "last_missed_scan_id"} {
+		for _, k := range []string{"missed_count", "last_missed_scan_id", "model"} {
 			if _, ok := row[k]; !ok {
 				t.Errorf("export row missing %q", k)
 			}
@@ -235,6 +254,56 @@ func TestExportRepoFindings_severityFilter(t *testing.T) {
 	}
 	if rows[0]["severity"] != sevHigh {
 		t.Errorf("severity %v, want High", rows[0]["severity"])
+	}
+}
+
+// TestExportRepoFindings_scopeFindings pins scope=findings on JSONL: both formats
+// drop scanner rows, keep audits and imports, and combine with the other filters.
+func TestExportRepoFindings_scopeFindings(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := seedScopedFindings(t, s)
+	imp := db.Scan{RepositoryID: repo.ID, Kind: "import", Status: db.ScanDone, SkillName: "trivy"}
+	s.DB.Create(&imp)
+	s.DB.Create(&db.Finding{ScanID: imp.ID, RepositoryID: repo.ID, Title: "imported finding", Severity: "Low", Status: db.FindingTriaged, SubPath: "pkg"})
+
+	titles := func(t *testing.T, qs string) []string {
+		t.Helper()
+		r := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10)+"/findings"+qs, nil)
+		r.Host = testHost
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, r)
+		if w.Code != 200 {
+			t.Fatalf("GET %s: status %d: %s", qs, w.Code, w.Body)
+		}
+		if ct := w.Header().Get("Content-Type"); ct != "application/x-ndjson; charset=utf-8" {
+			t.Fatalf("content-type %q, want application/x-ndjson", ct)
+		}
+		var out []string
+		for _, row := range readJSONL(t, w.Body.String()) {
+			out = append(out, row["title"].(string))
+		}
+		return out
+	}
+
+	cases := []struct {
+		name, qs string
+		want     []string
+	}{
+		{"no scope keeps scanner output", "", []string{"imported finding", "semgrep noise", "audit finding"}},
+		{"default format", "?scope=findings", []string{"imported finding", "audit finding"}},
+		{"explicit jsonl", "?format=jsonl&scope=findings", []string{"imported finding", "audit finding"}},
+		{"combined with severity", "?scope=findings&severity=High", []string{"audit finding"}},
+		{"combined with status", "?scope=findings&status=triaged", []string{"imported finding"}},
+		{"combined with sub_path", "?scope=findings&sub_path=pkg", []string{"imported finding"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := titles(t, tc.qs); !slices.Equal(got, tc.want) {
+				t.Errorf("titles = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -983,6 +1052,101 @@ func TestExportBundleRoundTrip(t *testing.T) {
 	// A truly fresh import (different repo) would show created=1.
 }
 
+// TestExportBundleRoundTripPreservesModel pins the model provenance chain:
+// the bundle carries each finding's producing model, and importing the
+// bundle stores that model on the new finding rather than attributing it
+// to the receiving instance's ingest run.
+func TestExportBundleRoundTripPreservesModel(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://github.com/test/model-roundtrip", Name: "model-roundtrip"}
+	s.DB.Create(&repo)
+	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: "security-deep-dive", Commit: "aaa111", Model: "claude-fable-5-1[1m]"}
+	s.DB.Create(&scan)
+	s.DB.Create(&db.Finding{
+		ScanID: scan.ID, RepositoryID: repo.ID, Commit: "aaa111", Model: "claude-fable-5-1[1m]",
+		Title: "SQL Injection in login", Severity: sevHigh, Confidence: "high",
+		CWE: "CWE-89", Location: "auth/login.go:42",
+		Trace: "Unsanitised user input reaches the query builder.",
+	})
+
+	exportReq := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10)+"/findings?format=bundle", nil)
+	exportReq.Host = testHost
+	exportW := httptest.NewRecorder()
+	s.Handler().ServeHTTP(exportW, exportReq)
+	if exportW.Code != 200 {
+		t.Fatalf("export status %d: %s", exportW.Code, exportW.Body)
+	}
+	var bundle map[string]any
+	if err := json.Unmarshal(exportW.Body.Bytes(), &bundle); err != nil {
+		t.Fatalf("unmarshal bundle: %v", err)
+	}
+	findings, _ := bundle["findings"].([]any)
+	if len(findings) != 1 {
+		t.Fatalf("got %d bundle findings, want 1", len(findings))
+	}
+	if got := findings[0].(map[string]any)["model"]; got != "claude-fable-5-1[1m]" {
+		t.Fatalf("bundle finding model = %v, want claude-fable-5-1[1m]", got)
+	}
+
+	// Re-point the bundle at a fresh repository so the import creates a new
+	// finding instead of re-observing the exported one.
+	bundle["repository"] = "https://github.com/test/model-roundtrip-import"
+	body, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	importReq := httptest.NewRequest("POST", "/api/v1/import", strings.NewReader(string(body)))
+	importReq.Host = testHost
+	importW := httptest.NewRecorder()
+	s.Handler().ServeHTTP(importW, importReq)
+	if importW.Code != 201 {
+		t.Fatalf("import status %d: %s", importW.Code, importW.Body)
+	}
+
+	var imported db.Repository
+	if err := s.DB.Where("url = ?", "https://github.com/test/model-roundtrip-import").First(&imported).Error; err != nil {
+		t.Fatalf("imported repository: %v", err)
+	}
+	var f db.Finding
+	if err := s.DB.Where("repository_id = ?", imported.ID).First(&f).Error; err != nil {
+		t.Fatalf("imported finding: %v", err)
+	}
+	if f.Model != "claude-fable-5-1[1m]" {
+		t.Errorf("imported Finding.Model = %q, want claude-fable-5-1[1m] (the exporting instance's producer, not the ingest run)", f.Model)
+	}
+}
+
+// TestBundleImportPreservesBuiltinModelIDs locks the ingest model allowlist
+// to the ids scrutineer actually ships: every built-in id of every
+// registered backend must survive a bundle import unchanged, so a future
+// catalog entry with an unanticipated character (the [1m] suffix was the
+// first) fails here instead of silently importing findings unattributed.
+func TestBundleImportPreservesBuiltinModelIDs(t *testing.T) {
+	var checked int
+	for _, backend := range []string{"claude", "codex", "opencode", "copilot"} {
+		h, err := worker.HarnessByName(backend)
+		if err != nil {
+			continue // backend not registered in this build
+		}
+		for _, m := range worker.DefaultModelsFor(h) {
+			body := `{"repository":"https://x/y","findings":[{"title":"t","severity":"high","model":` + strconv.Quote(m.ID) + `}]}`
+			results, _, err := ingest.Parse([]byte(body))
+			if err != nil {
+				t.Fatalf("%s %s: %v", backend, m.ID, err)
+			}
+			checked++
+			if got := results[0].Findings[0].Model; got != m.ID {
+				t.Errorf("%s: built-in id %q imported as %q, want preserved", backend, m.ID, got)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no built-in model ids checked; is the harness registry empty?")
+	}
+}
+
 func TestExportBundleWithSeverityFilter(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
@@ -1681,14 +1845,7 @@ func TestExportBundle_scopeFindingsCuratesScanners(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
 
-	repo := db.Repository{URL: "https://example.com/scoped", Name: "scoped"}
-	s.DB.Create(&repo)
-	dd := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName}
-	s.DB.Create(&dd)
-	sg := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: "semgrep"}
-	s.DB.Create(&sg)
-	s.DB.Create(&db.Finding{ScanID: dd.ID, RepositoryID: repo.ID, Title: "audit finding", Severity: sevHigh})
-	s.DB.Create(&db.Finding{ScanID: sg.ID, RepositoryID: repo.ID, Title: "semgrep noise", Severity: "Low"})
+	repo := seedScopedFindings(t, s)
 
 	bundleTitles := func(qs string) []string {
 		r := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10)+"/findings?format=bundle"+qs, nil)
@@ -1724,8 +1881,7 @@ func TestExportBundle_scopeFindingsCuratesScanners(t *testing.T) {
 }
 
 // assertExportRejects runs each GET path and asserts a 400 whose body mentions
-// keyword. Shared by the scope and include rejection tests, which validate the
-// same "bundle-only query param used elsewhere" guard.
+// keyword. Shared by the scope and include rejection tests.
 func assertExportRejects(t *testing.T, s *Server, keyword string, cases []struct{ name, path string }) {
 	t.Helper()
 	for _, tc := range cases {
@@ -1744,9 +1900,8 @@ func assertExportRejects(t *testing.T, s *Server, keyword string, cases []struct
 	}
 }
 
-// TestExportBundle_scopeRejected pins the validation: an unknown scope value, a
-// scope without format=bundle, and scope on the cross-repo endpoints all 400
-// rather than silently returning a wider set than the caller asked for.
+// TestExportBundle_scopeRejected pins the validation: an unknown scope value on
+// either per-repository format and scope on the cross-repo endpoints all 400.
 func TestExportBundle_scopeRejected(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
@@ -1754,8 +1909,8 @@ func TestExportBundle_scopeRejected(t *testing.T) {
 	id := strconv.FormatUint(uint64(repo.ID), 10)
 
 	assertExportRejects(t, s, "scope", []struct{ name, path string }{
-		{"unknown scope value", "/api/v1/repositories/" + id + "/findings?format=bundle&scope=bogus"},
-		{"scope without bundle", "/api/v1/repositories/" + id + "/findings?scope=findings"},
+		{"unknown scope value on bundle", "/api/v1/repositories/" + id + "/findings?format=bundle&scope=bogus"},
+		{"unknown scope value on jsonl", "/api/v1/repositories/" + id + "/findings?scope=bogus"},
 		{"scope on repositories", "/api/v1/repositories?scope=findings"},
 		{"scope on global findings", "/api/v1/findings?scope=findings"},
 		{"scope on global scans", "/api/v1/scans?scope=findings"},
@@ -1776,14 +1931,7 @@ func TestExportBundle_scopeFindingsCuratesEncrypted(t *testing.T) {
 	s.EncRecipients = []age.Recipient{id.Recipient()}
 	s.EncIdentities = []age.Identity{id}
 
-	repo := db.Repository{URL: "https://example.com/enc-scoped", Name: "enc-scoped"}
-	s.DB.Create(&repo)
-	dd := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName}
-	s.DB.Create(&dd)
-	sg := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: "semgrep"}
-	s.DB.Create(&sg)
-	s.DB.Create(&db.Finding{ScanID: dd.ID, RepositoryID: repo.ID, Title: "audit finding", Severity: sevHigh})
-	s.DB.Create(&db.Finding{ScanID: sg.ID, RepositoryID: repo.ID, Title: "semgrep noise", Severity: "Low"})
+	repo := seedScopedFindings(t, s)
 
 	r := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10)+"/findings?format=bundle&encrypt=1&scope=findings", nil)
 	r.Host = testHost

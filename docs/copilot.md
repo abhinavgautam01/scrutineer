@@ -136,9 +136,9 @@ unpacked, and the harness passes `--no-auto-update` (plus
 newer one. Profile images inherit both the directory and the environment
 variable because they are built `FROM ${RUNNER_IMAGE}`.
 
-Keep this in mind when bumping `COPILOT_VERSION`: the version is part of the
-cache path, so the build-time unpack and the runtime lookup have to come from
-the same image layer -- which they do, but a hand-copied `copilot` binary
+Keep this in mind when bumping `COPILOT_*_LOCK`: the release tag is part of
+the cache path, so the build-time unpack and the runtime lookup have to come
+from the same image layer -- which they do, but a hand-copied `copilot` binary
 dropped into a derived image without re-running the unpack step would fall
 back to the noexec default and fail.
 

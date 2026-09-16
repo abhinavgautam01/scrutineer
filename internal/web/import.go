@@ -549,9 +549,16 @@ func buildImportFindings(scan *db.Scan, res ingest.Result) ([]db.Finding, []impo
 		// all the other formats supply.
 		commit := firstNonEmpty(in.Commit, scan.Commit)
 		f := db.Finding{
-			ScanID:         scan.ID,
-			RepositoryID:   scan.RepositoryID,
-			Commit:         commit,
+			ScanID:       scan.ID,
+			RepositoryID: scan.RepositoryID,
+			Commit:       commit,
+			// A scrutineer bundle carries the exporting instance's producing
+			// model; every other format leaves it empty, and this synchronous
+			// import scan records no model of its own, so those findings stay
+			// unattributed. (The queued LLM ingest fallback never reaches
+			// here: its report goes through the worker's skill parser, which
+			// stamps that scan's resolved model.)
+			Model:          firstNonEmpty(in.Model, scan.Model),
 			SubPath:        in.SubPath,
 			Title:          in.Title,
 			Severity:       in.Severity,

@@ -129,14 +129,13 @@ func (s stubHarness) DefaultModels() []ModelDefault { return nil }
 
 func TestHarnessDefaultModels_registryEntriesAreComplete(t *testing.T) {
 	// Every registered backend must supply a non-empty default model list
-	// with all three tiers tagged, so a fresh install of any backend has a
-	// working pick list and tier resolution without the operator setting
-	// models: in config. This tripwire lives here (not upstream) because
-	// scrutineer's UI depends on it; the module has its own priced-models
-	// tripwire.
+	// with all three tiers tagged and local cost coverage, so a fresh install of
+	// any backend has a working pick list, tier resolution, and estimate without
+	// the operator setting models: in config. This tripwire lives here because
+	// Scrutineer can override a module catalog before the module catches up.
 	for _, name := range strings.Split(HarnessNames(), ", ") {
 		h, _ := HarnessByName(name)
-		defs := h.DefaultModels()
+		defs := DefaultModelsFor(h)
 		if len(defs) == 0 {
 			t.Errorf("%s: DefaultModels() is empty", name)
 			continue
@@ -145,6 +144,9 @@ func TestHarnessDefaultModels_registryEntriesAreComplete(t *testing.T) {
 		for _, d := range defs {
 			if d.ID == "" || d.Name == "" {
 				t.Errorf("%s: entry %+v has empty Name or ID", name, d)
+			}
+			if CostFromUsage(d.ID, Usage{InputTokens: 1, OutputTokens: 1}) == 0 {
+				t.Errorf("%s: default model %q has no local price", name, d.ID)
 			}
 			if d.Tier != "" {
 				tiers[d.Tier] = true
@@ -155,6 +157,20 @@ func TestHarnessDefaultModels_registryEntriesAreComplete(t *testing.T) {
 				t.Errorf("%s: no DefaultModels() entry tagged Tier=%q", name, want)
 			}
 		}
+	}
+}
+
+func TestDefaultModelsFor_codexMatchesPinnedCatalog(t *testing.T) {
+	want := []ModelDefault{
+		{Name: "GPT-5.6 Sol", ID: "gpt-5.6-sol", Tier: "high"},
+		{Name: "GPT-5.6 Terra", ID: "gpt-5.6-terra"},
+		{Name: "GPT-5.6 Luna", ID: "gpt-5.6-luna", Tier: "mid"},
+		{Name: "GPT-6 Astra", ID: modelGPT6AstraID, Tier: "max"},
+		{Name: "GPT-5.5", ID: "gpt-5.5"},
+		{Name: "GPT-5.2", ID: "gpt-5.2"},
+	}
+	if got := DefaultModelsFor(CodexHarness{}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Codex defaults = %+v, want %+v", got, want)
 	}
 }
 
