@@ -612,6 +612,9 @@ func scanSummary(sc db.Scan) map[string]any {
 		errorKey:               sc.Error,
 	}
 	m["refusal_audit_warning"] = sc.RefusalAuditWarning
+	if sc.VerificationFeedback != "" {
+		m["verification_feedback"] = sc.VerificationFeedback
+	}
 	if sc.ExplorationMode != "" {
 		m["exploration_mode"] = sc.ExplorationMode
 		m["exploration_path"] = sc.ExplorationPath

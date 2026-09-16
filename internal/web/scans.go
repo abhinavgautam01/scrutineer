@@ -366,6 +366,7 @@ func (s *Server) scanRetry(w http.ResponseWriter, r *http.Request) {
 		SessionID:            sessionID,
 		ResumedFromScanID:    resumeOf,
 		ParentScanID:         &scan.ID,
+		VerificationFeedback: scan.VerificationFeedback,
 		// An ingest scan's input is the uploaded payload, not ./src;
 		// without it the retry stages no import/report and the model
 		// runs against a missing file.
@@ -442,7 +443,7 @@ func (s *Server) scansRetryFailed(w http.ResponseWriter, r *http.Request) {
 	// deliberately absent: a user-cancelled newer run shouldn't block
 	// retrying an older genuine failure.
 	var scans []db.Scan
-	err = q.Select("id, repository_id, skill_id, model, effort, finding_id, remediation_attempt_id, sub_path, scope_mode, ref, profile, rescan_mode, diff_base_scan_id, scan_group, focus_area, triage_scan_id, exploration_mode, exploration_path, backend, status, session_id, resumed_from_scan_id, import_payload").
+	err = q.Select("id, repository_id, skill_id, model, effort, finding_id, remediation_attempt_id, sub_path, scope_mode, ref, profile, rescan_mode, diff_base_scan_id, scan_group, focus_area, triage_scan_id, exploration_mode, exploration_path, backend, status, session_id, resumed_from_scan_id, import_payload, verification_feedback").
 		Where(`NOT EXISTS (
 			SELECT 1 FROM scans n
 			WHERE n.id > scans.id
@@ -482,6 +483,7 @@ func (s *Server) scansRetryFailed(w http.ResponseWriter, r *http.Request) {
 			SessionID:            sessionID,
 			ResumedFromScanID:    resumeOf,
 			ParentScanID:         &parent,
+			VerificationFeedback: sc.VerificationFeedback,
 			ImportPayload:        sc.ImportPayload,
 		}); err != nil {
 			if errors.Is(err, db.ErrFindingNonViable) {

@@ -1613,10 +1613,10 @@ func TestFindingShow_disablesVerifyActionWhenVerifyInFlight(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", w.Code, body)
 	}
-	if strings.Contains(body, fmt.Sprintf(`hx-post="/findings/%d/verify"`, f.ID)) {
-		t.Error("finding page should not render an active verify action while verify is in flight")
+	if strings.Contains(body, "Run verification</button>") || strings.Contains(body, "Rerun verification</button>") {
+		t.Error("finding page should not render a verify submit button while verify is in flight")
 	}
-	if !strings.Contains(body, `button type="button" class="btn" disabled`) || !strings.Contains(body, "Verification in progress") {
+	if !strings.Contains(body, `maxlength="4000" disabled`) || !strings.Contains(body, `button type="button" class="btn-outline" disabled`) || !strings.Contains(body, "Verification in progress") {
 		t.Errorf("finding page should render disabled verify state, body=%s", body)
 	}
 }

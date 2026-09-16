@@ -90,16 +90,6 @@
     <form method="post" action="/findings/{{$id}}/status" hx-swap="none"
           class="flex items-center gap-2 shrink-0">
       {{if eq $s "new"}}
-        {{if .VerifyInFlight}}
-          <button type="button" class="btn" disabled title="A verify scan is already queued or running for this finding">
-            <i data-lucide="loader-circle" class="animate-spin"></i> Verification in progress
-          </button>
-        {{else}}
-          <button type="submit" class="btn" formaction="/findings/{{$id}}/verify"
-                  hx-post="/findings/{{$id}}/verify">
-            <i data-lucide="shield-check"></i> Run verification
-          </button>
-        {{end}}
         <button type="submit" name="status" value="triaged" class="btn-outline"
                 hx-post="/findings/{{$id}}/status">
           Mark triaged
