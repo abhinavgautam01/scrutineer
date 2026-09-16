@@ -53,7 +53,7 @@
 
   <section class="border-b py-4" id="verification-run">
     <h3 class="text-sm font-medium mb-3">Verification</h3>
-    <form method="post" action="/findings/{{$f.ID}}/verify" class="form grid gap-3">
+    <form method="post" action="/findings/{{$f.ID}}/verify" hx-post="/findings/{{$f.ID}}/verify" hx-swap="none" class="form grid gap-3">
       <label for="verification-feedback" class="text-sm">Feedback (optional)</label>
       <textarea id="verification-feedback" name="feedback" class="input w-full" rows="3" maxlength="4000" {{if .Workflow.VerifyInFlight}}disabled{{end}}></textarea>
       <div class="flex justify-end">

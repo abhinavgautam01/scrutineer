@@ -82,6 +82,13 @@ func TestVerifyRerunFeedback(t *testing.T) {
 	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "&lt;script&gt;") || strings.Contains(page.Body.String(), "<script>alert(1)</script>") {
 		t.Fatal("scan feedback missing or not escaped")
 	}
+	body := page.Body.String()
+	crumbsEnd := strings.Index(body, "</ol>")
+	heading := strings.Index(body, "<h2")
+	feedbackHeading := strings.Index(body, ">Verification feedback</h3>")
+	if crumbsEnd < 0 || heading < crumbsEnd || feedbackHeading < heading {
+		t.Fatal("scan feedback should follow the breadcrumbs and page heading")
+	}
 	if err := s.DB.Model(&scan).Update("status", db.ScanDone).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +154,7 @@ func TestVerifyFeedbackFormAfterVerification(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("finding page: %d", w.Code)
 	}
-	for _, want := range []string{fmt.Sprintf(`action="/findings/%d/verify" class="form grid gap-3"`, f.ID), `name="feedback"`, "Rerun verification", "old feedback", "Verification history"} {
+	for _, want := range []string{fmt.Sprintf(`action="/findings/%d/verify" hx-post="/findings/%d/verify" hx-swap="none"`, f.ID, f.ID), `name="feedback"`, "Rerun verification", "old feedback", "Verification history"} {
 		if !strings.Contains(w.Body.String(), want) {
 			t.Errorf("missing %q", want)
 		}
@@ -160,6 +167,62 @@ func TestVerifyFeedbackFormAfterVerification(t *testing.T) {
 	s.Handler().ServeHTTP(w, localReq(http.MethodGet, fmt.Sprintf("/findings/%d", f.ID)))
 	if !strings.Contains(w.Body.String(), `maxlength="4000" disabled`) || !strings.Contains(w.Body.String(), "Verification in progress") {
 		t.Fatal("queued verification did not disable the feedback form")
+	}
+}
+
+func TestVerifyFeedbackFormForNewFinding(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	f := seedVerificationFeedback(t, s)
+	if err := s.DB.Model(&f).Update("status", db.FindingNew).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.Where("finding_id = ?", f.ID).Delete(&db.FindingVerification{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq(http.MethodGet, fmt.Sprintf("/findings/%d", f.ID)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("finding page: %d", w.Code)
+	}
+	body := w.Body.String()
+	for _, attr := range []string{"action", "hx-post"} {
+		if count := strings.Count(body, fmt.Sprintf(`%s="/findings/%d/verify"`, attr, f.ID)); count != 1 {
+			t.Errorf("verify %s count = %d, want one feedback-enabled entry point", attr, count)
+		}
+	}
+	for _, want := range []string{`name="feedback"`, "Run verification", "Skip to triage", "Reject"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+}
+
+func TestVerifyFeedbackHTMXRedirect(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	f := seedVerificationFeedback(t, s)
+	feedback := "Check the parser entry point"
+	var location string
+	for range 2 {
+		r := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/findings/%d/verify", f.ID), strings.NewReader(url.Values{"feedback": {feedback}}.Encode()))
+		r.Host = testHost
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.Header.Set("HX-Request", "true")
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, r)
+		if w.Code != http.StatusNoContent || !strings.HasPrefix(w.Header().Get("HX-Redirect"), "/scans/") {
+			t.Fatalf("htmx enqueue: %d %s headers=%v", w.Code, w.Body, w.Header())
+		}
+		if location != "" && w.Header().Get("HX-Redirect") != location {
+			t.Fatal("duplicate htmx request did not redirect to the existing run")
+		}
+		location = w.Header().Get("HX-Redirect")
+	}
+	assertQueuedJobCount(t, s, 1)
+	var scan db.Scan
+	if err := s.DB.Where("finding_id = ? AND status = ?", f.ID, db.ScanQueued).First(&scan).Error; err != nil || scan.VerificationFeedback != feedback {
+		t.Fatalf("htmx request dropped feedback: %+v err=%v", scan, err)
 	}
 }
 

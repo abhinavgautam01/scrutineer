@@ -1649,8 +1649,6 @@ func (s *Server) findingVerify(w http.ResponseWriter, r *http.Request) {
 	if !parseVerificationFeedback(w, r) {
 		return
 	}
-	s.agentEnqueueMu.Lock()
-	defer s.agentEnqueueMu.Unlock()
 	s.runFindingSkill(w, r, verifySkillName, true)
 }
 
@@ -1679,6 +1677,11 @@ func (s *Server) findingMitigate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) runFindingSkill(w http.ResponseWriter, r *http.Request, name string, skipOpen bool) {
+	if skipOpen {
+		// Keep the open-scan check and enqueue atomic with other finding launches.
+		s.agentEnqueueMu.Lock()
+		defer s.agentEnqueueMu.Unlock()
+	}
 	f, ok := loadByID[db.Finding](s, w, r)
 	if !ok {
 		return
