@@ -173,22 +173,22 @@ func exploratorySourceFile(name string) bool {
 	return slices.Contains(exploratorySourceExtensions, strings.ToLower(path.Ext(name)))
 }
 
-func stageExploratoryWorkspace(workRoot, skillDir, apiBase string, scan *db.Scan, skill *db.Skill) error {
+func stageExploratoryWorkspace(workRoot, skillDir, apiBase string, scan *db.Scan, skill *db.Skill) (skillContext, error) {
 	if err := ValidateExploration(scan, skill.Name); err != nil {
-		return err
+		return skillContext{}, err
 	}
 	if scan.ExplorationPath == "" {
-		return fmt.Errorf("exploratory audit requires a selected directory")
+		return skillContext{}, fmt.Errorf("exploratory audit requires a selected directory")
 	}
 	body, err := ExplorationInstructions(skill)
 	if err != nil {
-		return err
+		return skillContext{}, err
 	}
 	// The loaded skill is scan-local. Update it too so the logged prompt and
 	// any report-repair invocation describe the instructions actually staged.
 	skill.Body = string(body)
 	if err := stageSkill(skill, workRoot, skillDir); err != nil {
-		return err
+		return skillContext{}, err
 	}
 	// Staging keeps repository identity, scope, and the token, but omits
 	// model-derived guidance. The web server's apiAuth middleware separately
@@ -196,5 +196,9 @@ func stageExploratoryWorkspace(workRoot, skillDir, apiBase string, scan *db.Scan
 	blind := *scan
 	blind.Repository.ScanConfig = ""
 	blind.Repository.ThreatModel = ""
-	return stageContext(workRoot, skillDir, apiBase, "", "", &blind, &blind.Repository)
+	document, err := buildSkillContext(apiBase, "", "", &blind, &blind.Repository, nil, nil, nil)
+	if err != nil {
+		return skillContext{}, err
+	}
+	return document, writeSkillContext(workRoot, skillDir, document)
 }
