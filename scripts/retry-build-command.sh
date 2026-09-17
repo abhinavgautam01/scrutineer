@@ -1,5 +1,5 @@
 #!/bin/sh
-# Retry idempotent build commands without changing their verification settings.
+# Retry idempotent build commands.
 set -eu
 
 if [ "$#" -eq 0 ]; then
