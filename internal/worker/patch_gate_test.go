@@ -164,9 +164,6 @@ func gateRepo(t *testing.T, dir string) (relPath, diff string) {
 		return string(out)
 	}
 	run("init", "-q")
-	// Keep background maintenance from changing .git while fixtures are copied.
-	run("config", "maintenance.auto", "false")
-	run("config", "gc.auto", "0")
 	run("config", "user.email", "t@t")
 	run("config", "user.name", "t")
 	run("add", ".")
