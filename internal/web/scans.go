@@ -440,8 +440,12 @@ func (s *Server) scansRetryFailed(w http.ResponseWriter, r *http.Request) {
 	var totalFailed int64
 	q.Count(&totalFailed)
 
-	// A newer cancelled attempt must not block retries. Include focus_area
-	// in the match so retrying one area does not suppress the others.
+	// Skip a failed scan when a newer queued/running/done/failed/paused scan
+	// supersedes the same (repository, skill, sub_path, ref, finding_id) tuple.
+	// An unscoped focus area supersedes and is superseded by any area, while two
+	// scoped runs only supersede each other when their areas match. Cancelled is
+	// deliberately absent: a user-cancelled newer run must not block retrying an
+	// older genuine failure.
 	var scans []db.Scan
 	err = q.Select("id, repository_id, skill_id, model, effort, finding_id, remediation_attempt_id, sub_path, scope_mode, ref, profile, rescan_mode, diff_base_scan_id, scan_group, focus_area, backend, status, session_id, resumed_from_scan_id, import_payload").
 		Where(`NOT EXISTS (
@@ -452,7 +456,11 @@ func (s *Server) scansRetryFailed(w http.ResponseWriter, r *http.Request) {
 			  AND COALESCE(n.sub_path, '') = COALESCE(scans.sub_path, '')
 			  AND COALESCE(n.ref, '') = COALESCE(scans.ref, '')
 			  AND COALESCE(n.finding_id, 0) = COALESCE(scans.finding_id, 0)
-			  AND COALESCE(n.focus_area, '') = COALESCE(scans.focus_area, '')
+			  AND (
+				COALESCE(n.focus_area, '') = COALESCE(scans.focus_area, '')
+				OR COALESCE(n.focus_area, '') = ''
+				OR COALESCE(scans.focus_area, '') = ''
+			  )
 			  AND n.status IN ?
 		)`, []db.ScanStatus{db.ScanQueued, db.ScanRunning, db.ScanDone, db.ScanFailed, db.ScanPaused}).
 		Find(&scans).Error
