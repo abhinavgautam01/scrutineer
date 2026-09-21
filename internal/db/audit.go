@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 
@@ -13,7 +14,7 @@ import (
 
 var ErrInvalidFindingReview = errors.New("invalid finding review")
 
-const MaxReviewReasonBytes = 4096
+const MaxReviewReasonChars = 4096
 
 // ValidReviewVerdicts is the closed set the audit form and API accept.
 // Matches the revalidate skill's enum so reviewer agreement with the
@@ -38,8 +39,11 @@ func AddFindingReview(gdb *gorm.DB, findingID uint, verdict, reason, automatedOu
 		return nil, fmt.Errorf("%w: unknown verdict %q", ErrInvalidFindingReview, verdict)
 	}
 	reason = strings.TrimSpace(reason)
-	if len(reason) > MaxReviewReasonBytes || (verdict == "false_positive" && reason == "") {
-		return nil, fmt.Errorf("%w: false-positive reviews require a reason; reasons must not exceed %d bytes", ErrInvalidFindingReview, MaxReviewReasonBytes)
+	if verdict == "false_positive" && reason == "" {
+		return nil, fmt.Errorf("%w: false-positive reviews require a reason", ErrInvalidFindingReview)
+	}
+	if utf8.RuneCountInString(reason) > MaxReviewReasonChars {
+		return nil, fmt.Errorf("%w: reasons must not exceed %d characters", ErrInvalidFindingReview, MaxReviewReasonChars)
 	}
 	var f Finding
 	if err := gdb.First(&f, findingID).Error; err != nil {

@@ -32,7 +32,7 @@ func FindingFeedbackForPaths(gdb *gorm.DB, repoID uint, paths []string) ([]Findi
 	err := gdb.Table("finding_reviews AS r").
 		Select(`r.id AS review_id, r.finding_id, r.finding_fingerprint AS fingerprint,
 			r.source_scan_id, r.source_commit, r.finding_path AS path, r.cwe,
-			substr(r.reason, 1, ?) AS reason, substr(r.reviewer, 1, 256) AS reviewer, r.created_at`, MaxReviewReasonBytes).
+			substr(r.reason, 1, ?) AS reason, substr(r.reviewer, 1, 256) AS reviewer, r.created_at`, MaxReviewReasonChars).
 		Joins("JOIN findings f ON f.id = r.finding_id").
 		Where("f.repository_id = ? AND f.status = ?", repoID, FindingRejected).
 		Where("r.verdict = ? AND r.source_scan_id > 0 AND trim(r.reason) <> ''", "false_positive").

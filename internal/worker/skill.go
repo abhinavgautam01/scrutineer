@@ -1471,7 +1471,7 @@ func (w *Worker) stageWorkspace(ctx context.Context, workRoot, skillDir string, 
 		return skillContext{}, err
 	}
 	return stageWorkspaceWithInputs(
-		workRoot, skillDir, w.apiBaseFor(skill.Name), w.ForkOrg, w.metadataDir(), scan, skill, recon, novelty, controls, feedback...,
+		workRoot, skillDir, w.apiBaseFor(skill.Name), w.ForkOrg, w.metadataDir(), scan, skill, recon, novelty, controls, feedback,
 	)
 }
 
@@ -1480,7 +1480,7 @@ func (w *Worker) stageWorkspace(ctx context.Context, workRoot, skillDir string, 
 // rendered skill bundle, and optional import payloads. Production adds recon
 // context for threat-model in Worker.stageWorkspace.
 func StageWorkspace(workRoot, skillDir, apiBase, forkOrg, metadataDir string, scan *db.Scan, skill *db.Skill) error {
-	_, err := stageWorkspaceWithInputs(workRoot, skillDir, apiBase, forkOrg, metadataDir, scan, skill, nil, nil, nil)
+	_, err := stageWorkspaceWithInputs(workRoot, skillDir, apiBase, forkOrg, metadataDir, scan, skill, nil, nil, nil, nil)
 	return err
 }
 
@@ -1491,7 +1491,7 @@ func stageWorkspaceWithInputs(
 	recon *skillContextRecon,
 	novelty *skillContextNovelty,
 	controls *skillContextControls,
-	feedback ...db.FindingFeedback,
+	feedback []db.FindingFeedback,
 ) (skillContext, error) {
 	if scan.ExplorationMode != "" {
 		return stageExploratoryWorkspace(workRoot, skillDir, apiBase, scan, skill)

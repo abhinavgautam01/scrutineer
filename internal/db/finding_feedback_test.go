@@ -109,7 +109,7 @@ func TestFindingFeedbackExcludesLegacyAndOtherDecisions(t *testing.T) {
 func TestRejectFindingValidation(t *testing.T) {
 	gdb, f := feedbackFixture(t)
 	for _, tc := range []struct{ verdict, reason string }{
-		{"", "reason"}, {"true_positive", "reason"}, {"false_positive", " \n\t"}, {"uncertain", ""}, {"already_fixed", strings.Repeat("x", MaxReviewReasonBytes+1)},
+		{"", "reason"}, {"true_positive", "reason"}, {"false_positive", " \n\t"}, {"uncertain", ""}, {"already_fixed", strings.Repeat("x", MaxReviewReasonChars+1)},
 	} {
 		if err := RejectFinding(gdb, f.ID, tc.verdict, tc.reason, ""); !errors.Is(err, ErrInvalidFindingReview) {
 			t.Fatalf("accepted invalid review: %v", err)
@@ -117,6 +117,40 @@ func TestRejectFindingValidation(t *testing.T) {
 	}
 	if _, err := AddFindingReview(gdb, f.ID, "false_positive", "", "", ""); !errors.Is(err, ErrInvalidFindingReview) {
 		t.Fatalf("empty FP reason accepted: %v", err)
+	}
+}
+
+func TestAddFindingReviewReasonCharacters(t *testing.T) {
+	gdb, f := feedbackFixture(t)
+	for _, char := range []string{"x", "\u00e9", "\U0001f600"} {
+		t.Run(char, func(t *testing.T) {
+			reason := strings.Repeat(char, MaxReviewReasonChars)
+			review, err := AddFindingReview(gdb, f.ID, "false_positive", " \n"+reason+"\t ", "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var stored FindingReview
+			if err := gdb.First(&stored, review.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if stored.Reason != reason {
+				t.Fatal("reason changed during persistence")
+			}
+			for _, verdict := range []string{"false_positive", "already_fixed", "true_positive", "uncertain"} {
+				_, err := AddFindingReview(gdb, f.ID, verdict, reason+char, "", "")
+				want := fmt.Sprintf("%s: reasons must not exceed %d characters", ErrInvalidFindingReview, MaxReviewReasonChars)
+				if !errors.Is(err, ErrInvalidFindingReview) || err.Error() != want {
+					t.Fatalf("%s: error = %v, want %q", verdict, err, want)
+				}
+			}
+		})
+	}
+	_, err := AddFindingReview(gdb, f.ID, "false_positive", " \n\t", "", "")
+	if !errors.Is(err, ErrInvalidFindingReview) || err.Error() != "invalid finding review: false-positive reviews require a reason" {
+		t.Fatalf("missing reason: %v", err)
+	}
+	if _, err := AddFindingReview(gdb, f.ID, "already_fixed", "", "", ""); err != nil {
+		t.Fatalf("optional non-FP reason: %v", err)
 	}
 }
 

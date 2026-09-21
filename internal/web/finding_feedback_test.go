@@ -59,6 +59,30 @@ func TestFindingRejectionDatabaseError(t *testing.T) {
 	}
 }
 
+func TestFindingRejectionMultibyteReason(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	f, _ := seedAuditFixture(t, s)
+	if err := s.DB.Model(&f).Update("location", "parser.go:10").Error; err != nil {
+		t.Fatal(err)
+	}
+	reason := strings.Repeat("\u00e9", db.MaxReviewReasonChars)
+	form := url.Values{statusKey: {"rejected"}, "verdict": {"false_positive"}, "reason": {reason}}
+	if w := postFindingStatus(t, s, f.ID, form); w.Code >= 400 {
+		t.Fatalf("valid multibyte reason rejected: %d: %s", w.Code, w.Body)
+	}
+	feedback, err := db.FindingFeedbackForPaths(s.DB, f.RepositoryID, []string{"parser.go"})
+	if err != nil || len(feedback) != 1 || feedback[0].Reason != reason {
+		t.Fatalf("multibyte reason lost in feedback: %d entries, error = %v", len(feedback), err)
+	}
+	form.Set("verdict", "already_fixed")
+	form.Set("reason", reason+"\u00e9")
+	w := postFindingStatus(t, s, f.ID, form)
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "reasons must not exceed 4096 characters") || strings.Contains(w.Body.String(), "false-positive") {
+		t.Fatalf("incorrect length error: %d: %s", w.Code, w.Body)
+	}
+}
+
 func TestFindingRejectionDialog(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
