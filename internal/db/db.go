@@ -288,6 +288,13 @@ type Scan struct {
 	// work remains reproducible if the repository configuration changes.
 	FocusArea string `gorm:"type:text"`
 
+	// TriageScanID identifies the triage invocation that requested this scan.
+	// ExplorationMode is empty for planned audits. ExplorationPath records the
+	// source directory selected for a random dig or adversarial sweep.
+	TriageScanID    *uint `gorm:"index"`
+	ExplorationMode string
+	ExplorationPath string
+
 	// RescanMode records the actual coverage mode for this scan. Empty and
 	// "full" mean ordinary full coverage. "diff" means the worker staged a
 	// baseline diff and skills should not claim coverage over untouched code.
@@ -364,6 +371,9 @@ type Scan struct {
 	// which is only set when the retry actually resumes a harness session
 	// — a retry of a done or cancelled scan has a parent but no session.
 	ParentScanID *uint `gorm:"index"`
+	// VerificationFeedback is operator guidance snapshotted for this verify run.
+	// It is not a verdict and is never copied into the finding's reproduction.
+	VerificationFeedback string `gorm:"type:text"`
 
 	// Recipe is an immutable JSON snapshot (worker.ScanRecipe) of the
 	// inputs the worker was handed, written once inside the transaction
@@ -781,6 +791,20 @@ type Finding struct {
 	RepositoryID uint `gorm:"index;index:idx_findings_repo_fp,priority:1"`
 	Commit       string
 	SubPath      string `gorm:"index"`
+	// Model is the model id of the scan that first produced this finding,
+	// denormalized like Commit so exports and the reporting page can
+	// attribute findings to a model without joining through Scan. Set at
+	// finding-create time from the producing scan and never changed on
+	// re-observation; BackfillFindingRepository fills rows that predate
+	// the column. For findings imported from a scrutineer sharing bundle
+	// it carries the *exporting* instance's producing model when the
+	// bundle recorded one; the deterministic importers (SARIF, CSV,
+	// markdown) run on a synchronous import scan that records no model,
+	// so their findings stay empty, while the queued LLM ingest fallback
+	// stamps its own resolved model like any skill run. ImportedFrom
+	// disambiguates. Also empty when the producing scan predates
+	// Scan.Model.
+	Model string `gorm:"index"`
 
 	// Fingerprint dedupes the same vulnerability reported by repeated
 	// scans; see FingerprintFinding. ScanID/Commit are first-seen;
@@ -1418,6 +1442,10 @@ type Skill struct {
 	// never enqueued for the repo is treated as satisfied so gating
 	// decisions in triage do not deadlock dependent skills.
 	Requires string `gorm:"type:text"`
+	// Runtime capabilities checked before spending any model turns.
+	RequiresCommands string `gorm:"type:text"`
+	RequiresFeatures string `gorm:"type:text"`
+	DegradedMode     bool
 
 	Source     string // "bundled" | "local" | "remote" | "ui"
 	SourcePath string // directory on disk (bundled/local/remote) or empty (ui)
@@ -2074,9 +2102,12 @@ func BackfillStatusPriority(gdb *gorm.DB) {
 	gdb.Exec(`UPDATE scans SET status_priority = 3 WHERE status NOT IN ('running', 'queued', 'paused') AND (status_priority IS NULL OR status_priority != 3)`)
 }
 
-// BackfillFindingRepository copies Scan.RepositoryID onto Finding rows
-// whose RepositoryID column is still zero. Used on first boot after
-// adding the denormalized column so existing findings pick up their repo.
+// BackfillFindingRepository copies the columns denormalized from Scan
+// (RepositoryID, Commit, Model) onto Finding rows that still have them
+// empty. Used on first boot after adding each denormalized column so
+// existing findings pick up the value from their producing scan. A
+// finding whose producing scan itself predates Scan.Model stays empty:
+// the model genuinely was not recorded.
 func BackfillFindingRepository(gdb *gorm.DB) {
 	gdb.Exec(`
 		UPDATE findings
@@ -2091,6 +2122,16 @@ func BackfillFindingRepository(gdb *gorm.DB) {
 			SELECT "commit" FROM scans WHERE scans.id = findings.scan_id
 		)
 		WHERE "commit" IS NULL OR "commit" = ''
+	`)
+	gdb.Exec(`
+		UPDATE findings
+		SET model = (
+			SELECT model FROM scans WHERE scans.id = findings.scan_id
+		)
+		WHERE (model IS NULL OR model = '')
+		  AND (
+			SELECT model FROM scans WHERE scans.id = findings.scan_id
+		  ) IS NOT NULL
 	`)
 }
 

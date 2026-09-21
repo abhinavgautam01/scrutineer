@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"flag"
 	"reflect"
 	"strings"
 	"testing"
@@ -74,6 +75,25 @@ func TestParseProxyConfig_RequiresTokenAndAllow(t *testing.T) {
 	}
 	if _, err := parseProxyConfig(nil, envMap(map[string]string{"SCRUTINEER_PROXY_TOKEN": "tok"})); err == nil {
 		t.Error("expected error when allowlist is empty")
+	}
+}
+
+func TestParseProxyConfig_RequiredCapability(t *testing.T) {
+	env := envMap(map[string]string{
+		"SCRUTINEER_PROXY_TOKEN": "tok",
+		"SCRUTINEER_PROXY_ALLOW": "example.com",
+	})
+	if _, err := parseProxyConfig([]string{"--require-capability=" + worker.ProxyCapabilityDenyAPIConnect}, env); err != nil {
+		t.Fatalf("supported capability rejected: %v", err)
+	}
+	if _, err := parseProxyConfig([]string{"--require-capability=unknown"}, env); err == nil {
+		t.Fatal("unsupported required capability accepted")
+	}
+	if _, err := parseProxyConfig([]string{"--require-capability=unknown", "-h"}, env); err == nil || errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("unsupported capability hidden by help: %v", err)
+	}
+	if _, err := parseProxyConfig([]string{"--require-capability=" + worker.ProxyCapabilityDenyAPIConnect, "-h"}, env); !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("supported capability with help: got %v, want flag.ErrHelp", err)
 	}
 }
 

@@ -78,7 +78,12 @@ func (s *Server) apiAuth(next http.Handler) http.Handler {
 			writeAPIError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		if scan.ExplorationMode != "" && (r.Method != http.MethodPost || r.URL.Path != fmt.Sprintf("/scans/%d/validate-report", scan.ID)) {
+			writeAPIError(w, http.StatusForbidden, "exploratory audits may only validate their own report")
+			return
+		}
 		ctx := context.WithValue(r.Context(), apiCtxKey{}, &scan)
+		ctx = db.WithAuditScan(ctx, scan.ID, scan.SkillName)
 		r.Body = http.MaxBytesReader(w, r.Body, apiMaxBody)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -392,7 +397,12 @@ func (s *Server) apiRunSkill(w http.ResponseWriter, r *http.Request) {
 	if !s.agentAPIRepoHasCapacity(w, uint(id)) {
 		return
 	}
+	var triageID *uint
+	if caller := scanFromRequest(r); caller != nil && caller.SkillName == "triage" {
+		triageID = &caller.ID
+	}
 	scanID, err := s.enqueueSkillWith(r.Context(), uint(id), skill.ID, ScanOpts{
+		TriageScanID:   triageID,
 		Model:          body.Model,
 		Ref:            body.Ref,
 		Profile:        body.Profile,
@@ -603,6 +613,16 @@ func scanSummary(sc db.Scan) map[string]any {
 		errorKey:               sc.Error,
 	}
 	m["refusal_audit_warning"] = sc.RefusalAuditWarning
+	if sc.VerificationFeedback != "" {
+		m["verification_feedback"] = sc.VerificationFeedback
+	}
+	if sc.ExplorationMode != "" {
+		m["exploration_mode"] = sc.ExplorationMode
+		m["exploration_path"] = sc.ExplorationPath
+	}
+	if sc.TriageScanID != nil {
+		m["triage_scan_id"] = *sc.TriageScanID
+	}
 	if sc.Ref != "" {
 		m["ref"] = sc.Ref
 	}

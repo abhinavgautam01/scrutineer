@@ -91,6 +91,10 @@ type ContainerRunner struct {
 	OpencodeProviders map[string]OpencodeProviderConfig
 	// OpencodeReadiness caches successful provider/model catalog probes.
 	OpencodeReadiness *OpencodeReadinessCache
+	// CodexAccountAuth is a file-backed ChatGPT login shared by Codex scans.
+	// Its semaphore serializes Codex execution because the CLI can rotate
+	// auth.json.
+	CodexAccountAuth *CodexAccountAuth
 	// detectProfile lets tests stub profile auto-detection without a container
 	// runtime. nil means DetectProfile.
 	detectProfile func(ctx context.Context, rt ContainerRuntime, runnerImage, srcDir string, relabel bool) Profile
@@ -267,6 +271,10 @@ func (s containerRunErrorState) failure(provider opencodeProvider, runtimeName s
 // Egress is routed through scrutineer's allowlisting proxy on the host;
 // see EgressProxy. tmpfs/cap-drop rules mirror the local runner's intent.
 func (d ContainerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Event)) (SkillResult, error) {
+	if HarnessName(d.harness()) == "codex" && d.CodexAccountAuth != nil && sj.StateDir == "" {
+		return SkillResult{}, errors.New("codex account auth requires a per-job state directory")
+	}
+
 	d, provider, result, cleanupProviderProxy, err := d.prepareOpencodeExecution(ctx, sj.Model)
 	if err != nil {
 		return result, err
@@ -322,6 +330,21 @@ func (d ContainerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Ev
 		return result, err
 	}
 	runBase := d.buildRunArgsForProvider(absWork, image, hnet, absConfig, provider, "/work")
+	h := d.harness()
+	unlockCodexAuth := func() {}
+	if HarnessName(h) == "codex" {
+		unlockCodexAuth, err = d.CodexAccountAuth.acquire(ctx)
+		if err != nil {
+			return result, fmt.Errorf("acquire codex account credential: %w", err)
+		}
+	}
+	defer unlockCodexAuth()
+
+	probeBase := append([]string{runtimeBin(d.Runtime)}, d.buildContainerBaseArgs(absWork, hnet, "/work")...)
+	probeBase = append(probeBase, "--", image)
+	if err := sj.checkCapabilities(ctx, probeBase, d.ProxyURL != "" || hnet.proxyEndpoint != "", emit); err != nil {
+		return result, err
+	}
 
 	logLine := "$ " + runtimeBin(d.Runtime) + " run --rm " + image + " <skill:" + sj.Name + ">"
 	if d.ModelBaseURL != "" {
@@ -329,7 +352,6 @@ func (d ContainerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Ev
 	}
 	emit(Event{Kind: KindText, Text: logLine})
 
-	h := d.harness()
 	runErrors := containerRunErrorState{}
 	wrappedEmit := func(e Event) {
 		runErrors.observe(e, h, provider.ID)
@@ -414,6 +436,38 @@ func (d ContainerRunner) runContainerOnce(ctx context.Context, runBase []string,
 // complexity manageable as new toggles (hardened mode, proxy, profiles)
 // accumulate.
 func (d ContainerRunner) buildRunArgsForProvider(absWork, image string, hnet hardenedNet, harnessStateDir string, provider opencodeProvider, workdir string) []string {
+	args := d.buildContainerBaseArgs(absWork, hnet, workdir)
+	// Agent credentials and resumable state are deliberately absent from probes.
+	for _, e := range d.harness().Env(d.ModelBaseURL) {
+		if provider.Configured && opencodeInheritedCredential(e) {
+			continue
+		}
+		args = append(args, "-e", e)
+	}
+	keys := make([]string, 0, len(provider.Env))
+	for key := range provider.Env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		args = append(args, "-e", key)
+	}
+	if harnessStateDir != "" {
+		args = append(args, "-v", bindMount(harnessStateDir, "/harness-state", d.SELinuxRelabel))
+		for _, e := range d.harness().StateEnv("/harness-state") {
+			args = append(args, "-e", e)
+		}
+		args = d.appendCodexAccountAuthArgs(args)
+	}
+	if HarnessName(d.harness()) == "opencode" {
+		args = d.appendOpencodeStateArgs(args, harnessStateDir, provider)
+	}
+	return append(args, "--", image)
+}
+
+// buildContainerBaseArgs shares isolation, workspace, and network policy without
+// passing model credentials or mounting the agent's authentication/session store.
+func (d ContainerRunner) buildContainerBaseArgs(absWork string, hnet hardenedNet, workdir string) []string {
 	gwTarget := "host-gateway"
 	if d.Hardened {
 		// setupHardenedNetwork resolved the gateway once against this per-scan
@@ -436,22 +490,6 @@ func (d ContainerRunner) buildRunArgsForProvider(absWork, image string, hnet har
 		"-v", bindMount(absWork, "/work", d.SELinuxRelabel),
 		"-w", workdir,
 	)
-	// Harness-specific env: model-API credential, base URL, and the
-	// harness's own telemetry / autoupdate suppressors.
-	for _, e := range d.harness().Env(d.ModelBaseURL) {
-		if provider.Configured && opencodeInheritedCredential(e) {
-			continue
-		}
-		args = append(args, "-e", e)
-	}
-	keys := make([]string, 0, len(provider.Env))
-	for key := range provider.Env {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		args = append(args, "-e", key)
-	}
 	if supportsHostGatewayAddHost(d.Runtime) {
 		args = append(args, "--add-host", HostGatewayAlias+":"+gwTarget)
 	}
@@ -461,21 +499,6 @@ func (d ContainerRunner) buildRunArgsForProvider(absWork, image string, hnet har
 		// would land owned by a subordinate uid. keep-id maps the container
 		// user back to the invoking host uid so output stays host-owned.
 		args = append(args, "--userns=keep-id")
-	}
-	if harnessStateDir != "" {
-		// Persist the harness's resumable session store outside the
-		// container. Without this it lands in the /tmp tmpfs and dies
-		// with the container, so a retry could not resume the agent
-		// loop. The bind mount stays writable even under hardened
-		// mode's --read-only rootfs. The mountpoint is fixed; each
-		// harness points its own state env var(s) at it via StateEnv.
-		args = append(args, "-v", bindMount(harnessStateDir, "/harness-state", d.SELinuxRelabel))
-		for _, e := range d.harness().StateEnv("/harness-state") {
-			args = append(args, "-e", e)
-		}
-	}
-	if HarnessName(d.harness()) == "opencode" {
-		args = d.appendOpencodeStateArgs(args, harnessStateDir, provider)
 	}
 	if d.Hardened || d.HardenedRuntimeOnly {
 		// Read-only rootfs + no-new-privileges close the residual paths a
@@ -531,7 +554,18 @@ func (d ContainerRunner) buildRunArgsForProvider(absWork, image string, hnet har
 	} else if !d.Hardened {
 		args = append(args, "--network", "none")
 	}
-	return append(args, "--", image)
+	return args
+}
+
+func (d ContainerRunner) appendCodexAccountAuthArgs(args []string) []string {
+	if HarnessName(d.harness()) != "codex" || d.CodexAccountAuth == nil {
+		return args
+	}
+	// Mount only the rotating account credential into this scan's private
+	// CODEX_HOME. The pinned Codex release rewrites auth.json in place, so a
+	// read-write mount preserves refreshes without exposing one scan's sessions
+	// or history to another scan.
+	return append(args, "-v", bindMount(d.CodexAccountAuth.Path, "/harness-state/auth.json", d.SELinuxRelabel))
 }
 
 func opencodeInheritedCredential(env string) bool {
@@ -1019,9 +1053,10 @@ func (d ContainerRunner) sidecarNetworkIP(name, network string) (string, error) 
 // listen keyword binds to; startProxySidecar connects the default (egress)
 // bridge afterwards, so the listener never faces it. It deliberately runs the
 // DEFAULT runner image (d.image()), which is guaranteed to carry the scrutineer
-// binary, not the per-scan profile image. No --rm, so a sidecar that exits on
-// an unreachable host API lingers long enough for verifyHardenedNetwork to
-// capture its logs.
+// binary, not the per-scan profile image. The required-capability flag makes a
+// stale binary fail closed instead of serving without the host-API CONNECT
+// guard. No --rm, so a sidecar that exits on an unreachable host API lingers
+// long enough for verifyHardenedNetwork to capture its logs.
 func (d ContainerRunner) proxySidecarRunArgs(name, network string) []string {
 	args := runtimeRunArgs(d.Runtime,
 		"-d",
@@ -1036,7 +1071,8 @@ func (d ContainerRunner) proxySidecarRunArgs(name, network string) []string {
 	for _, e := range EgressSidecarEnv(d.Egress, SidecarListenFirstIface+":"+proxySidecarPort) {
 		args = append(args, "-e", e)
 	}
-	return append(args, "--", d.image(), "scrutineer", "proxy")
+	return append(args, "--", d.image(), "scrutineer", "proxy",
+		"--require-capability="+ProxyCapabilityDenyAPIConnect)
 }
 
 // EgressSidecarEnv returns the SCRUTINEER_PROXY_* environment assignments the
@@ -1101,28 +1137,31 @@ func noteworthyProxyLogLine(line string) bool {
 	return strings.Contains(line, "level=WARN") || strings.Contains(line, "level=ERROR")
 }
 
-// VerifyProxyBinary smoke-tests that the runner image carries the scrutineer
-// binary the egress proxy sidecar runs (`scrutineer proxy`). A runner image
-// without it -- an old cached image, or a custom --runner-image not built from
-// Dockerfile.runner -- would otherwise make every sidecar-backed scan fail
-// with a cryptic per-scan exec error; this turns that into one clear startup
-// failure. It is a no-op when the image is not present locally yet (the first
-// scan pulls it and would surface the same issue then), matching
-// container.VerifyKeepID.
+// VerifyProxyBinary smoke-tests that the runner image's `scrutineer proxy`
+// supports the host-required API CONNECT policy. A missing or stale binary
+// would otherwise fail later with a cryptic per-scan exec error; this turns
+// that into one clear startup failure. It is a no-op when the image is not
+// present locally yet (the first scan pulls it and the actual sidecar command
+// enforces the same capability), matching container.VerifyKeepID.
 // Only meaningful on the sidecar path; the caller checks the runtime trait.
 func VerifyProxyBinary(ctx context.Context, rt ContainerRuntime, image string) error {
 	if image == "" || !imageExistsLocally(ctx, rt, image) {
 		return nil
 	}
-	args := runtimeRunArgs(rt, "--rm", "--pull", "never",
-		"--", image, "scrutineer", "proxy", "-h")
+	args := proxyBinaryCheckArgs(rt, image)
 	out, err := exec.CommandContext(ctx, runtimeBin(rt), args...).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("runner image %q is missing the scrutineer binary required for the "+
-			"hardened egress proxy sidecar (rebuild it from Dockerfile.runner): %w: %s",
+		return fmt.Errorf("runner image %q does not support the hardened egress proxy policy "+
+			"required by this scrutineer binary (update it or rebuild it from Dockerfile.runner): %w: %s",
 			image, err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+func proxyBinaryCheckArgs(rt ContainerRuntime, image string) []string {
+	return runtimeRunArgs(rt, "--rm", "--pull", "never",
+		"--", image, "scrutineer", "proxy",
+		"--require-capability="+ProxyCapabilityDenyAPIConnect, "-h")
 }
 
 // verifyHardenedNetwork fails closed when the per-scan --internal network does

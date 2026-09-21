@@ -77,9 +77,10 @@ func (p *pluginNames) String() string     { return strings.Join(*p, ",") }
 func (p *pluginNames) Set(v string) error { *p = append(*p, v); return nil }
 
 const (
-	dataPermSecure     = 0o700
-	shutdownTimeout    = 5 * time.Second
-	skillsCloneTimeout = 2 * time.Minute
+	dataPermSecure              = 0o700
+	shutdownTimeout             = 5 * time.Second
+	skillsCloneTimeout          = 2 * time.Minute
+	codexAccountAuthConcurrency = 1
 )
 
 func main() {
@@ -107,6 +108,7 @@ type flags struct {
 	effort                string
 	defaultModel          string
 	backend               string
+	codexAuthFile         string
 	noContainer           bool
 	hostSkills            []string
 	runtime               string
@@ -127,6 +129,7 @@ type flags struct {
 	metadataDir           string
 	schemaStrict          bool
 	downgradeOnOverage    bool
+	pauseOnOverage        bool
 	recipientsFile        string
 	identityFile          string
 	identityPlugins       pluginNames
@@ -278,6 +281,7 @@ func registerFlags(fs *flag.FlagSet, f *flags) {
 	fs.BoolVar(&f.monorepoAttribution, "monorepo-attribution", true, "link packages, advisories, maintainers and disclosure channel to the sub-package they belong to (matched by manifest name) instead of rolling up flat under the repository")
 	fs.BoolVar(&f.schemaStrict, "schema-strict", false, "fail scans whose report.json does not validate against the skill's schema (default: warn and continue)")
 	fs.BoolVar(&f.downgradeOnOverage, "downgrade-on-overage", false, "on a subscription token, fall the model tier back from max/high to the mid tier for new scans while the account is on overage; restores when the window resets")
+	fs.BoolVar(&f.pauseOnOverage, "pause-on-overage", false, "pause model scans when subscription overage is reported; takes precedence over downgrade-on-overage")
 	fs.StringVar(&f.recipientsFile, "recipients-file", "", "age recipients file (public keys) for encrypted export")
 	fs.StringVar(&f.identityFile, "identity-file", "", "age identity file or SSH private key for decrypting imports and federation feeds")
 	fs.Var(&f.identityPlugins, "identity-plugin", "data-less age identity plugin name for decrypting imports and federation feeds (repeatable)")
@@ -316,6 +320,10 @@ func (f *flags) merge(cfg *config.Config) {
 	f.hostSkills = cfg.HostSkills
 	if cfg.Backend != "" && !f.set["backend"] {
 		f.backend = cfg.Backend
+	}
+	// Config-only: auth.json contains rotating ChatGPT account credentials.
+	if cfg.Codex.AuthFile != "" {
+		f.codexAuthFile = cfg.Codex.AuthFile
 	}
 	if cfg.Runtime != "" && !f.set["runtime"] {
 		f.runtime = cfg.Runtime
@@ -383,6 +391,9 @@ func (f *flags) merge(cfg *config.Config) {
 	if cfg.DowngradeOnOverage != nil && !f.set["downgrade-on-overage"] {
 		f.downgradeOnOverage = *cfg.DowngradeOnOverage
 	}
+	if cfg.PauseOnOverage != nil && !f.set["pause-on-overage"] {
+		f.pauseOnOverage = *cfg.PauseOnOverage
+	}
 	if cfg.RecipientsFile != "" && !f.set["recipients-file"] {
 		f.recipientsFile = cfg.RecipientsFile
 	}
@@ -447,16 +458,24 @@ func (f *flags) fullClone() bool { return f.cloneMode == "full" }
 // opens or creates (data dir, local skill dirs, profiles dir, and the
 // recipients/identity key files), so config values like "data: ~/scrutineer"
 // work — the shell expands ~ for CLI flags but never for config-file values,
-// and Go's os package does no tilde expansion of its own. metadata_dir is
-// deliberately excluded (it names a path inside a staging git repo, not a host
-// path); skills_repo is a URL, not a path.
+// and Go's os package does no tilde expansion of its own. The Codex credential
+// path is also made absolute so validation and the runtime mount use one file.
+// metadata_dir is deliberately excluded (it names a path inside a staging git
+// repo, not a host path); skills_repo is a URL, not a path.
 func (f *flags) normalizePaths() error {
-	for _, p := range []*string{&f.dataDir, &f.profilesDir, &f.recipientsFile, &f.identityFile} {
+	for _, p := range []*string{&f.dataDir, &f.profilesDir, &f.recipientsFile, &f.identityFile, &f.codexAuthFile} {
 		expanded, err := expandHome(*p)
 		if err != nil {
 			return err
 		}
 		*p = expanded
+	}
+	if f.codexAuthFile != "" {
+		absolute, err := filepath.Abs(f.codexAuthFile)
+		if err != nil {
+			return fmt.Errorf("resolve codex.auth_file: %w", err)
+		}
+		f.codexAuthFile = absolute
 	}
 	for i, dir := range f.skillLocal {
 		expanded, err := expandHome(dir)
@@ -494,6 +513,17 @@ func validateFlags(f *flags) error {
 	}
 	if _, err := worker.HarnessByName(f.backend); err != nil {
 		return err
+	}
+	if f.codexAuthFile != "" {
+		if f.backend != "codex" {
+			return fmt.Errorf("codex.auth_file requires backend %q", "codex")
+		}
+		if os.Getenv("CODEX_API_KEY") != "" || os.Getenv("OPENAI_API_KEY") != "" {
+			return errors.New("codex.auth_file cannot be combined with CODEX_API_KEY or OPENAI_API_KEY; unset API keys to prevent accidental credit usage")
+		}
+		if err := worker.ValidateCodexAuthFile(f.codexAuthFile); err != nil {
+			return err
+		}
 	}
 	if err := config.ValidateRuntime(f.runtime); err != nil {
 		return err
@@ -643,10 +673,14 @@ func run(log *slog.Logger) error {
 			f.concurrency = v
 		}
 	}
+	enforceCodexAccountAuthConcurrency(f, log)
 
 	q, err := queue.New(sqldb, log, f.concurrency)
 	if err != nil {
 		return fmt.Errorf("queue: %w", err)
+	}
+	if f.codexAuthFile != "" {
+		q.SetMaxConcurrency(codexAccountAuthConcurrency)
 	}
 
 	skills.ModelValidator = web.ValidModelPreference
@@ -684,6 +718,7 @@ func run(log *slog.Logger) error {
 		ScanTimeout:           f.scanTimeout,
 		SchemaStrict:          f.schemaStrict,
 		DowngradeOnOverage:    f.downgradeOnOverage,
+		PauseOnOverage:        f.pauseOnOverage,
 		AutoRejectMissedCount: f.autoRejectMissedCount,
 		SubprojectScope:       f.subprojectScope,
 		MonorepoAttribution:   f.monorepoAttribution,
@@ -1021,7 +1056,11 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 	if err != nil {
 		return nil, "", err
 	}
-	allow := buildEgressAllow(h.EgressHosts(), f.hardened, cfg, f.modelBaseURL, log)
+	harnessHosts := h.EgressHosts()
+	if f.codexAuthFile != "" {
+		harnessHosts = append(harnessHosts, worker.CodexAccountAuthHost)
+	}
+	allow := buildEgressAllow(harnessHosts, f.hardened, cfg, f.modelBaseURL, log)
 	// The host-gateway alias is always an API host so a container that CONNECTs
 	// to host.docker.internal:<port> gets the port gate and loopback rewrite on
 	// every runtime, including Apple where the container reaches the proxy via
@@ -1093,8 +1132,20 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 		},
 		OpencodeProviders: opencodeProviders,
 		OpencodeReadiness: worker.NewOpencodeReadinessCache(),
+		CodexAccountAuth:  worker.NewCodexAccountAuth(f.codexAuthFile),
 	}
 	return splitHostSkills(f, runner, local, hostBase, log), apiBase, nil
+}
+
+// enforceCodexAccountAuthConcurrency starts the queue at the same one-slot
+// limit SetMaxConcurrency retains across later settings-driven runner swaps.
+// The runner semaphore remains the credential-level backstop for chat turns.
+func enforceCodexAccountAuthConcurrency(f *flags, log *slog.Logger) {
+	if f.codexAuthFile == "" || f.concurrency == codexAccountAuthConcurrency {
+		return
+	}
+	log.Warn("codex account auth requires serialized scans; forcing concurrency to 1", "configured", f.concurrency)
+	f.concurrency = codexAccountAuthConcurrency
 }
 
 // splitHostSkills wraps the container runner so the host_skills entries run
@@ -1296,8 +1347,8 @@ func resolveEgressSidecar(rt worker.ContainerRuntime, f *flags, allow []string, 
 	if !rt.NeedsEgressSidecar() {
 		return worker.EgressSidecarConfig{}, nil
 	}
-	// Fail fast if the runner image lacks the scrutineer binary the sidecar runs,
-	// rather than letting every hardened scan fail with a cryptic per-scan error.
+	// Fail fast if the runner image lacks the proxy policy capability the sidecar
+	// requires, rather than letting every hardened scan fail with a cryptic error.
 	smokeCtx, cancel := context.WithTimeout(context.Background(), f.smokeTimeout)
 	defer cancel()
 	if err := worker.VerifyProxyBinary(smokeCtx, rt, f.runnerImage); err != nil {

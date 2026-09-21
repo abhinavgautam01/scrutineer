@@ -47,6 +47,8 @@ func testRepoDeleteLinkedData(t *testing.T, foreignKeys bool) {
 	keepScan := db.Scan{RepositoryID: keep.ID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName}
 	s.DB.Create(&keepScan)
 	s.DB.Create(&db.Finding{ScanID: keepScan.ID, RepositoryID: keep.ID, Title: "survivor", Severity: "High"})
+	keepAudit := db.AdvisoryAudit{RepositoryID: keep.ID, ScanID: keepScan.ID, AdvisoryUUID: "GHSA-keep", Status: "fixed"}
+	s.DB.Create(&keepAudit)
 
 	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName}
 	s.DB.Create(&scan)
@@ -87,6 +89,7 @@ func testRepoDeleteLinkedData(t *testing.T, foreignKeys bool) {
 	s.DB.Create(&db.Dependency{RepositoryID: repo.ID, Name: "left-pad", Ecosystem: "npm"})
 	s.DB.Create(&db.Package{RepositoryID: repo.ID, Name: "acme-pkg", Ecosystem: "npm"})
 	s.DB.Create(&db.Advisory{RepositoryID: repo.ID, Title: "CVE-2026-0001"})
+	s.DB.Create(&db.AdvisoryAudit{RepositoryID: repo.ID, ScanID: scan.ID, AdvisoryUUID: "GHSA-doomed", Status: "fixed"})
 	seedRepoDeleteAssessments(t, s, repo, finding, scan)
 
 	maintainer := db.Maintainer{Login: "alice", Name: "Alice", Status: db.MaintainerActive}
@@ -143,25 +146,26 @@ func testRepoDeleteLinkedData(t *testing.T, foreignKeys bool) {
 		t.Errorf("repository row survived (%d)", n)
 	}
 	for name, n := range map[string]int64{
-		"scans":         count(&db.Scan{}, "repository_id = ?", repo.ID),
-		"findings":      count(&db.Finding{}, "repository_id = ?", repo.ID),
-		"subprojects":   count(&db.Subproject{}, "repository_id = ?", repo.ID),
-		"dependencies":  count(&db.Dependency{}, "repository_id = ?", repo.ID),
-		"dependents":    count(&db.Dependent{}, "repository_id = ?", repo.ID),
-		"packages":      count(&db.Package{}, "repository_id = ?", repo.ID),
-		"advisories":    count(&db.Advisory{}, "repository_id = ?", repo.ID),
-		"notes":         count(&db.FindingNote{}, "finding_id = ?", finding.ID),
-		"comms":         count(&db.FindingCommunication{}, "finding_id = ?", finding.ID),
-		"refs":          count(&db.FindingReference{}, "finding_id = ?", finding.ID),
-		"history":       count(&db.FindingHistory{}, "finding_id = ?", finding.ID),
-		"reviews":       count(&db.FindingReview{}, "finding_id = ?", finding.ID),
-		"findingdep":    count(&db.FindingDependent{}, "finding_id = ?", finding.ID),
-		"alternatives":  count(&db.PackageAlternative{}, "repository_id = ?", repo.ID),
-		"expected":      count(&db.ExpectedFinding{}, "repository_id = ?", repo.ID),
-		"verifications": count(&db.FindingVerification{}, "finding_id = ?", finding.ID),
-		"attackpaths":   count(&db.FindingAttackPath{}, "finding_id = ?", finding.ID),
-		"attempts":      count(&db.RemediationAttempt{}, "finding_id = ?", finding.ID),
-		"validations":   count(&db.RemediationValidation{}, "finding_id = ?", finding.ID),
+		"scans":          count(&db.Scan{}, "repository_id = ?", repo.ID),
+		"findings":       count(&db.Finding{}, "repository_id = ?", repo.ID),
+		"subprojects":    count(&db.Subproject{}, "repository_id = ?", repo.ID),
+		"dependencies":   count(&db.Dependency{}, "repository_id = ?", repo.ID),
+		"dependents":     count(&db.Dependent{}, "repository_id = ?", repo.ID),
+		"packages":       count(&db.Package{}, "repository_id = ?", repo.ID),
+		"advisories":     count(&db.Advisory{}, "repository_id = ?", repo.ID),
+		"advisoryaudits": count(&db.AdvisoryAudit{}, "repository_id = ?", repo.ID),
+		"notes":          count(&db.FindingNote{}, "finding_id = ?", finding.ID),
+		"comms":          count(&db.FindingCommunication{}, "finding_id = ?", finding.ID),
+		"refs":           count(&db.FindingReference{}, "finding_id = ?", finding.ID),
+		"history":        count(&db.FindingHistory{}, "finding_id = ?", finding.ID),
+		"reviews":        count(&db.FindingReview{}, "finding_id = ?", finding.ID),
+		"findingdep":     count(&db.FindingDependent{}, "finding_id = ?", finding.ID),
+		"alternatives":   count(&db.PackageAlternative{}, "repository_id = ?", repo.ID),
+		"expected":       count(&db.ExpectedFinding{}, "repository_id = ?", repo.ID),
+		"verifications":  count(&db.FindingVerification{}, "finding_id = ?", finding.ID),
+		"attackpaths":    count(&db.FindingAttackPath{}, "finding_id = ?", finding.ID),
+		"attempts":       count(&db.RemediationAttempt{}, "finding_id = ?", finding.ID),
+		"validations":    count(&db.RemediationValidation{}, "finding_id = ?", finding.ID),
 	} {
 		if n != 0 {
 			t.Errorf("%s rows survived the delete (%d)", name, n)
@@ -213,6 +217,9 @@ func testRepoDeleteLinkedData(t *testing.T, foreignKeys bool) {
 	}
 	if n := count(&db.Finding{}, "repository_id = ?", keep.ID); n != 1 {
 		t.Errorf("unrelated repo's findings were deleted")
+	}
+	if n := count(&db.AdvisoryAudit{}, "id = ?", keepAudit.ID); n != 1 {
+		t.Errorf("unrelated repo's advisory audit was deleted")
 	}
 	// The cross-repo finding-scoped scan survives, but its dangling link is cleared.
 	var survivor db.Scan
@@ -446,13 +453,24 @@ func TestRepoDiskUsage_localRepoIsZero(t *testing.T) {
 
 func seedRepoDeleteAssessments(t *testing.T, s *Server, repo db.Repository, finding db.Finding, scan db.Scan) {
 	t.Helper()
+	seedFindingAssessments(t, s, finding, scan)
+	for _, row := range []any{
+		&db.PackageAlternative{RepositoryID: repo.ID, PURL: "pkg:npm/replacement", Kind: db.PackageAlternativeFork},
+		&db.ExpectedFinding{RepositoryID: repo.ID, File: "src/test.php", CWE: "CWE-79"},
+	} {
+		if err := s.DB.Create(row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func seedFindingAssessments(t *testing.T, s *Server, finding db.Finding, scan db.Scan) {
+	t.Helper()
 	attempt := db.RemediationAttempt{FindingID: finding.ID, PatchScanID: scan.ID, Attempt: 1}
 	if err := s.DB.Create(&attempt).Error; err != nil {
 		t.Fatal(err)
 	}
 	for _, row := range []any{
-		&db.PackageAlternative{RepositoryID: repo.ID, PURL: "pkg:npm/replacement", Kind: db.PackageAlternativeFork},
-		&db.ExpectedFinding{RepositoryID: repo.ID, File: "src/test.php", CWE: "CWE-79"},
 		&db.FindingVerification{FindingID: finding.ID, ScanID: scan.ID, Status: "verified", Report: "{}"},
 		&db.FindingAttackPath{FindingID: finding.ID, ScanID: scan.ID, ProductionViability: db.ProductionViabilityViable, Report: "{}"},
 		&db.RemediationValidation{FindingID: finding.ID, ScanID: scan.ID, RemediationAttemptID: attempt.ID, RootCauseStatus: db.ReattackFailedToBypass, Report: "{}"},

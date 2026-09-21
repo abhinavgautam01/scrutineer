@@ -7,12 +7,15 @@ import (
 )
 
 const (
-	modelGPT6AstraID = "gpt-6-astra"
-	perMillionTokens = 1e6
+	modelDaybreakBlueID = "gpt-daybreak-blue-latest"
+	modelGPT56SolID     = "gpt-5.6-sol"
+	modelGPT6AstraID    = "gpt-6-astra"
+	perMillionTokens    = 1e6
 
-	// GPT-6 Astra base list prices in USD per million tokens. The aggregate
+	// Standard base list prices in USD per million tokens. The aggregate
 	// Usage event cannot identify requests that crossed the long-context
 	// threshold, so this deliberately remains a base-rate estimate.
+	// https://developers.openai.com/api/docs/pricing
 	gpt6AstraInputPrice       = 10.00
 	gpt6AstraOutputPrice      = 50.00
 	gpt6AstraCachedInputPrice = 1.00
@@ -21,8 +24,7 @@ const (
 
 // CostFromUsage computes the dollar cost of one result event's token usage
 // against the given model's list price. Harness owns the shared pricing table;
-// the local Astra row bridges the newer Codex catalog until the module ships
-// matching defaults and pricing.
+// local handling bridges GPT-6 Astra until the module ships its pricing.
 func CostFromUsage(model string, u Usage) float64 {
 	if normalizePricingModelID(model) != modelGPT6AstraID {
 		return harness.CostFromUsage(model, u)

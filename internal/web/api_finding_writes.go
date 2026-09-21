@@ -55,7 +55,7 @@ func (s *Server) apiPatchFinding(w http.ResponseWriter, r *http.Request) {
 		fields = append(fields, field)
 	}
 	sort.Strings(fields)
-	if err := s.DB.Transaction(func(tx *gorm.DB) error {
+	if err := db.FindingWriteTransaction(s.DB.WithContext(r.Context()), uint(id), func(tx *gorm.DB) error {
 		for _, field := range fields {
 			if err := db.WriteFindingField(tx, uint(id), field, body.Fields[field], source, body.By); err != nil {
 				return err
@@ -67,7 +67,7 @@ func (s *Server) apiPatchFinding(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusPreconditionFailed, err.Error())
 			return
 		}
-		writeAPIError(w, http.StatusUnprocessableEntity, err.Error())
+		writeAPIError(w, findingWriteErrorStatus(err, http.StatusUnprocessableEntity), err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -189,7 +189,7 @@ func (s *Server) apiSetFindingLabels(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "body must be JSON with a labels array")
 		return
 	}
-	if err := db.SetFindingLabels(s.DB, id, body.Labels); err != nil {
+	if err := db.SetFindingLabels(s.DB.WithContext(r.Context()), id, body.Labels, sourceFromRequest(r), ""); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

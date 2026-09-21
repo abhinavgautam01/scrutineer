@@ -296,6 +296,10 @@ type sharingFinding struct {
 	Reach        string `json:"reach,omitempty"`
 	Rating       string `json:"rating,omitempty"`
 	FixCommit    string `json:"fix_commit,omitempty"`
+	// Model is provenance like Commit and VID — which model produced the
+	// finding on the exporting instance — so it rides the default bundle
+	// and survives the round-trip into the receiver's Finding.Model.
+	Model string `json:"model,omitempty"`
 
 	// Sinks rides the default bundle. Everything below it is populated only for
 	// include=all; omitempty keeps a default bundle byte-identical to the
@@ -413,6 +417,7 @@ func (s *Server) apiExportRepoBundle(w http.ResponseWriter, r *http.Request, rep
 			Reach:        f.Reach,
 			Rating:       f.Rating,
 			FixCommit:    f.SuggestedFixCommit,
+			Model:        f.Model,
 			Sinks:        f.Sinks,
 		}
 		if includeAll {
@@ -611,13 +616,41 @@ func (s *Server) apiExportScans(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := s.DB.Model(&db.Scan{}).Order("id desc")
-	if v := r.URL.Query().Get(statusKey); v != "" {
+	params := r.URL.Query()
+	if params.Has("repository_id") {
+		id, err := strconv.ParseInt(params.Get("repository_id"), 10, 64)
+		if err != nil || id <= 0 {
+			writeAPIError(w, http.StatusBadRequest, "repository_id must be a positive integer")
+			return
+		}
+		q = q.Where("repository_id = ?", id)
+	}
+	if v := params.Get("kind"); v != "" {
+		q = q.Where("kind = ?", v)
+	}
+	if params.Has("since") {
+		since, err := time.Parse(time.RFC3339, params.Get("since"))
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, "since must be an RFC3339 timestamp")
+			return
+		}
+		q = scanExportSince(q, since)
+	}
+	if v := params.Get(statusKey); v != "" {
 		q = q.Where("status = ?", v)
 	}
-	if v := r.URL.Query().Get("skill"); v != "" {
+	if v := params.Get("skill"); v != "" {
 		q = q.Where("skill_name = ?", v)
 	}
 	streamJSONL(w, q, s.Log, scanExport)
+}
+
+func scanExportSince(q *gorm.DB, since time.Time) *gorm.DB {
+	// SQLite timestamps retain local offsets. Compare seconds and the fraction
+	// separately: text ordering ignores offsets, while julianday loses nanoseconds.
+	return q.Where(`(unixepoch(created_at),
+		CASE WHEN substr(created_at, 20, 1) = '.' THEN CAST(substr(created_at, 20) AS REAL) ELSE 0 END
+	) >= (?, ?)`, since.Unix(), float64(since.Nanosecond())/float64(time.Second))
 }
 
 // repositoryExport maps a repositoryExportRow to the public JSON object. Repos
@@ -762,6 +795,7 @@ func findingExport(f db.Finding) map[string]any {
 		"repository_id":                   f.RepositoryID,
 		"commit":                          f.Commit,
 		"sub_path":                        f.SubPath,
+		"model":                           f.Model,
 		"fingerprint":                     f.Fingerprint,
 		"last_seen_scan_id":               f.LastSeenScanID,
 		"last_seen_commit":                f.LastSeenCommit,
@@ -837,6 +871,10 @@ func scanExport(sc db.Scan) map[string]any {
 		"updated_at":         sc.UpdatedAt,
 	}
 	out["refusal_audit"] = sc.RefusalAudit
+	out["verification_feedback"] = sc.VerificationFeedback
+	out["triage_scan_id"] = sc.TriageScanID
+	out["exploration_mode"] = sc.ExplorationMode
+	out["exploration_path"] = sc.ExplorationPath
 	out["refusal_audit_warning"] = sc.RefusalAuditWarning
 	return out
 }

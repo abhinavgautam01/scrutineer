@@ -44,6 +44,11 @@ type Config struct {
 	// is rejected at startup. Validated against worker.HarnessByName
 	// so the set of accepted values stays in one place.
 	Backend string `yaml:"backend"`
+	// Codex holds settings specific to the Codex backend. AuthFile points at a
+	// host-side ChatGPT account credential created by `codex login`; it is
+	// config-file-only because credential paths should not be exposed through
+	// process arguments.
+	Codex Codex `yaml:"codex"`
 	// Opencode holds provider-specific runner settings. The map key is the
 	// provider prefix from an OpenCode model id (for example, "groq" in
 	// "groq/llama-3.3-70b-versatile"). It is config-file-only because it can
@@ -142,6 +147,8 @@ type Config struct {
 	// subscription token reports overage. Off by default; the switch is logged
 	// and shown on the jobs page and /usage.
 	DowngradeOnOverage *bool `yaml:"downgrade_on_overage"`
+	// PauseOnOverage stops model work instead of allowing paid subscription overage.
+	PauseOnOverage *bool `yaml:"pause_on_overage"`
 	// RecipientsFile is a flat text file of public keys (one per line,
 	// age X25519 or SSH) used to encrypt format=bundle exports. Empty
 	// disables encrypted export.
@@ -217,6 +224,11 @@ type Config struct {
 	// before this instance reports a finding. Requires FederationSalt:
 	// without the shared salt the hash sent to a peer cannot match theirs.
 	FederationPeers []string `yaml:"federation_peers"`
+}
+
+// Codex groups settings that apply only to the Codex backend.
+type Codex struct {
+	AuthFile string `yaml:"auth_file"`
 }
 
 // Opencode groups settings that apply only to the OpenCode backend.

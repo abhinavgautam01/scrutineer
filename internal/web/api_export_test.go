@@ -21,6 +21,8 @@ import (
 	"filippo.io/age/plugin"
 
 	"scrutineer/internal/db"
+	"scrutineer/internal/ingest"
+	"scrutineer/internal/worker"
 )
 
 const sevHigh = "High"
@@ -101,7 +103,7 @@ func TestExportRepoFindings(t *testing.T) {
 		if row["repository_id"] != float64(repoA.ID) {
 			t.Errorf("row has repository_id %v, want %d", row["repository_id"], repoA.ID)
 		}
-		for _, k := range []string{"missed_count", "last_missed_scan_id"} {
+		for _, k := range []string{"missed_count", "last_missed_scan_id", "model"} {
 			if _, ok := row[k]; !ok {
 				t.Errorf("export row missing %q", k)
 			}
@@ -435,9 +437,26 @@ func TestAPIv1DeleteRepositoryRejectsInFlightFindingScopedScans(t *testing.T) {
 }
 
 func TestAPIv1DeleteFinding(t *testing.T) {
+	for _, foreignKeys := range []bool{true, false} {
+		t.Run("foreign_keys="+strconv.FormatBool(foreignKeys), func(t *testing.T) {
+			testAPIv1DeleteFinding(t, foreignKeys)
+		})
+	}
+}
+
+func testAPIv1DeleteFinding(t *testing.T, foreignKeys bool) {
+	t.Helper()
 	s, done := newTestServer(t)
 	defer done()
 	s.Worker.DataDir = t.TempDir()
+	sqldb, err := s.DB.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqldb.SetMaxOpenConns(1)
+	if err := s.DB.Exec("PRAGMA foreign_keys=" + strconv.FormatBool(foreignKeys)).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	repo := db.Repository{URL: "https://github.com/acme/keep-repo", Name: "keep-repo"}
 	s.DB.Create(&repo)
@@ -455,6 +474,7 @@ func TestAPIv1DeleteFinding(t *testing.T) {
 	s.DB.Create(&db.FindingReference{FindingID: finding.ID, URL: "https://example.com/ref"})
 	s.DB.Create(&db.FindingHistory{FindingID: finding.ID, Field: "status", NewValue: "new"})
 	s.DB.Create(&db.FindingReview{FindingID: finding.ID, Verdict: "true_positive", Reviewer: "analyst"})
+	seedFindingAssessments(t, s, finding, scan)
 	dependent := db.Dependent{RepositoryID: repo.ID, Name: "downstream", Ecosystem: "npm"}
 	s.DB.Create(&dependent)
 	s.DB.Create(&db.FindingDependent{FindingID: finding.ID, DependentID: dependent.ID, Status: db.ExposureKnownAffected})
@@ -476,15 +496,19 @@ func TestAPIv1DeleteFinding(t *testing.T) {
 		t.Fatalf("status %d, want 204. body=%s", w.Code, w.Body)
 	}
 	for name, n := range map[string]int64{
-		"finding":      countRows(t, s, &db.Finding{}, "id = ?", finding.ID),
-		"notes":        countRows(t, s, &db.FindingNote{}, "finding_id = ?", finding.ID),
-		"comms":        countRows(t, s, &db.FindingCommunication{}, "finding_id = ?", finding.ID),
-		"refs":         countRows(t, s, &db.FindingReference{}, "finding_id = ?", finding.ID),
-		"history":      countRows(t, s, &db.FindingHistory{}, "finding_id = ?", finding.ID),
-		"reviews":      countRows(t, s, &db.FindingReview{}, "finding_id = ?", finding.ID),
-		"exposure":     countRows(t, s, &db.FindingDependent{}, "finding_id = ?", finding.ID),
-		"conversation": countRows(t, s, &db.Conversation{}, "finding_id = ?", finding.ID),
-		"messages":     countRows(t, s, &db.ChatMessage{}, "conversation_id = ?", conv.ID),
+		"finding":       countRows(t, s, &db.Finding{}, "id = ?", finding.ID),
+		"notes":         countRows(t, s, &db.FindingNote{}, "finding_id = ?", finding.ID),
+		"comms":         countRows(t, s, &db.FindingCommunication{}, "finding_id = ?", finding.ID),
+		"refs":          countRows(t, s, &db.FindingReference{}, "finding_id = ?", finding.ID),
+		"history":       countRows(t, s, &db.FindingHistory{}, "finding_id = ?", finding.ID),
+		"reviews":       countRows(t, s, &db.FindingReview{}, "finding_id = ?", finding.ID),
+		"exposure":      countRows(t, s, &db.FindingDependent{}, "finding_id = ?", finding.ID),
+		"verifications": countRows(t, s, &db.FindingVerification{}, "finding_id = ?", finding.ID),
+		"attackpaths":   countRows(t, s, &db.FindingAttackPath{}, "finding_id = ?", finding.ID),
+		"attempts":      countRows(t, s, &db.RemediationAttempt{}, "finding_id = ?", finding.ID),
+		"validations":   countRows(t, s, &db.RemediationValidation{}, "finding_id = ?", finding.ID),
+		"conversation":  countRows(t, s, &db.Conversation{}, "finding_id = ?", finding.ID),
+		"messages":      countRows(t, s, &db.ChatMessage{}, "conversation_id = ?", conv.ID),
 	} {
 		if n != 0 {
 			t.Fatalf("%s rows survived finding delete: %d", name, n)
@@ -1051,6 +1075,101 @@ func TestExportBundleRoundTrip(t *testing.T) {
 	// The original finding already existed with the same fingerprint,
 	// so re-import observes it rather than creating a duplicate.
 	// A truly fresh import (different repo) would show created=1.
+}
+
+// TestExportBundleRoundTripPreservesModel pins the model provenance chain:
+// the bundle carries each finding's producing model, and importing the
+// bundle stores that model on the new finding rather than attributing it
+// to the receiving instance's ingest run.
+func TestExportBundleRoundTripPreservesModel(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://github.com/test/model-roundtrip", Name: "model-roundtrip"}
+	s.DB.Create(&repo)
+	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: "security-deep-dive", Commit: "aaa111", Model: "claude-fable-5-1[1m]"}
+	s.DB.Create(&scan)
+	s.DB.Create(&db.Finding{
+		ScanID: scan.ID, RepositoryID: repo.ID, Commit: "aaa111", Model: "claude-fable-5-1[1m]",
+		Title: "SQL Injection in login", Severity: sevHigh, Confidence: "high",
+		CWE: "CWE-89", Location: "auth/login.go:42",
+		Trace: "Unsanitised user input reaches the query builder.",
+	})
+
+	exportReq := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10)+"/findings?format=bundle", nil)
+	exportReq.Host = testHost
+	exportW := httptest.NewRecorder()
+	s.Handler().ServeHTTP(exportW, exportReq)
+	if exportW.Code != 200 {
+		t.Fatalf("export status %d: %s", exportW.Code, exportW.Body)
+	}
+	var bundle map[string]any
+	if err := json.Unmarshal(exportW.Body.Bytes(), &bundle); err != nil {
+		t.Fatalf("unmarshal bundle: %v", err)
+	}
+	findings, _ := bundle["findings"].([]any)
+	if len(findings) != 1 {
+		t.Fatalf("got %d bundle findings, want 1", len(findings))
+	}
+	if got := findings[0].(map[string]any)["model"]; got != "claude-fable-5-1[1m]" {
+		t.Fatalf("bundle finding model = %v, want claude-fable-5-1[1m]", got)
+	}
+
+	// Re-point the bundle at a fresh repository so the import creates a new
+	// finding instead of re-observing the exported one.
+	bundle["repository"] = "https://github.com/test/model-roundtrip-import"
+	body, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	importReq := httptest.NewRequest("POST", "/api/v1/import", strings.NewReader(string(body)))
+	importReq.Host = testHost
+	importW := httptest.NewRecorder()
+	s.Handler().ServeHTTP(importW, importReq)
+	if importW.Code != 201 {
+		t.Fatalf("import status %d: %s", importW.Code, importW.Body)
+	}
+
+	var imported db.Repository
+	if err := s.DB.Where("url = ?", "https://github.com/test/model-roundtrip-import").First(&imported).Error; err != nil {
+		t.Fatalf("imported repository: %v", err)
+	}
+	var f db.Finding
+	if err := s.DB.Where("repository_id = ?", imported.ID).First(&f).Error; err != nil {
+		t.Fatalf("imported finding: %v", err)
+	}
+	if f.Model != "claude-fable-5-1[1m]" {
+		t.Errorf("imported Finding.Model = %q, want claude-fable-5-1[1m] (the exporting instance's producer, not the ingest run)", f.Model)
+	}
+}
+
+// TestBundleImportPreservesBuiltinModelIDs locks the ingest model allowlist
+// to the ids scrutineer actually ships: every built-in id of every
+// registered backend must survive a bundle import unchanged, so a future
+// catalog entry with an unanticipated character (the [1m] suffix was the
+// first) fails here instead of silently importing findings unattributed.
+func TestBundleImportPreservesBuiltinModelIDs(t *testing.T) {
+	var checked int
+	for _, backend := range []string{"claude", "codex", "opencode", "copilot"} {
+		h, err := worker.HarnessByName(backend)
+		if err != nil {
+			continue // backend not registered in this build
+		}
+		for _, m := range worker.DefaultModelsFor(h) {
+			body := `{"repository":"https://x/y","findings":[{"title":"t","severity":"high","model":` + strconv.Quote(m.ID) + `}]}`
+			results, _, err := ingest.Parse([]byte(body))
+			if err != nil {
+				t.Fatalf("%s %s: %v", backend, m.ID, err)
+			}
+			checked++
+			if got := results[0].Findings[0].Model; got != m.ID {
+				t.Errorf("%s: built-in id %q imported as %q, want preserved", backend, m.ID, got)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no built-in model ids checked; is the harness registry empty?")
+	}
 }
 
 func TestExportBundleWithSeverityFilter(t *testing.T) {

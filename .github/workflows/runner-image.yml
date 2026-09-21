@@ -83,8 +83,27 @@ jobs:
             --tmpfs /tmp:rw,noexec,nosuid,size=256m \
             scrutineer-runner:ci copilot --version
           docker run --rm scrutineer-runner:ci curl --version
+          docker run --rm -i \
+            --read-only --cap-drop ALL --user 12345:12345 \
+            --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+            scrutineer-runner:ci bash -eu <<'SMOKE'
+          printf '%s\n' '{"type":"integer"}' > /tmp/schema.json
+          printf '%s\n' '{"value":42}' | jq -e '.value' > /tmp/valid.json
+          jsonschema -i /tmp/valid.json /tmp/schema.json
+          printf '%s\n' '"not an integer"' > /tmp/invalid.json
+          if jsonschema -i /tmp/invalid.json /tmp/schema.json > /tmp/validation-error.log 2>&1; then
+            echo 'jsonschema accepted invalid input' >&2
+            exit 1
+          else
+            schema_status=$?
+          fi
+          cat /tmp/validation-error.log
+          test "$schema_status" -eq 1
+          grep -Fq "'not an integer' is not of type 'integer'" /tmp/validation-error.log
+          SMOKE
           docker run --rm scrutineer-runner:ci semgrep --version
           docker run --rm scrutineer-runner:ci zizmor --version
+          docker run --rm scrutineer-runner:ci betterleaks --version
           docker run --rm scrutineer-runner:ci git-pkgs --version
           docker run --rm scrutineer-runner:ci brief --version
           docker run --rm scrutineer-runner:ci git --version
