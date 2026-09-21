@@ -400,7 +400,6 @@ func (d ContainerRunner) runContainerOnce(ctx context.Context, runBase []string,
 	runArgs := append(append([]string{}, runBase...), d.harnessArgv(sj)...)
 
 	cmd := exec.CommandContext(ctx, runtimeBin(d.Runtime), runArgs...)
-	setNewProcessGroup(cmd)
 	cmd.Env = environmentWith(os.Environ(), processEnv)
 
 	stdout, err := cmd.StdoutPipe()
@@ -408,9 +407,11 @@ func (d ContainerRunner) runContainerOnce(ctx context.Context, runBase []string,
 		return false, "", err
 	}
 	cmd.Stderr = cmd.Stdout
-	if err := cmd.Start(); err != nil {
+	terminate, err := startSupervised(cmd)
+	if err != nil {
 		return false, "", fmt.Errorf("start container: %w", err)
 	}
+	defer terminate()
 
 	wrappedEmit := func(e Event) {
 		switch {
@@ -423,7 +424,6 @@ func (d ContainerRunner) runContainerOnce(ctx context.Context, runBase []string,
 	}
 	h.ParseStream(stdout, wrappedEmit)
 	waitErr = cmd.Wait()
-	terminateProcessGroup(cmd)
 	return hitMaxTurns, sessionID, waitErr
 }
 

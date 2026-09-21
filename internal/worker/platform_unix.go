@@ -9,20 +9,17 @@ import (
 	"syscall"
 )
 
-// setNewProcessGroup starts cmd in its own process group, so a terminal
-// interrupt reaches scrutineer's shutdown path rather than the child, and so
-// terminateProcessGroup can signal every descendant at once.
-func setNewProcessGroup(cmd *exec.Cmd) {
+// startSupervised starts cmd in its own process group, so a terminal interrupt
+// reaches scrutineer's shutdown path rather than the child, and returns the
+// func that sends SIGTERM to that whole group, reaping children the runtime or
+// harness CLI left running. Call it once Wait has returned.
+func startSupervised(cmd *exec.Cmd) (func(), error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-}
-
-// terminateProcessGroup sends SIGTERM to cmd's process group once Wait has
-// returned, reaping children the runtime or harness CLI left running.
-func terminateProcessGroup(cmd *exec.Cmd) {
-	if cmd.Process == nil {
-		return
+	if err := cmd.Start(); err != nil {
+		return nil, err
 	}
-	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	pid := cmd.Process.Pid
+	return func() { _ = syscall.Kill(-pid, syscall.SIGTERM) }, nil
 }
 
 // containerUserArgs maps the container user onto the invoking host user so
