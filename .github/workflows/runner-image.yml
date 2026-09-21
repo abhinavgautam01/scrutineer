@@ -104,6 +104,7 @@ jobs:
           docker run --rm scrutineer-runner:ci semgrep --version
           docker run --rm scrutineer-runner:ci zizmor --version
           docker run --rm scrutineer-runner:ci betterleaks --version
+          docker run --rm scrutineer-runner:ci darnit --version
           docker run --rm scrutineer-runner:ci git-pkgs --version
           docker run --rm scrutineer-runner:ci brief --version
           docker run --rm scrutineer-runner:ci git --version
