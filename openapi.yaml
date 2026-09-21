@@ -1427,6 +1427,9 @@ components:
         kind:          { type: string }
         status:        { type: string, enum: [queued, running, paused, done, failed, skipped, cancelled] }
         model:         { type: string }
+        verification_feedback:
+          type: string
+          description: Optional operator guidance snapshotted on a finding-scoped verify scan, limited to 4000 UTF-8 bytes. Preserved on retries; not a verification verdict.
         commit:        { type: string }
         ref:           { type: string, description: Branch, tag, or commit requested for this scan. Omitted for the repository default branch. }
         sub_path:      { type: string, description: Monorepo sub-folder this scan was scoped to. Omitted for a repository-root scan. }
@@ -1434,6 +1437,18 @@ components:
           type: string
           enum: [full, diff]
           description: Requested or resolved scan mode.
+        triage_scan_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: Triage invocation that requested this pipeline scan.
+        exploration_mode:
+          type: string
+          enum: ['', random-dig, adversarial-sweep]
+          description: Empty or omitted for planned scans. Exploratory scans may only validate their own report through the callback API; random digs receive no threat-model context, while adversarial sweeps challenge one recorded exclusion.
+        exploration_path:
+          type: string
+          description: Repository-relative source directory selected for an exploratory audit, or dot for root-level random source. Empty until a target is selected.
         diff_base_scan_id:
           type: integer
           format: int64
@@ -1457,7 +1472,7 @@ components:
           description: Immutable gated patch attempt pinned to a re-attack scan at enqueue time.
         coverage:
           type: string
-          description: JSON coverage metadata, including diff fallback reasons and threat-model update decisions.
+          description: JSON coverage metadata, including diff fallback reasons, threat-model update decisions, and optional worker-owned capability preflight (status ready/degraded/blocked, missing command or feature entries, degraded boolean, and optional probe error). Blocked or degraded preflight keeps completeness partial.
         skill_name:           { type: string }
         skill_version:        { type: integer, description: Snapshot of the Skill row version at enqueue time. }
         skill_schema_version: { type: integer, description: Snapshot of metadata.scrutineer.version at enqueue time. }
@@ -1627,9 +1642,6 @@ components:
         resolution:    { type: string, enum: [fix, migrate, workaround, adopt, wontfix, ""] }
         assignee:      { type: string }
         exploited_in_wild: { type: string, enum: [yes, no, ""], description: "Analyst's call on whether this finding is being exploited in the wild. Empty means unknown. Automation never sets this." }
-        exploited_in_wild_evidence: { type: string }
-        mitigation:    { type: string, description: "Markdown body of operational mitigation guidance from the mitigate skill: workarounds, detection, optionally a semgrep rule (see mitigation_semgrep)." }
-        mitigation_semgrep: { type: string, description: "Optional YAML semgrep rule from the mitigate skill. Empty when no rule was warranted." }
         dup_check:     { type: string, description: "Audit agent's one-sentence rationale for why this finding is distinct from the siblings already filed under the same scan_group. Empty for findings from skills that do not emit it." }
         novelty:       { type: string, enum: [unfixed, fixed, unclear, not_checked, ""], description: "Latest upstream novelty state. A touched file remains unclear until revalidate classifies the staged history." }
         production_viability: { type: string, enum: [VIABLE, NON_VIABLE, SAMPLE_OR_TEST, CONDITIONAL_VIABLE, ""], description: "Latest critic assessment of whether the finding can affect a real release build. Empty before assessment." }
@@ -1651,6 +1663,9 @@ components:
             disclosure_draft: { type: string }
             disclosure_title: { type: string, description: "The disclose skill's drafted GHSA summary; may differ from the finding's own title." }
             suggested_recipients: { type: string, description: "File-level owners for the finding's location, from CODEOWNERS or recent non-bot committers." }
+            exploited_in_wild_evidence: { type: string, description: "Evidence supporting the analyst's exploitation status." }
+            mitigation:    { type: string, description: "Markdown body of operational mitigation guidance from the mitigate skill: workarounds, detection, optionally a semgrep rule (see mitigation_semgrep)." }
+            mitigation_semgrep: { type: string, description: "Optional YAML semgrep rule from the mitigate skill. Empty when no rule was warranted." }
             sub_path:         { type: string, description: "Monorepo sub-folder the producing scan was scoped to. The finding's location is relative to it; empty means the repo root." }
             verification:
               allOf:

@@ -91,6 +91,7 @@ Only when `has_code`:
 - `history`
 - `threat-model`
 - `semgrep`
+- `betterleaks`
 
 Only when `has_embedded_native`:
 
@@ -100,6 +101,8 @@ After `threat-model` finishes, Scrutineer reads its durable `scan_config` and
 enqueues one `security-deep-dive` per focus area. Do not enqueue
 `security-deep-dive` here: starting it before the threat model is complete
 would create an unscoped repository-wide audit and defeat the partition.
+
+For one third of eligible triage runs, Scrutineer also schedules at most one exploratory `security-deep-dive` after a successful threat model has queued a planned audit. Do not request this extra scan yourself. When the threat model names a usable out-of-scope source directory, half of selected root scans challenge that exclusion with an adversarial sweep; other selected scans use a context-free random dig. Both keep explicit path exclusions and subproject scope. Repeated completion notifications do not select another extra audit.
 
 If a skill name comes back `404 skill not found or inactive`, skip it and note which one in your report; the operator may have disabled it on purpose.
 

@@ -1665,6 +1665,9 @@ const reattackSkillName = "reattack"
 const mitigateSkillName = "mitigate"
 
 func (s *Server) findingVerify(w http.ResponseWriter, r *http.Request) {
+	if !parseVerificationFeedback(w, r) {
+		return
+	}
 	s.runFindingSkill(w, r, verifySkillName, true)
 }
 
@@ -1693,6 +1696,11 @@ func (s *Server) findingMitigate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) runFindingSkill(w http.ResponseWriter, r *http.Request, name string, skipOpen bool) {
+	if skipOpen {
+		// Keep the open-scan check and enqueue atomic with other finding launches.
+		s.agentEnqueueMu.Lock()
+		defer s.agentEnqueueMu.Unlock()
+	}
 	f, ok := loadByID[db.Finding](s, w, r)
 	if !ok {
 		return
@@ -1720,6 +1728,9 @@ func (s *Server) runFindingSkill(w http.ResponseWriter, r *http.Request, name st
 		}
 	}
 	opts.FindingID = new(f.ID)
+	if name == verifySkillName {
+		opts.VerificationFeedback = r.PostForm.Get("feedback")
+	}
 	scanID, err := s.enqueueSkillWith(r.Context(), scan.RepositoryID, skill.ID, opts)
 	if errors.Is(err, ErrFederationClaimPending) {
 		// The claim is now recorded on the finding, so the page shows who to
@@ -2859,8 +2870,8 @@ func (s *Server) repoDiffScan(w http.ResponseWriter, r *http.Request, repo db.Re
 var errDeepDiveMissing = errors.New(deepDiveSkillName + " skill is not installed")
 
 // enqueueDiffRescanGroup enqueues recon, history, embedded-native, threat-model,
-// and semgrep as one diff-rescan group. A completed threat-model fans out the
-// deep-dive scans.
+// semgrep, and betterleaks as one diff-rescan group. A completed threat-model
+// fans out the deep-dive scans.
 // Missing auxiliary skills are tolerated; a missing deep-dive is
 // errDeepDiveMissing, checked before the first enqueue so the group is
 // all-or-nothing. Shared by the "Diff rescan" button and the scheduler.
@@ -2871,7 +2882,7 @@ func (s *Server) enqueueDiffRescanGroup(ctx context.Context, repoID uint, model,
 	}
 	group := uuid.NewString()
 	queued := 0
-	for _, name := range []string{reconSkillName, historySkillName, "embedded-native", threatModelSkillName, "semgrep"} {
+	for _, name := range []string{reconSkillName, historySkillName, "embedded-native", threatModelSkillName, "semgrep", "betterleaks"} {
 		var skill db.Skill
 		if err := s.DB.Where("name = ? AND active = ?", name, true).First(&skill).Error; err != nil {
 			continue
@@ -3303,7 +3314,10 @@ type ScanOpts struct {
 	ScanGroup string
 	// FocusArea is the complete audit focus serialized as JSON. It is an
 	// internal orchestration input, not an operator-supplied API field.
-	FocusArea string
+	FocusArea       string
+	TriageScanID    *uint
+	ExplorationMode string
+	ExplorationPath string
 	// SessionID and ResumedFromScanID carry a failed scan's claude session
 	// into its retry so the new run continues the conversation with
 	// `claude -p --resume` instead of restarting from turn 0. Both empty
@@ -3314,7 +3328,8 @@ type ScanOpts struct {
 	// ResumedFromScanID it is the immediate parent and is set on every
 	// retry, including retries that start a fresh harness session, so the
 	// rerun chain stays walkable hop by hop. Nil on a first-time enqueue.
-	ParentScanID *uint
+	ParentScanID         *uint
+	VerificationFeedback string
 	// ImportPayload is the raw uploaded report for an ingest-skill run
 	// created by the /v1/import fallback; the worker stages it into the
 	// workspace at import/report. Empty for every other enqueue.
@@ -3404,6 +3419,9 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 	if err := s.refuseClaimedOutreach(ctx, opts, sk, hasSkill); err != nil {
 		return 0, err
 	}
+	if err := normalizeVerificationOpts(&opts, sk.Name); err != nil {
+		return 0, err
+	}
 	if !ValidModelPreference(opts.Model) && hasSkill {
 		opts.Model = sk.Model
 	}
@@ -3440,6 +3458,9 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 		ScopeMode:            opts.ScopeMode,
 		ScanGroup:            opts.ScanGroup,
 		FocusArea:            opts.FocusArea,
+		TriageScanID:         opts.TriageScanID,
+		ExplorationMode:      opts.ExplorationMode,
+		ExplorationPath:      opts.ExplorationPath,
 		Ref:                  opts.Ref,
 		RescanMode:           opts.RescanMode,
 		DiffBaseScanID:       opts.DiffBaseScanID,
@@ -3447,9 +3468,13 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 		SessionID:            opts.SessionID,
 		ResumedFromScanID:    opts.ResumedFromScanID,
 		ParentScanID:         opts.ParentScanID,
+		VerificationFeedback: opts.VerificationFeedback,
 		ImportPayload:        opts.ImportPayload,
 		SkillsRepoSHA:        s.SkillsRepoSHA,
 		APIToken:             NewAPIToken(),
+	}
+	if err := s.validateExploratoryEnqueue(&scan, &sk); err != nil {
+		return 0, err
 	}
 	// The opt-out check at the top of this function ran before every field above
 	// was resolved, so re-check it inside the creating transaction: the row is
@@ -3460,6 +3485,9 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 	// back where it was, just narrower.
 	if err := s.DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&scan).Error; err != nil {
+			return err
+		}
+		if err := checkExploratoryDuplicate(tx, &scan); err != nil {
 			return err
 		}
 		var live db.Repository
@@ -3500,7 +3528,7 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 
 func (s *Server) skillEnqueuePreflight(repo db.Repository, skillID uint, opts ScanOpts) (db.Skill, bool, error) {
 	var sk db.Skill
-	hasSkill := s.DB.Select("name, version, metadata, requires_remote, requires_profile, model").First(&sk, skillID).Error == nil
+	hasSkill := s.DB.Select("name, version, metadata, requires_remote, requires_profile, model, source_path").First(&sk, skillID).Error == nil
 	if hasSkill && opts.FindingID != nil {
 		if err := s.ensureFindingReportable(*opts.FindingID, sk.Name); err != nil {
 			return db.Skill{}, false, err

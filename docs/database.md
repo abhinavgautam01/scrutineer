@@ -60,20 +60,20 @@ The central entity. One row per git URL.
 
 ## audit_events
 
-Append-only audit trail for lifecycle and future operator/system actions. It
-coexists with `finding_histories`, which remains the specialised per-field
-change history for findings. `payload` is JSON stored portably as text.
+Append-only audit trail for scan lifecycle and finding mutations. It coexists with `finding_histories`, which remains the specialised per-field change history for findings. `payload` is JSON stored portably as text.
 
 | Column | Type | Notes |
 |--------|------|-------|
 | id | integer PK | |
-| kind | text | Event name, for example `scan.started`, `scan.finished`, `scan.failed`, `scan.cancelled`, or `scan.paused`. Indexed with `created_at` for chronological dashboards. |
-| subject_type | text | Polymorphic subject type, currently `scan`. Part of the timeline index with `subject_id`. |
-| subject_id | integer | ID of the subject row, for example `scans.id`. |
-| actor | text | Skill name when available, otherwise the scan kind. |
-| source | text | Existing provenance enum, currently `system` for worker lifecycle events. |
-| payload | text | JSON metadata. Scan events include stable execution metadata and terminal metrics, without duplicating reports or logs. |
+| kind | text | Event name: `scan.started`, `scan.finished`, `scan.failed`, `scan.cancelled`, `scan.paused`, `finding.status_changed`, `finding.severity_changed`, or `finding.labels_changed`. Indexed with `created_at` for chronological dashboards. |
+| subject_type | text | Polymorphic subject type: `scan` or `finding`. Part of the timeline index with `subject_id`. |
+| subject_id | integer | ID of the subject row, for example `scans.id` or `findings.id`. |
+| actor | text | Scan lifecycle events use the skill name or scan kind. Finding mutations use the helper's `by` value; browser edits leave it empty because there is no session user. Authenticated skill API mutations instead identify the scan and its skill from the bearer-token lookup, not client-supplied text. |
+| source | text | Existing provenance enum: `tool`, `model_suggested`, `analyst`, or `system`. Worker lifecycle events use `system`; finding events preserve the mutation's source. |
+| payload | text | JSON metadata. Scan events include execution metadata and terminal metrics. Finding events include `repository_id`, `field`, `old_value`, and `new_value`; skill API events also include the authenticated `scan_id` and `skill_name`. Reports, transcripts, and bearer tokens are not copied. |
 | created_at | datetime | |
+
+Finding status and severity events are written by `WriteFindingField`, with severity-cap changes also covered by `ReconcileFindingSeverityCap`. `SetFindingLabels` writes label events using sorted, distinct name arrays, including `[]` for an empty set. The mutation, existing field history where applicable, and event commit or roll back together. Unchanged values or label sets produce no event. Existing history rows are not backfilled into the event table. Direct SQL/import paths that bypass these helpers and other finding fields are outside this event surface.
 
 ## package_alternatives
 
@@ -117,13 +117,17 @@ One row per skill execution or external import. `skill_name` / `skill_version` p
 | skills_repo_sha | text | Commit of `-skills-repo` resolved at startup and stamped on every skill scan. Empty when `-skills-repo` is unset or for `import` scans. |
 | sub_path | text | Scopes code analysis to a sub-folder of the clone (monorepo packages). Empty means repo root. |
 | rescan_mode | text | `full` for ordinary scans, `diff` for scans that compare the current commit against a baseline. Requested diff scans can fall back to `full` when no baseline exists or the diff is too large. |
+| verification_feedback | text | Optional operator guidance for one finding-scoped `verify` run, limited to 4000 UTF-8 bytes. Snapshotted at enqueue, included in its recipe, and preserved by single and bulk retries. Not a verdict or a replacement for the finding's reproduction. |
 | diff_base_scan_id | integer FK | Baseline scan chosen for a diff rescan, or the caller-pinned baseline. References `scans.id`. Null for full scans and for diff requests that fall back before a baseline is resolved. |
 | diff_base_commit | text | Baseline commit used to generate `diff.patch` and `changed_files.json`. Empty for full scans. |
 | diff_threat_model_scan_id | integer FK | Prior `threat-model` scan staged as `old_threat_model.json` for a diff-aware run, when one is available. |
 | diff_stats | text | JSON metadata for the generated diff: base/head commits, changed-file count, patch size, file statuses, staged file names, and limits. |
-| coverage | text | JSON coverage metadata. Diff scans record requested versus actual mode and fallback reasons; threat-model scans also record whether the repository working model was updated or skipped for a small diff. |
+| coverage | text | JSON coverage metadata. Diff scans record requested versus actual mode and fallback reasons; threat-model scans also record whether the repository working model was updated or skipped for a small diff. Skills declaring runtime requirements also record worker-owned `preflight` with `status` (`ready`, `degraded`, or `blocked`), namespaced `missing` entries, a `degraded` boolean, and an optional probe `error`. Blocked or degraded preflight keeps completeness partial. |
 | scan_group | text | Groups a cohort of scans launched as one batch (Scan-all-subprojects, a single New-scan run, or a Diff rescan group). Each sibling streams a finding to `POST /repositories/{id}/findings` the moment it confirms it and reads `GET /repositories/{id}/findings?scan_group=...` before reporting, so an in-flight skill sees what a sibling has filed so far — not only after that sibling finishes — and can avoid re-filing it. Empty when not part of a batch. |
 | focus_area | text | Normalized JSON snapshot of the input-processing focus area assigned to a split `security-deep-dive`. It keeps queued work reproducible if repository `scan_config` changes. Empty means the scan is unscoped and covers its normal repository or subproject scope. |
+| triage_scan_id | integer | Nullable ID of the triage scan that requested the pipeline child. Preserved through threat-model fan-out and retries; used to bound automatic exploration to one extra audit per triage invocation. |
+| exploration_mode | text | Empty for ordinary scans; `random-dig` for an independent source audit or `adversarial-sweep` for an audit that challenges one threat-model exclusion. Its callback token only permits validating its own report. Exploratory scans cannot serve as diff baselines. |
+| exploration_path | text | Repository-relative source directory selected for an exploratory audit, or `.` for root-level random source. Persisted before the agent starts and preserved on retries. |
 | profile | text | Runner profile that ran the scan (e.g. `php`). Empty = the default runner image. Set explicitly via `?profile=` or auto-detected from the clone by `brief` before launch; persisted so retries reuse the choice. |
 | backend | text | Agent CLI (`-backend`) that ran the scan: `claude`, `codex`, `opencode`, or `copilot`. Stamped by the worker so a retry after switching `-backend` starts fresh instead of passing one harness's session id to another's resume command. Empty on rows predating the column or that never reached the runner. |
 | provider | text | Provider prefix selected from an OpenCode model id, such as `groq` or `kiro`. Empty for other backends. |
@@ -186,6 +190,9 @@ One row per installed skill. Loaded from `skills/` directories on disk or the UI
 | requires_remote | boolean | When true, scrutineer refuses to enqueue this skill against a local-directory repository (file:// URL). Set via `scrutineer.requires_remote: true` in SKILL.md frontmatter. Use for skills that depend on a forge URL or remote-only data (advisories, exposure, fork, maintainers, metadata, packages, report-upstream). |
 | recurse_submodules | boolean | When true, remote scans initialize recursive depth-one Git submodules before the skill runs. Set via `scrutineer.recurse_submodules: true` in SKILL.md frontmatter. |
 | requires_profile | text | Constrains the skill to a single registered runner profile (e.g. `php`). Empty means no constraint. Set via `scrutineer.requires_profile` in SKILL.md frontmatter. Enqueue returns 400 when the requested profile mismatches; the worker fails the scan when auto-detection resolves to a different profile. |
+| requires_commands | text | Newline-joined executable names checked on the runner's PATH before model execution. Empty means no command requirements. |
+| requires_features | text | Newline-joined runtime feature names checked before model execution: `network-egress`, `docker-in-docker`, or `fuse`. Requirements do not grant capabilities. |
+| degraded_mode | boolean | Allows missing declared capabilities to produce a degraded run with partial coverage instead of blocking. Defaults to false; probe execution failures always block. |
 | paths | text | Newline-joined shell-glob allow-list from `scrutineer.paths`. When non-empty, the skill sees only matching files inside the workspace `src/` and the builtin skip list is bypassed. |
 | ignore_paths | text | Newline-joined shell-glob deny-list from `scrutineer.ignore_paths`. Always layered on top of the active include set. |
 | source | text | `bundled`, `local`, `remote`, or `ui`. |

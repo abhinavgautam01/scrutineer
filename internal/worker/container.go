@@ -340,6 +340,12 @@ func (d ContainerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Ev
 	}
 	defer unlockCodexAuth()
 
+	probeBase := append([]string{runtimeBin(d.Runtime)}, d.buildContainerBaseArgs(absWork, hnet, "/work")...)
+	probeBase = append(probeBase, "--", image)
+	if err := sj.checkCapabilities(ctx, probeBase, d.ProxyURL != "" || hnet.proxyEndpoint != "", emit); err != nil {
+		return result, err
+	}
+
 	logLine := "$ " + runtimeBin(d.Runtime) + " run --rm " + image + " <skill:" + sj.Name + ">"
 	if d.ModelBaseURL != "" {
 		logLine += " [MODEL_BASE_URL=" + redactURLUserinfo(d.ModelBaseURL) + "]"
@@ -430,6 +436,38 @@ func (d ContainerRunner) runContainerOnce(ctx context.Context, runBase []string,
 // complexity manageable as new toggles (hardened mode, proxy, profiles)
 // accumulate.
 func (d ContainerRunner) buildRunArgsForProvider(absWork, image string, hnet hardenedNet, harnessStateDir string, provider opencodeProvider, workdir string) []string {
+	args := d.buildContainerBaseArgs(absWork, hnet, workdir)
+	// Agent credentials and resumable state are deliberately absent from probes.
+	for _, e := range d.harness().Env(d.ModelBaseURL) {
+		if provider.Configured && opencodeInheritedCredential(e) {
+			continue
+		}
+		args = append(args, "-e", e)
+	}
+	keys := make([]string, 0, len(provider.Env))
+	for key := range provider.Env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		args = append(args, "-e", key)
+	}
+	if harnessStateDir != "" {
+		args = append(args, "-v", bindMount(harnessStateDir, "/harness-state", d.SELinuxRelabel))
+		for _, e := range d.harness().StateEnv("/harness-state") {
+			args = append(args, "-e", e)
+		}
+		args = d.appendCodexAccountAuthArgs(args)
+	}
+	if HarnessName(d.harness()) == "opencode" {
+		args = d.appendOpencodeStateArgs(args, harnessStateDir, provider)
+	}
+	return append(args, "--", image)
+}
+
+// buildContainerBaseArgs shares isolation, workspace, and network policy without
+// passing model credentials or mounting the agent's authentication/session store.
+func (d ContainerRunner) buildContainerBaseArgs(absWork string, hnet hardenedNet, workdir string) []string {
 	gwTarget := "host-gateway"
 	if d.Hardened {
 		// setupHardenedNetwork resolved the gateway once against this per-scan
@@ -452,22 +490,6 @@ func (d ContainerRunner) buildRunArgsForProvider(absWork, image string, hnet har
 		"-v", bindMount(absWork, "/work", d.SELinuxRelabel),
 		"-w", workdir,
 	)
-	// Harness-specific env: model-API credential, base URL, and the
-	// harness's own telemetry / autoupdate suppressors.
-	for _, e := range d.harness().Env(d.ModelBaseURL) {
-		if provider.Configured && opencodeInheritedCredential(e) {
-			continue
-		}
-		args = append(args, "-e", e)
-	}
-	keys := make([]string, 0, len(provider.Env))
-	for key := range provider.Env {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		args = append(args, "-e", key)
-	}
 	if supportsHostGatewayAddHost(d.Runtime) {
 		args = append(args, "--add-host", HostGatewayAlias+":"+gwTarget)
 	}
@@ -477,22 +499,6 @@ func (d ContainerRunner) buildRunArgsForProvider(absWork, image string, hnet har
 		// would land owned by a subordinate uid. keep-id maps the container
 		// user back to the invoking host uid so output stays host-owned.
 		args = append(args, "--userns=keep-id")
-	}
-	if harnessStateDir != "" {
-		// Persist the harness's resumable session store outside the
-		// container. Without this it lands in the /tmp tmpfs and dies
-		// with the container, so a retry could not resume the agent
-		// loop. The bind mount stays writable even under hardened
-		// mode's --read-only rootfs. The mountpoint is fixed; each
-		// harness points its own state env var(s) at it via StateEnv.
-		args = append(args, "-v", bindMount(harnessStateDir, "/harness-state", d.SELinuxRelabel))
-		for _, e := range d.harness().StateEnv("/harness-state") {
-			args = append(args, "-e", e)
-		}
-		args = d.appendCodexAccountAuthArgs(args)
-	}
-	if HarnessName(d.harness()) == "opencode" {
-		args = d.appendOpencodeStateArgs(args, harnessStateDir, provider)
 	}
 	if d.Hardened || d.HardenedRuntimeOnly {
 		// Read-only rootfs + no-new-privileges close the residual paths a
@@ -548,7 +554,7 @@ func (d ContainerRunner) buildRunArgsForProvider(absWork, image string, hnet har
 	} else if !d.Hardened {
 		args = append(args, "--network", "none")
 	}
-	return append(args, "--", image)
+	return args
 }
 
 func (d ContainerRunner) appendCodexAccountAuthArgs(args []string) []string {

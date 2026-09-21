@@ -293,6 +293,13 @@ type Scan struct {
 	// work remains reproducible if the repository configuration changes.
 	FocusArea string `gorm:"type:text"`
 
+	// TriageScanID identifies the triage invocation that requested this scan.
+	// ExplorationMode is empty for planned audits. ExplorationPath records the
+	// source directory selected for a random dig or adversarial sweep.
+	TriageScanID    *uint `gorm:"index"`
+	ExplorationMode string
+	ExplorationPath string
+
 	// RescanMode records the actual coverage mode for this scan. Empty and
 	// "full" mean ordinary full coverage. "diff" means the worker staged a
 	// baseline diff and skills should not claim coverage over untouched code.
@@ -369,6 +376,9 @@ type Scan struct {
 	// which is only set when the retry actually resumes a harness session
 	// — a retry of a done or cancelled scan has a parent but no session.
 	ParentScanID *uint `gorm:"index"`
+	// VerificationFeedback is operator guidance snapshotted for this verify run.
+	// It is not a verdict and is never copied into the finding's reproduction.
+	VerificationFeedback string `gorm:"type:text"`
 
 	// Recipe is an immutable JSON snapshot (worker.ScanRecipe) of the
 	// inputs the worker was handed, written once inside the transaction
@@ -1437,6 +1447,10 @@ type Skill struct {
 	// never enqueued for the repo is treated as satisfied so gating
 	// decisions in triage do not deadlock dependent skills.
 	Requires string `gorm:"type:text"`
+	// Runtime capabilities checked before spending any model turns.
+	RequiresCommands string `gorm:"type:text"`
+	RequiresFeatures string `gorm:"type:text"`
+	DegradedMode     bool
 
 	Source     string // "bundled" | "local" | "remote" | "ui"
 	SourcePath string // directory on disk (bundled/local/remote) or empty (ui)

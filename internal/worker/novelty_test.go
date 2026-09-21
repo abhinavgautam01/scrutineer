@@ -48,10 +48,14 @@ func TestNoveltyContextStagesBoundedChangedFileEvidence(t *testing.T) {
 	fixture.requirePersisted(t, db.FindingNoveltyUnclear, head)
 
 	scan := fixture.scan(head)
-	if err := stageContextWithInputs(
-		fixture.workRoot, "", "http://127.0.0.1:8080/api", "", DefaultMetadataDir,
+	document, err := buildSkillContext(
+		"http://127.0.0.1:8080/api", "", DefaultMetadataDir,
 		scan, &fixture.repo, nil, got, nil,
-	); err != nil {
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSkillContext(fixture.workRoot, "", document); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(fixture.workRoot, "context.json"))

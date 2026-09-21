@@ -64,7 +64,7 @@ To onboard a whole GitHub org at once, open **Add multiple** → **Import a whol
 
 You can also scan a directory on disk, useful before pushing, or for code not hosted on a git forge. Paste an absolute path (`/path/to/project`) in the same **Add repository** field. Scrutineer copies the directory into a per-scan workspace and runs the default skill set; skills that need a forge URL or ecosyste.ms enrichment (`advisories`, `exposure`, `fork`, `maintainers`, `metadata`, `packages`, `public-issue`, `report-upstream`) are skipped automatically. Symlinks are recreated as-is rather than dereferenced during the copy; in container mode their targets then resolve inside the container, so host files reached only through such a link are not visible to skills. Under `--no-container`, and for the skills listed in `host_skills`, the kernel dereferences them normally, so only point scrutineer at trees you trust.
 
-The optional analysis tools (semgrep, bandit, zizmor, darnit, git-pkgs, brief) are bundled in the runner image, so you don't need them installed locally when the container runner is in use.
+The optional analysis tools (semgrep, bandit, zizmor, betterleaks, darnit, git-pkgs, brief) are bundled in the runner image, so you don't need them installed locally when the container runner is in use.
 
 ## Git authentication
 
@@ -134,7 +134,7 @@ When the containerised runner is active (the default when a container runtime is
 - **Skill HTTP API** -- running skills can call back into scrutineer to list prior scans and enqueue further skills; see the [HTTP API overview](docs/api.md) for authentication boundaries and [openapi.yaml](openapi.yaml) for the full route specification
 - **Live updates** -- SSE streaming of scan logs and status changes, pushed rather than polled; the jobs list, the repositories list and a repository's Scans tab refresh their own table when a scan starts, finishes, or is cancelled, paused, resumed or queued, keeping the current scroll, filters and sort. Elapsed times ("started 3m ago") count up on their own, recomputed in the page rather than fetched
 - **Organisation rollup** -- repos, findings, and maintainers grouped by owning org, with per-org markdown exports
-- **Usage tracking** -- per-scan token and cost figures plus a `/usage` page totalling spend per skill, correlating cost with repository workload proxies and linking runs that cost at least ten times their skill median; see [docs/usage.md](docs/usage.md). On a Claude subscription token, a rate-limit wall auto-pauses the batch and resumes it after the reported reset, with per-window status shown on `/usage`. Optionally (`downgrade_on_overage`), once the account crosses into overage the model tier falls back from max/high to the mid tier for new scans until overage clears (typically when the window resets) -- announced in the log, on the jobs page, and on `/usage`
+- **Usage tracking** -- per-scan token and cost figures plus a `/usage` page totalling spend per skill, correlating cost with repository workload proxies and linking runs that cost at least ten times their skill median; see [docs/usage.md](docs/usage.md). On a Claude subscription token, a rate-limit wall auto-pauses the batch and resumes it after the reported reset, with per-window status shown on `/usage`. Optionally (`downgrade_on_overage`), once the account crosses into overage the model tier falls back from max/high to the mid tier for new scans until overage clears (typically when the window resets) -- announced in the log, on the jobs page, and on `/usage`. Set `pause_on_overage: true` to pause model scans instead; this takes precedence over downgrading and preserves resumable work.
 - **Themes** -- six colour themes plus a light/dark/system toggle, set on the Settings page
 
 ## The default pipeline
@@ -158,6 +158,7 @@ Adding a repo enqueues the `triage` skill, whose SKILL.md lists the further skil
 | `threat-model` | Derives the project's security contract (components, entry-point trust table, claimed and disclaimed properties) for the deep-dive to load |
 | `semgrep` | Static analysis mapped into findings shape |
 | `bandit` | Python-only static analysis mapped into findings shape, carrying bandit's own confidence level; runs alongside `semgrep` on repositories with Python |
+| `betterleaks` | Secret scanning across the available Git history, with raw secret values removed before findings are written |
 | `vuln-scan` | High-recall model-backed static candidate scan adapted from Anthropic's defending-code reference harness |
 | `zizmor` | GitHub Actions workflow audit enriched with bundled trust-boundary, credential, and supply-chain guidance |
 | `ingest` | Normalizes external reports in arbitrary formats into findings when `/v1/import` cannot recognise the payload |

@@ -41,7 +41,7 @@ import (
 // queue); or fail the scan when a prereq has irrecoverably failed
 // (true, nil).
 func (w *Worker) preflightSkill(ctx context.Context, scan *db.Scan, attempt int) (bool, error) {
-	if scan.SkillID == nil {
+	if scan.SkillID == nil || scan.ExplorationMode != "" {
 		return false, nil
 	}
 	var skill db.Skill
@@ -192,16 +192,23 @@ func (w *Worker) prereqStatus(where string, args []any, inFlight []db.ScanStatus
 
 func (w *Worker) failScanPrereqs(scan *db.Scan, skillName, msg string, missing []string) {
 	now := time.Now()
+	result := w.DB.Model(&db.Scan{}).Where("id = ? AND status = ?", scan.ID, db.ScanQueued).Updates(map[string]any{
+		"status": db.ScanFailed, "status_priority": db.StatusPriorityFor(db.ScanFailed),
+		errorColumn: msg, "started_at": now, "finished_at": now,
+	})
+	if result.Error != nil {
+		w.Log.Error("save failed-prereq scan",
+			"scan", scan.ID, "skill", skillName, "err", result.Error)
+		return
+	}
+	if result.RowsAffected == 0 {
+		return
+	}
 	scan.Status = db.ScanFailed
 	scan.StatusPriority = db.StatusPriorityFor(db.ScanFailed)
 	scan.Error = msg
 	scan.StartedAt = &now
 	scan.FinishedAt = &now
-	if err := w.DB.Save(scan).Error; err != nil {
-		w.Log.Error("save failed-prereq scan",
-			"scan", scan.ID, "skill", skillName, "err", err)
-		return
-	}
 	w.publish(scan.ID, scan.RepositoryID, "scan-status", string(scan.Status))
 	w.Log.Warn("scan failed: prereqs not satisfied",
 		"scan", scan.ID, "skill", skillName, "missing", missing)

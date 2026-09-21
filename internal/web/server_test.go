@@ -1613,10 +1613,10 @@ func TestFindingShow_disablesVerifyActionWhenVerifyInFlight(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", w.Code, body)
 	}
-	if strings.Contains(body, fmt.Sprintf(`hx-post="/findings/%d/verify"`, f.ID)) {
-		t.Error("finding page should not render an active verify action while verify is in flight")
+	if strings.Contains(body, "Run verification</button>") || strings.Contains(body, "Rerun verification</button>") {
+		t.Error("finding page should not render a verify submit button while verify is in flight")
 	}
-	if !strings.Contains(body, `button type="button" class="btn" disabled`) || !strings.Contains(body, "Verification in progress") {
+	if !strings.Contains(body, `maxlength="4000" disabled`) || !strings.Contains(body, `button type="button" class="btn-outline" disabled`) || !strings.Contains(body, "Verification in progress") {
 		t.Errorf("finding page should render disabled verify state, body=%s", body)
 	}
 }
@@ -3292,7 +3292,7 @@ func TestRepoScan_diffRescanQueuesGroupedSkills(t *testing.T) {
 
 	repo := db.Repository{URL: "https://github.com/foo/bar", Name: "bar"}
 	s.DB.Create(&repo)
-	for _, name := range []string{reconSkillName, historySkillName, "embedded-native", threatModelSkillName, "semgrep", deepDiveSkillName} {
+	for _, name := range []string{reconSkillName, historySkillName, "embedded-native", threatModelSkillName, "semgrep", "betterleaks", deepDiveSkillName} {
 		s.DB.Create(&db.Skill{Name: name, Body: "b", OutputFile: "r.json",
 			OutputKind: "freeform", Version: 1, Active: true, Source: "ui"})
 	}
@@ -3308,8 +3308,8 @@ func TestRepoScan_diffRescanQueuesGroupedSkills(t *testing.T) {
 	if err := s.DB.Where("repository_id = ?", repo.ID).Order("skill_name").Find(&scans).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(scans) != 5 {
-		t.Fatalf("queued scans = %d, want 5", len(scans))
+	if len(scans) != 6 {
+		t.Fatalf("queued scans = %d, want 6", len(scans))
 	}
 	group := scans[0].ScanGroup
 	if group == "" {
@@ -3325,7 +3325,7 @@ func TestRepoScan_diffRescanQueuesGroupedSkills(t *testing.T) {
 			t.Errorf("%s ScanGroup = %q, want shared %q", sc.SkillName, sc.ScanGroup, group)
 		}
 	}
-	for _, name := range []string{reconSkillName, historySkillName, "embedded-native", threatModelSkillName, "semgrep"} {
+	for _, name := range []string{reconSkillName, historySkillName, "embedded-native", threatModelSkillName, "semgrep", "betterleaks"} {
 		if !gotNames[name] {
 			t.Errorf("missing queued %s scan", name)
 		}
@@ -4374,6 +4374,15 @@ func TestRetry_preservesScanFields(t *testing.T) {
 				t.Errorf("retry lost focus area: %q", f.FocusArea)
 			}
 		}},
+		{"exploration", func(sc *db.Scan) {
+			sc.TriageScanID = new(uint(17))
+			sc.ExplorationMode = worker.ExplorationRandomDig
+			sc.ExplorationPath = "lib"
+		}, func(t *testing.T, f db.Scan) {
+			if f.TriageScanID == nil || *f.TriageScanID != 17 || f.ExplorationMode != worker.ExplorationRandomDig || f.ExplorationPath != "lib" {
+				t.Errorf("retry lost exploratory inputs: %+v", f)
+			}
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -4382,7 +4391,7 @@ func TestRetry_preservesScanFields(t *testing.T) {
 
 			repo := db.Repository{URL: "https://github.com/apache/airflow.git", Name: "airflow"}
 			s.DB.Create(&repo)
-			skill := db.Skill{Name: "security-deep-dive", Description: "x", Body: "b", Active: true, Source: "ui", Version: 1}
+			skill := db.Skill{Name: "security-deep-dive", Description: "x", Body: "b", Active: true, Source: "disk", SourcePath: "../../skills/security-deep-dive", Version: 1}
 			s.DB.Create(&skill)
 			orig := db.Scan{
 				RepositoryID: repo.ID, Kind: "skill", Status: db.ScanFailed,
@@ -5241,7 +5250,7 @@ func TestSettingsShow_rendersAboutAndScannerFindings(t *testing.T) {
 		t.Fatalf("status %d: %s", w.Code, w.Body)
 	}
 	body := w.Body.String()
-	for _, want := range []string{"Scanner findings", "About", "Scrutineer version", "Backend (claude)", "Semgrep", "Zizmor", "Container runtime"} {
+	for _, want := range []string{"Scanner findings", "About", "Scrutineer version", "Backend (claude)", "Semgrep", "Zizmor", "Betterleaks", "Container runtime"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("settings page missing %q", want)
 		}

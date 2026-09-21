@@ -38,7 +38,7 @@ These live in `skills/` and are embedded in the Scrutineer executable. At startu
 | `recon` | Maps the repository's distinct externally reachable input-processing subsystems into focus areas that threat-model carries into later deep-dive audits. |
 | `history` | Mines Git history for security fixes that may never have received an advisory. Reuses a prior report only when its analyzed HEAD is still an ancestor, classifies size-capped diff batches, and marks shallow or truncated analysis as partial. Its cumulative fixes feed threat-model and advisory-deep-dive. |
 | `threat-model` | Derives the project's security contract from source and docs: components, entry-point trust table, claimed and disclaimed properties, and disposition labels. Loaded by `security-deep-dive` so it does not re-derive boundaries per run. |
-| `security-deep-dive` | The model-driven audit. Inventories trust boundaries and sinks, then runs a six-step trace/boundary/validate/prior-art/reach/rate analysis on each. After threat-model completes, Scrutineer fans configured focus areas out into parallel deep-dive scans. |
+| `security-deep-dive` | The model-driven audit. Inventories trust boundaries and sinks, then runs a six-step trace/boundary/validate/prior-art/reach/rate analysis on each. After threat-model completes, Scrutineer fans configured focus areas out into parallel deep-dive scans. One third of eligible triage runs also receive one [exploratory audit](exploratory-audits.md). |
 | `advisory-deep-dive` | Re-audits every past GHSA/CVE advisory against its fix commit for four failure modes: a regression that reopened the original bug, a bypass of the fix, an incomplete fix that left a path open, or the same class of bug in sibling code the patch never touched. Records one verdict per advisory (`fixed`/`bypass`/`variant`/`regressed`) in `advisory_audits`, opens findings for anything that did not hold, and lets a `fixed` verdict back a public fix-audit certificate. A `security-deep-dive` scoped exclusively to the advisory space; `requires` the `advisories` cache and is re-enqueued automatically when a newer upstream release ships (regression watch). |
 | `finding-dedup` | Compares open findings in one repository and marks findings that describe the same underlying vulnerability as duplicates. |
 | `reachability` | Traces sinks already found in this app's dependencies through the app's own code to see which are reachable from its trust boundaries. |
@@ -118,6 +118,27 @@ metadata:
 | `metadata.scrutineer.ignore_paths` | list of string | Shell-glob deny-list applied on top of `paths` (or, by default, the builtin skip list). |
 
 `min_confidence`, `report_on`, and `fail_on` only apply when `output_kind` is `findings`.
+
+## Runtime capability preflight
+
+Skills can declare static runtime requirements in frontmatter:
+
+```yaml
+metadata:
+  scrutineer.requires_commands: [cargo]
+  scrutineer.requires_features: [network-egress]
+  scrutineer.degraded_mode: true
+```
+
+`scrutineer.requires_commands` lists executable names to resolve on `PATH` without running them. `scrutineer.requires_features` lists required runner features. `scrutineer.degraded_mode` defaults to false; enable it only when the skill documents a useful fallback for missing capabilities.
+
+The worker probes once before the first agent run, using the selected image, user, workspace mount, working directory and network policy, but without model credentials or agent state mounts; local runs check the host environment. Fallback and repair runs reuse the result, while a new scan attempt probes again. Skills without requirements skip the probe.
+
+Supported features are `network-egress`, `docker-in-docker`, and `fuse`. `network-egress` means policy permits a proxy path (or local host networking), not verified connectivity, credentials or model availability; allowlists still apply. Current runners report Docker-in-Docker and FUSE as unavailable because their required runtime support is not provisioned. Declarations never grant privileges or relax network policy.
+
+The worker records `ready`, `blocked`, or `degraded` in coverage and `scrutineer.preflight` in both copies of `context.json`. Missing requirements block execution unless degraded mode is enabled; blocked and degraded results cap coverage at partial. A ready result does not mean analysis is complete. Probe errors, cancellation, malformed output and persistence failures always stop execution.
+
+Declare only requirements that apply to every invocation, not repository-specific tools such as `cargo` for all generic `verify` runs.
 
 ## Path filtering
 
@@ -202,10 +223,15 @@ The worker then runs `claude -p "Use the {name} skill in this workspace"` with t
     "repository_id": 7,
     "skill_id": 3,
     "finding_id": 19,
+    "verification_feedback": "The previous attempt ran a standalone script; check that the reproduction reaches the first-party parser.",
     "dependent_id": 11,
     "scan_ref": "release/2.x",
     "scan_subpath": "packages/core",
     "scan_group": "6b1f…",
+    "exploration": {
+      "mode": "random-dig",
+      "path": "packages/core/parser"
+    },
     "focus_area": {
       "name": "parser",
       "paths": ["src/parse/**"],
@@ -239,6 +265,10 @@ The worker then runs `claude -p "Use the {name} skill in this workspace"` with t
 ```
 
 `finding_id` is always present for finding-scoped skills (`verify`, `critic`, `revalidate`, `breaking-change`, `disclose`, `patch`, `reattack`, `mitigate`, `public-issue`, `release-watch`, `exposure`, `variants`), and is optional for `forensics` when an operator launches it from a finding rather than from a repository. `dependent_id` is only set on `exposure` runs and points to the dependent whose code is under audit; `./src` is then a copy of that dependent's clone, not of the finding's repository. `scan_ref` is empty when the scan is on the default branch, except that a `reattack` scan pins it to the immutable patch attempt's base commit. `scan_subpath` is set when the operator scoped the scan to a monorepo sub-folder; finding-producing and code-analysis skills honour it by scoping their reads and reported locations to that sub-folder, while repo-wide projection skills — those whose output populates repository-level rows (`subprojects`, `dependencies`, `maintainers`, `packages`, `advisories`, `metadata`, `repo-overview`, `posture`, `compliance`) — ignore it and always describe the whole repository. `scan_group` is set when the scan is one of a parallel batch (Scan-all-subprojects, a single New-scan run, or a Diff rescan group); an audit skill passes it to `/repositories/{id}/findings?scan_group=...` to read what its siblings have already filed before reporting its own, and is absent otherwise. `focus_area` is present only on a fan-out audit scan; its paths are the scan's complete scope and files outside them have been removed from `./src`. `rescan` is present only for diff rescans; the worker stages `diff.patch`, `changed_files.json`, and, when available, `old_threat_model.json` in the workspace root. When `coverage_metadata_key` is present, the skill may put a claim under that top-level report key with `receipts`, `surfaces`, `open_questions`, and `dropped_findings`; the worker validates those fields as untrusted input and reconciles receipts against its staged changed-file scope, while scan modes, included paths, fallback state, threat-model state, and completeness remain worker-owned. `fork_org` is absent unless `-fork-org` is configured. `metadata_dir` is the directory inside a staging repo where scrutineer keeps its per-project metadata (`.scrutineer/` by default); operators with a different consortium-flavoured convention set `metadata_dir` in scrutineer.yaml. `recon` is present for `threat-model` when a valid recon report with the same ref and subpath completed; a scan-group sibling is preferred when available. Threat-model carries its focus areas into a complete scan-config proposal. `scan_config` is present only when an analyst saved repository guidance; `skip` patterns are already removed from `./src`, and audit skills use its focus areas, known bugs, and attack-surface statement as review context. `packages` is a convenience copy of the package rows when the `packages` skill has already run; otherwise it is omitted.
+
+For finding-scoped `verify` runs, `scrutineer.verification_feedback` contains optional operator guidance supplied on the finding page (at most 4000 UTF-8 bytes). It is omitted when empty and for other skills. The worker stages the per-scan snapshot, not mutable finding notes. Verification must investigate the feedback using current evidence without weakening its existing preflight or scoring rules. Reruns create fresh scans and preserve earlier verification history; retrying a scan retains its feedback, while a new finding-page run uses only the feedback submitted for that run.
+
+`exploration` is present only on exploratory audits. `mode` is `random-dig` or `adversarial-sweep`, and `path` is the selected repository-relative source directory (`.` for root-level random source). It is mutually exclusive with `focus_area`, `rescan`, `recon`, and `scan_config`; the sample above illustrates optional keys, not a combination emitted for one scan. Both modes retain path exclusions and restrict the callback token to validating their own report. Random digs receive no model-derived guidance. Adversarial sweeps receive the threat model so they can identify and challenge the exclusion attached to the selected directory. Both require container execution and the matching instruction pack under the deep-dive skill's `references/` directory; host execution via `--no-container` or `host_skills` is unsupported.
 
 ## schema.json
 
