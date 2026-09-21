@@ -639,6 +639,26 @@ func (w *Worker) migrateLegacyState() {
 // The returned report string lands in Scan.Report.
 type handler func(ctx context.Context, scan *db.Scan, emit func(Event)) (report string, err error)
 
+// loadQueuedScan returns nil for stale queue messages: either the scan was
+// deleted or it has already left the queued state. Database failures remain
+// errors so goqite can retry them.
+func (w *Worker) loadQueuedScan(scanID uint) (*db.Scan, error) {
+	var scan db.Scan
+	err := w.DB.Preload("Repository").First(&scan, scanID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		w.Log.Info("dropping stale job: scan deleted", "scan", scanID)
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load scan %d: %w", scanID, err)
+	}
+	if scan.Status != db.ScanQueued {
+		w.Log.Info("dropping stale job", "scan", scan.ID, "status", scan.Status)
+		return nil, nil
+	}
+	return &scan, nil
+}
+
 // wrap turns a handler into a goqite jobs.Func: decode payload, load the
 // scan row, run the handler, persist status/log/report. Errors from the
 // handler mark the scan failed but return nil to goqite so it does not
@@ -649,21 +669,17 @@ func (w *Worker) wrap(h handler) func(context.Context, []byte) error {
 		if err := json.Unmarshal(body, &p); err != nil {
 			return fmt.Errorf("decode payload: %w", err)
 		}
-		var scan db.Scan
-		if err := w.DB.Preload("Repository").First(&scan, p.ScanID).Error; err != nil {
-			return fmt.Errorf("load scan %d: %w", p.ScanID, err)
-		}
-		if scan.Status != db.ScanQueued {
-			w.Log.Info("dropping stale job", "scan", scan.ID, "status", scan.Status)
-			return nil
+		scan, err := w.loadQueuedScan(p.ScanID)
+		if err != nil || scan == nil {
+			return err
 		}
 		if scan.Repository.FederationOptedOut() {
-			w.cancelOptedOut(&scan)
+			w.cancelOptedOut(scan)
 			return nil
 		}
 
 		if scan.Kind == JobSkill {
-			deferred, err := w.preflightSkillUnlessOverage(ctx, &scan, p.Attempt)
+			deferred, err := w.preflightSkillUnlessOverage(ctx, scan, p.Attempt)
 			if err != nil {
 				return err
 			}
@@ -690,8 +706,8 @@ func (w *Worker) wrap(h handler) func(context.Context, []byte) error {
 			w.mu.Unlock()
 		}()
 
-		if err := w.startScanUnlessOverage(&scan); err != nil {
-			return w.dropUnclaimedScan(&scan, err)
+		if err := w.startScanUnlessOverage(scan); err != nil {
+			return w.dropUnclaimedScan(scan, err)
 		}
 		// The claim is the only moment a row leaves `queued`, and finalizeScan
 		// is minutes away: without this the list pages keep showing the scan as
@@ -704,14 +720,14 @@ func (w *Worker) wrap(h handler) func(context.Context, []byte) error {
 			}
 		}
 
-		emit, snapshotLog := w.scanEmitter(&scan)
+		emit, snapshotLog := w.scanEmitter(scan)
 
 		var report string
-		err := ctx.Err()
+		err = ctx.Err()
 		if err == nil {
-			report, err = h(ctx, &scan, emit)
+			report, err = h(ctx, scan, emit)
 		}
-		return w.finalizeScan(ctx, &scan, report, err, timeout, emit, snapshotLog)
+		return w.finalizeScan(ctx, scan, report, err, timeout, emit, snapshotLog)
 	}
 }
 
@@ -732,8 +748,18 @@ func (w *Worker) cancelOptedOut(scan *db.Scan) {
 	scan.StatusPriority = db.StatusPriorityFor(db.ScanCancelled)
 	scan.Error = OptOutCancelReason
 	scan.FinishedAt = &now
-	if err := w.DB.Save(scan).Error; err != nil {
-		w.Log.Error("save opted-out scan", "scan", scan.ID, "err", err)
+	// A pause and repository deletion may have won since dispatch loaded
+	// this row. Only transition an existing queued scan; Save would upsert it.
+	res := w.DB.Model(&db.Scan{}).Where("id = ? AND status = ?", scan.ID, db.ScanQueued).
+		Updates(map[string]any{
+			"status": scan.Status, "status_priority": scan.StatusPriority,
+			errorColumn: scan.Error, "finished_at": scan.FinishedAt,
+		})
+	if res.Error != nil {
+		w.Log.Error("save opted-out scan", "scan", scan.ID, "err", res.Error)
+		return
+	}
+	if res.RowsAffected == 0 {
 		return
 	}
 	w.publish(scan.ID, scan.RepositoryID, "scan-status", string(scan.Status))
