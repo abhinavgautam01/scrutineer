@@ -17,7 +17,7 @@ func (w *Worker) findingFeedback(ctx context.Context, workRoot string, scan *db.
 	}
 	var paths []string
 	switch {
-	case skill.Name == "revalidate" && scan.FindingID != nil:
+	case skill.Name == revalidateSkillName && scan.FindingID != nil:
 		var finding db.Finding
 		if err := w.DB.WithContext(ctx).Where("repository_id = ?", scan.RepositoryID).First(&finding, *scan.FindingID).Error; err != nil {
 			return nil, fmt.Errorf("load finding for analyst feedback: %w", err)
@@ -25,7 +25,7 @@ func (w *Worker) findingFeedback(ctx context.Context, workRoot string, scan *db.
 		if path := findingnorm.FindingPath(finding.SubPath, finding.Location); path != "" {
 			paths = append(paths, path)
 		}
-	case skill.Name == "security-deep-dive" && scan.RescanMode == db.ScanRescanModeDiff:
+	case skill.Name == deepDiveSkillName && scan.RescanMode == db.ScanRescanModeDiff:
 		data, err := os.ReadFile(filepath.Join(workRoot, changedFilesFile))
 		if err != nil {
 			return nil, fmt.Errorf("load changed paths for analyst feedback: %w", err)

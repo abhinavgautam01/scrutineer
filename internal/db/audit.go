@@ -32,7 +32,8 @@ var ValidReviewVerdicts = map[string]bool{
 // query stays a single GROUP BY rather than a string-matching mess.
 // automatedOutcome is whatever the automation said about this finding
 // at the time of review (typically the latest revalidate verdict);
-// empty when no automation has weighed in yet.
+// empty when no automation has weighed in yet or the decision is not an
+// assessment of automation (for example a rejection-dialog decision).
 func AddFindingReview(gdb *gorm.DB, findingID uint, verdict, reason, automatedOutcome, reviewer string) (*FindingReview, error) {
 	verdict = strings.TrimSpace(verdict)
 	if !ValidReviewVerdicts[verdict] {
@@ -83,11 +84,8 @@ func RejectFinding(gdb *gorm.DB, findingID uint, verdict, reason, reviewer strin
 		return fmt.Errorf("%w: a rejection reason is required", ErrInvalidFindingReview)
 	}
 	return FindingWriteTransaction(gdb, findingID, func(tx *gorm.DB) error {
-		var f Finding
-		if err := tx.First(&f, findingID).Error; err != nil {
-			return err
-		}
-		if _, err := AddFindingReview(tx, findingID, verdict, reason, f.LastRevalidateVerdict, reviewer); err != nil {
+		// Rejection classifies a lifecycle decision, not agreement with automation.
+		if _, err := AddFindingReview(tx, findingID, verdict, reason, "", reviewer); err != nil {
 			return err
 		}
 		return WriteFindingField(tx, findingID, "status", string(FindingRejected), SourceAnalyst, strings.TrimSpace(reviewer))
@@ -162,7 +160,7 @@ type AuditMetrics struct {
 // ComputeAuditMetrics scans the FindingReview table and returns
 // aggregate stats for the audit page. A review counts toward agreement
 // only when both the human verdict and the automated outcome are
-// known: empty automated outcomes (no revalidate run) say nothing
+// known: empty automated outcomes (no revalidate run or no comparison) say nothing
 // about calibration. The three count-style metrics fold into one
 // query with conditional aggregation so the /audit page hits the
 // table once for them; the per-verdict histogram is a separate GROUP BY.

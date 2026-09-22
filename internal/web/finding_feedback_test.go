@@ -59,6 +59,41 @@ func TestFindingRejectionDatabaseError(t *testing.T) {
 	}
 }
 
+func TestFindingRejectionDoesNotAffectAgreement(t *testing.T) {
+	for _, verdict := range []string{"false_positive", "already_fixed", "uncertain"} {
+		t.Run(verdict, func(t *testing.T) {
+			s, done := newTestServer(t)
+			defer done()
+			f, _ := seedAuditFixture(t, s)
+			if err := s.DB.Model(&f).Update("last_revalidate_verdict", verdict).Error; err != nil {
+				t.Fatal(err)
+			}
+			// An explicit review still contributes to calibration, unlike rejection.
+			if _, err := db.AddFindingReview(s.DB, f.ID, "uncertain", "needs investigation", "uncertain", "analyst"); err != nil {
+				t.Fatal(err)
+			}
+			form := url.Values{statusKey: {"rejected"}, "verdict": {verdict}, "reason": {"not actionable"}, "reviewer": {"analyst"}, "automated_outcome": {verdict}}
+			if w := postFindingStatus(t, s, f.ID, form); w.Code >= http.StatusBadRequest {
+				t.Fatalf("status = %d: %s", w.Code, w.Body)
+			}
+			reviews, err := db.ListFindingReviews(s.DB, f.ID)
+			if err != nil || len(reviews) != 2 {
+				t.Fatalf("reviews = %v, error = %v", reviews, err)
+			}
+			if reviews[0].Verdict != verdict || reviews[0].AutomatedOutcome != "" {
+				t.Fatalf("rejection recorded a comparison: %+v", reviews[0])
+			}
+			metrics, err := db.ComputeAuditMetrics(s.DB)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if metrics.TotalReviews != 2 || metrics.WithAutomatedOutcome != 1 || metrics.Agreements != 1 || metrics.AgreementRate != 1 {
+				t.Fatalf("rejection changed agreement metrics: %+v", metrics)
+			}
+		})
+	}
+}
+
 func TestFindingRejectionMultibyteReason(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()

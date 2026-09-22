@@ -139,7 +139,16 @@ func TestApiListFindingReviews(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
 	f, tok := seedAuditFixture(t, s)
-	if _, err := db.AddFindingReview(s.DB, f.ID, "false_positive", "noise", "", "andrew"); err != nil {
+	f.Commit = "reviewed-commit"
+	f.Fingerprint = "reviewed-fingerprint"
+	f.SubPath = "lib"
+	f.Location = "parser.go:10"
+	f.CWE = "CWE-20"
+	if err := s.DB.Save(&f).Error; err != nil {
+		t.Fatal(err)
+	}
+	review, err := db.AddFindingReview(s.DB, f.ID, "false_positive", "noise", "uncertain", "andrew")
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -147,10 +156,26 @@ func TestApiListFindingReviews(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d; body=%s", w.Code, w.Body)
 	}
-	var rows []db.FindingReview
+	// Check wire keys directly: decoding back into the model can hide tag bugs.
+	var rows []map[string]any
 	decodeJSON(t, w, &rows)
-	if len(rows) != 1 || rows[0].Verdict != "false_positive" {
-		t.Errorf("reviews = %+v, want 1 false_positive row", rows)
+	if len(rows) != 1 {
+		t.Fatalf("reviews = %+v, want one row", rows)
+	}
+	want := map[string]any{
+		"id": float64(review.ID), "finding_id": float64(f.ID),
+		"verdict": "false_positive", "reason": "noise", "automated_outcome": "uncertain", "reviewer": "andrew",
+		"source_scan_id": float64(f.ScanID), "source_commit": "reviewed-commit",
+		"finding_fingerprint": "reviewed-fingerprint", "finding_path": "lib/parser.go", "cwe": "CWE-20",
+		"created_at": review.CreatedAt.Format(time.RFC3339Nano),
+	}
+	if len(rows[0]) != len(want) {
+		t.Errorf("unexpected response keys: %v", rows[0])
+	}
+	for key, value := range want {
+		if got := rows[0][key]; got != value {
+			t.Errorf("%s = %v, want %v", key, got, value)
+		}
 	}
 }
 

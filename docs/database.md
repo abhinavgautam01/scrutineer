@@ -313,7 +313,7 @@ findings that already have a row here.
 | finding_id | integer FK | Cascade delete. |
 | verdict | text | `true_positive`, `false_positive`, `already_fixed`, `uncertain`. |
 | reason | text | Free-text justification, at most 4096 characters (Unicode code points) after trimming whitespace on new reviews. Required for false-positive reviews and every browser rejection. |
-| automated_outcome | text | Snapshot of the automation verdict (typically the latest revalidate verdict) at review time. Empty when no automation has spoken. |
+| automated_outcome | text | Snapshot of the automation verdict (typically the latest revalidate verdict) at review time. Empty when no automation has spoken or the decision is not an assessment of automation. Rejection-dialog decisions leave this empty and do not affect agreement metrics. |
 | reviewer | text | Optional free-text reviewer identity. |
 | source_scan_id | integer | Snapshot of the finding's most recent observation scan, falling back to its original scan. Zero on legacy reviews. |
 | source_commit | text | Commit of that observation. |

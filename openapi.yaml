@@ -2038,7 +2038,7 @@ components:
         finding_id:        { type: integer, format: int64 }
         verdict:           { type: string, enum: [true_positive, false_positive, already_fixed, uncertain] }
         reason:            { type: string }
-        automated_outcome: { type: string, description: Automation verdict snapshotted at review time, empty when no revalidate run had spoken. }
+        automated_outcome: { type: string, description: "Automation verdict snapshotted at review time. Empty when no revalidate run had spoken or the decision does not assess automation (such as a rejection-dialog decision); excluded from agreement metrics when empty." }
         reviewer:          { type: string }
         source_scan_id:    { type: integer, description: Observation scan at review time; zero on legacy reviews. }
         source_commit:     { type: string }
