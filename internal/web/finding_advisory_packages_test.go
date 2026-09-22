@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"gorm.io/gorm"
+
 	"scrutineer/internal/db"
 )
 
@@ -51,6 +53,7 @@ func TestFindingAdvisoryPackagesExports(t *testing.T) {
 		subPath   string
 		location  string
 		monorepo  bool
+		unlink    bool
 		wantNames []string
 	}{
 		{name: "exact subproject", subPath: "cli", monorepo: true, wantNames: []string{"cli"}},
@@ -60,8 +63,11 @@ func TestFindingAdvisoryPackagesExports(t *testing.T) {
 		{name: "root monorepo", monorepo: true},
 		{name: "shared code", subPath: "shared", location: "shared/parser.go:10", monorepo: true},
 		{name: "location is not attribution", location: "cli/parser.go:10", monorepo: true},
-		{name: "foreign subproject only", subPath: "cli"},
+		{name: "foreign links do not enable attribution", subPath: "cli", wantNames: []string{"unassigned"}},
 		{name: "legacy root", wantNames: []string{"unassigned"}},
+		{name: "unlinked monorepo root", monorepo: true, unlink: true, wantNames: []string{"unassigned", "cli", "web", "cli-nested"}},
+		{name: "unlinked monorepo subpath", subPath: "cli", monorepo: true, unlink: true, wantNames: []string{"unassigned", "cli", "web", "cli-nested"}},
+		{name: "unlinked monorepo missing path", subPath: "missing", monorepo: true, unlink: true, wantNames: []string{"unassigned", "cli", "web", "cli-nested"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			s, done := newTestServer(t)
@@ -73,6 +79,12 @@ func TestFindingAdvisoryPackagesExports(t *testing.T) {
 				f.Status = db.FindingFixed
 			})
 			pkgs := seedAdvisoryPackages(t, s, f.RepositoryID, tt.monorepo)
+			if tt.unlink {
+				// Attribution disabled: discovery still exists, but packages have no links.
+				if err := s.DB.Model(&db.Package{}).Where("repository_id = ?", f.RepositoryID).Update("subproject_id", nil).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
 			osv := getOSV(t, s, f.ID)
 			csaf := getCSAF(t, s, f.ID)
 			bundle := httptest.NewRecorder()
@@ -159,24 +171,70 @@ func assertAdvisoryCSAFPackages(t *testing.T, raw []byte, pkgs []db.Package, wan
 }
 
 func TestFindingAdvisoryPackagesLookupErrors(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		subPath string
+		pred    func(*gorm.DB) bool
+	}{
+		{name: "root link check", pred: tableQuery("packages")},
+		{name: "scoped link check", subPath: "cli", pred: tableQuery("packages")},
+		{name: "subproject lookup", subPath: "cli", pred: tableQuery("subprojects")},
+		{name: "root package rows", pred: advisoryPackageRowsQuery},
+		{name: "scoped package rows", subPath: "cli", pred: advisoryPackageRowsQuery},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s, done := newTestServer(t)
+			defer done()
+			f := seedCSAFFinding(t, s, func(f *db.Finding) { f.SubPath = tt.subPath })
+			seedAdvisoryPackages(t, s, f.RepositoryID, tt.subPath != "")
+			dbErr := errors.New("advisory lookup unavailable")
+			failQueries(t, s, tt.pred, dbErr)
+			if _, err := findingAdvisoryPackages(s.DB, f, nil); !errors.Is(err, dbErr) {
+				t.Fatalf("error = %v, want %v", err, dbErr)
+			}
+			for _, suffix := range []string{"osv.json", "csaf.json", "bundle.tar.gz"} {
+				w := httptest.NewRecorder()
+				s.Handler().ServeHTTP(w, localReq(http.MethodGet, "/findings/"+strconv.FormatUint(uint64(f.ID), 10)+"/"+suffix))
+				if w.Code != http.StatusInternalServerError {
+					t.Errorf("%s status = %d, want 500: %s", suffix, w.Code, w.Body)
+				}
+			}
+		})
+	}
+}
+
+func advisoryPackageRowsQuery(tx *gorm.DB) bool {
+	_, ok := tx.Statement.Dest.(*[]db.Package)
+	return ok
+}
+
+func TestFindingAdvisoryPackageColumns(t *testing.T) {
 	for _, subPath := range []string{"", "cli"} {
-		for _, table := range []string{"subprojects", "packages"} {
-			t.Run(subPath+"/"+table, func(t *testing.T) {
+		for _, suffix := range []string{"osv.json", "csaf.json", "bundle.tar.gz"} {
+			t.Run(subPath+"/"+suffix, func(t *testing.T) {
 				s, done := newTestServer(t)
 				defer done()
 				f := seedCSAFFinding(t, s, func(f *db.Finding) { f.SubPath = subPath })
 				seedAdvisoryPackages(t, s, f.RepositoryID, subPath != "")
-				dbErr := errors.New("advisory lookup unavailable")
-				failQueries(t, s, tableQuery(table), dbErr)
-				if _, err := findingAdvisoryPackages(s.DB, f); !errors.Is(err, dbErr) {
-					t.Fatalf("error = %v, want %v", err, dbErr)
+				var want []string
+				if suffix == "osv.json" {
+					want = []string{"name", "ecosystem", "p_url"}
 				}
-				for _, suffix := range []string{"osv.json", "csaf.json", "bundle.tar.gz"} {
-					w := httptest.NewRecorder()
-					s.Handler().ServeHTTP(w, localReq(http.MethodGet, "/findings/"+strconv.FormatUint(uint64(f.ID), 10)+"/"+suffix))
-					if w.Code != http.StatusInternalServerError {
-						t.Errorf("%s status = %d, want 500: %s", suffix, w.Code, w.Body)
+				queries := 0
+				if err := s.DB.Callback().Query().Before("gorm:query").Register("test:advisory_package_columns", func(tx *gorm.DB) {
+					if advisoryPackageRowsQuery(tx) {
+						queries++
+						if !slices.Equal(tx.Statement.Selects, want) {
+							t.Errorf("selected columns = %v, want %v", tx.Statement.Selects, want)
+						}
 					}
+				}); err != nil {
+					t.Fatal(err)
+				}
+				w := httptest.NewRecorder()
+				s.Handler().ServeHTTP(w, localReq(http.MethodGet, "/findings/"+strconv.FormatUint(uint64(f.ID), 10)+"/"+suffix))
+				if w.Code != http.StatusOK || queries == 0 {
+					t.Fatalf("status = %d, package queries = %d: %s", w.Code, queries, w.Body)
 				}
 			})
 		}

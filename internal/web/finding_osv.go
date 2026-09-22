@@ -101,7 +101,7 @@ func (s *Server) findingOSV(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to load finding references", http.StatusInternalServerError)
 		return
 	}
-	pkgs, err := findingAdvisoryPackages(s.DB, f)
+	pkgs, err := findingAdvisoryPackages(s.DB, f, []string{"name", "ecosystem", "p_url"})
 	if err != nil {
 		s.Log.Error("osv packages", "finding", f.ID, "repository", f.RepositoryID, "err", err)
 		http.Error(w, "failed to load repository packages", http.StatusInternalServerError)
