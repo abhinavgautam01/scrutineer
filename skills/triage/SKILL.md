@@ -2,7 +2,7 @@
 name: triage
 description: Default pipeline scrutineer runs when a repository is added. Triggers a standard set of other skills in parallel, then writes a short summary of what was enqueued. Edit the list below to change the default scan coverage without touching scrutineer's Go code.
 license: MIT
-compatibility: Needs network access to the scrutineer API (http://host:port/api). Uses `brief` (github.com/git-pkgs/brief) to classify the repository before deciding which scans to enqueue; falls back to enqueueing everything if brief is unavailable.
+compatibility: Needs network access to the scrutineer API (http://host:port/api). Uses `brief` (github.com/git-pkgs/brief) for language and dependency gates; falls back to the general code and package scans if brief is unavailable. Repository modes use source evidence independently.
 metadata:
   scrutineer.version: 1
   scrutineer.output_file: report.json
@@ -53,6 +53,18 @@ This gates `bandit`, which reads Python and nothing else. It follows `has_code`:
 This gates `zizmor`, which only audits GitHub Actions workflows; with no workflows directory its scan immediately no-ops, so skipping it at triage avoids enqueueing a scan that can do nothing. Unlike the code/package flags this is a definitive check, not a heuristic, so do not default it true on error — if the directory is absent, `has_workflows` is false.
 
 ## The scan set
+
+Read [references/modes.md](references/modes.md) in this skill's directory and
+check each listed repository type against the source. Record matching modes
+and their file-level evidence in `modes`. Several modes can apply to one
+repository. Mode detection is independent of Brief's language and dependency
+detection, including when Brief fails.
+
+Add each matching mode's skills to the scan set below. Put skills belonging
+only to unmatched modes in `gated`. Apply the same skip set, request scope,
+and error handling to mode skills as to the standard scans, and enqueue each
+skill at most once. Mode scans are additive: keep the standard scans and the
+threat-model-driven deep dives.
 
 Before enqueueing anything, check what already ran so a re-trigger does not double-enqueue work that is already current.
 
@@ -127,6 +139,7 @@ Write `./report.json` as:
   "has_python": false,
   "has_workflows": false,
   "has_embedded_native": true,
+  "modes": [],
   "brief": {"languages": ["Ruby", "Rust"], "package_managers": ["Bundler", "Cargo"], "native_signals": ["native_extension:rb-sys", "language:Rust"]},
   "triggered": ["packages", "advisories", ...],
   "skipped":   ["semgrep"],
@@ -141,5 +154,11 @@ Write `./report.json` as:
 `gated` lists skills that were not enqueued because `has_code`, `has_packages`, `has_python`, `has_workflows`, or `has_embedded_native` was false. `already_done` holds skills that were skipped because a scan is currently running or already completed at this commit. `skipped` is for skills that came back `404 skill not found or inactive`. `brief` is the subset of brief's output the gates were derived from, including short `native_signals` entries for the embedded-native decision, so an operator can see why a repo got the short treatment and re-run triage manually if the classification was wrong.
 
 Do not wait for any of the scans to finish. The API returns a scan id immediately; your job is to fire them off and exit.
+
+Each `modes` entry has a `name` and a non-empty `evidence` list of source paths
+with short explanations. For example, a `package-manager` match should cite
+the install command and its implementation. An empty list means no mode
+matched; record unreadable source or inconclusive classification in `errors`.
+`gated` also includes skills whose repository type did not match.
 
 Do not fabricate scans or invent skill names. If the `api_base` or `token` is missing from context.json, write `{"error": "context.json missing scrutineer block"}` and exit 0 so the failure is visible on the scan page.
