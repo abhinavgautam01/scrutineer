@@ -313,10 +313,17 @@ findings that already have a row here.
 | id | integer PK | |
 | finding_id | integer FK | Cascade delete. |
 | verdict | text | `true_positive`, `false_positive`, `already_fixed`, `uncertain`. |
-| reason | text | Free-text justification. |
-| automated_outcome | text | Snapshot of the automation verdict (typically the latest revalidate verdict) at review time. Empty when no automation has spoken. |
+| reason | text | Free-text justification, at most 4096 characters (Unicode code points) after trimming whitespace on new reviews. Required for false-positive reviews and every browser rejection. |
+| automated_outcome | text | Snapshot of the automation verdict (typically the latest revalidate verdict) at review time. Empty when no automation has spoken or the decision is not an assessment of automation. Rejection-dialog decisions leave this empty and do not affect agreement metrics. |
 | reviewer | text | Optional free-text reviewer identity. |
+| source_scan_id | integer | Snapshot of the finding's most recent observation scan, falling back to its original scan. Zero on legacy reviews. |
+| source_commit | text | Commit of that observation. |
+| finding_fingerprint | text | Identity fingerprint at review time; not proof that two bugs are equivalent. |
+| finding_path | text, indexed | Repository-relative source path at review time, normalized using the finding's subproject path. |
+| cwe | text | CWE at review time. |
 | created_at | datetime | |
+
+Browser rejection records a review and the lifecycle change in one transaction. The analyst selects false positive, already fixed, or other/not actionable (`uncertain`); only the latest false-positive review on a still-rejected finding is eligible for skill feedback. Legacy reviews without observation snapshots are excluded rather than attributed retroactively. Reviewer names are operator-supplied labels, not authenticated identities.
 
 ## finding_verifications
 

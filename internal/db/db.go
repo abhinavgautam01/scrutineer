@@ -1281,23 +1281,31 @@ type AuditEvent struct {
 // agreement with the model can be measured directly. AutomatedOutcome
 // snapshots what the automation said about this finding at the moment
 // of review (typically the last revalidate verdict; empty when no
-// automation has spoken yet). This is the data behind the audit queue
+// automation has spoken yet or the decision does not assess automation).
+// This is the data behind the audit queue
 // in internal/web/audit.go: surfacing recently auto-bucketed findings
 // without lasting marks of human review, so the TOC can confirm the
 // automation is calibrated and so the agreement rate is computable.
 type FindingReview struct {
-	ID        uint   `gorm:"primarykey"`
-	FindingID uint   `gorm:"index;not null"`
-	Verdict   string `gorm:"index"` // true_positive | false_positive | already_fixed | uncertain
-	Reason    string `gorm:"type:text"`
+	ID        uint   `gorm:"primarykey" json:"id"`
+	FindingID uint   `gorm:"index;not null" json:"finding_id"`
+	Verdict   string `gorm:"index" json:"verdict"` // true_positive | false_positive | already_fixed | uncertain
+	Reason    string `gorm:"type:text" json:"reason"`
 	// AutomatedOutcome is the automation verdict (revalidate's) the
 	// human is judging. Empty when revalidate has not run on this
-	// finding; agreement metrics ignore reviews with empty automated
+	// finding or the decision does not assess automation (rejection dialog);
+	// agreement metrics ignore reviews with empty automated
 	// outcomes since there is nothing to compare to.
-	AutomatedOutcome string `gorm:"index"`
-	Reviewer         string
+	AutomatedOutcome string `gorm:"index" json:"automated_outcome"`
+	Reviewer         string `json:"reviewer"`
+	// Snapshot the observation being reviewed; later rescans may move the case.
+	SourceScanID       uint   `json:"source_scan_id"`
+	SourceCommit       string `json:"source_commit"`
+	FindingFingerprint string `json:"finding_fingerprint"`
+	FindingPath        string `gorm:"index" json:"finding_path"`
+	CWE                string `json:"cwe"`
 
-	CreatedAt time.Time
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // FindingVerification is one immutable grading record produced by a
