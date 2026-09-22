@@ -13,6 +13,19 @@ import (
 	"scrutineer/internal/worker"
 )
 
+func assertPreflightReceiptDeletion(t *testing.T, s *Server, deletedID, keptID uint) {
+	t.Helper()
+	for id, want := range map[uint]int64{deletedID: 0, keptID: 1} {
+		var count int64
+		if err := s.DB.Model(&db.ScanPreflightReceipt{}).Where("scan_id = ?", id).Count(&count).Error; err != nil {
+			t.Fatal(err)
+		}
+		if count != want {
+			t.Errorf("scan=%d receipts=%d want=%d", id, count, want)
+		}
+	}
+}
+
 func TestRepoDelete_removesRepoAndAllLinkedData(t *testing.T) {
 	for _, foreignKeys := range []bool{true, false} {
 		t.Run(fmt.Sprintf("foreign_keys=%t", foreignKeys), func(t *testing.T) {
@@ -52,6 +65,8 @@ func testRepoDeleteLinkedData(t *testing.T, foreignKeys bool) {
 
 	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName}
 	s.DB.Create(&scan)
+	s.DB.Create(&db.ScanPreflightReceipt{ScanID: scan.ID, ProbeID: "doomed", Report: "{}"})
+	s.DB.Create(&db.ScanPreflightReceipt{ScanID: keepScan.ID, ProbeID: "retained", Report: "{}"})
 	finding := db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, FindingID: "F1", Title: "doomed finding", Severity: "High"}
 	s.DB.Create(&finding)
 
@@ -146,6 +161,7 @@ func testRepoDeleteLinkedData(t *testing.T, foreignKeys bool) {
 	if n := count(&db.Repository{}, "id = ?", repo.ID); n != 0 {
 		t.Errorf("repository row survived (%d)", n)
 	}
+	assertPreflightReceiptDeletion(t, s, scan.ID, keepScan.ID)
 	for name, n := range map[string]int64{
 		"scans":          count(&db.Scan{}, "repository_id = ?", repo.ID),
 		"findings":       count(&db.Finding{}, "repository_id = ?", repo.ID),

@@ -271,6 +271,7 @@ func (s containerRunErrorState) failure(provider opencodeProvider, runtimeName s
 // Egress is routed through scrutineer's allowlisting proxy on the host;
 // see EgressProxy. tmpfs/cap-drop rules mirror the local runner's intent.
 func (d ContainerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Event)) (SkillResult, error) {
+	stableProxy := d.ProxyURL
 	if HarnessName(d.harness()) == "codex" && d.CodexAccountAuth != nil && sj.StateDir == "" {
 		return SkillResult{}, errors.New("codex account auth requires a per-job state directory")
 	}
@@ -343,6 +344,9 @@ func (d ContainerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Ev
 	probeBase := append([]string{runtimeBin(d.Runtime)}, d.buildContainerBaseArgs(absWork, hnet, "/work")...)
 	probeBase = append(probeBase, "--", image)
 	if err := sj.checkCapabilities(ctx, probeBase, d.ProxyURL != "" || hnet.proxyEndpoint != "", emit); err != nil {
+		return result, err
+	}
+	if err := d.checkBackendPreflight(ctx, sj, image, hnet, provider, stableProxy); err != nil {
 		return result, err
 	}
 

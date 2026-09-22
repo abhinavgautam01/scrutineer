@@ -140,6 +140,16 @@ The worker records `ready`, `blocked`, or `degraded` in coverage and `scrutineer
 
 Declare only requirements that apply to every invocation, not repository-specific tools such as `cargo` for all generic `verify` runs.
 
+### Cached live backend preflight
+
+Set `backend_preflight_ttl: 1h` in the server configuration (or `-backend-preflight-ttl=1h`) to enable live backend probes. The default `0` disables them because they consume model tokens. Static requirement checks remain independent and still run for each scan attempt; a cached backend success never overrides a static failure.
+
+Before the first skill invocation, the runner issues a fresh one-turn request through its actual harness argument builder and stream parser, retaining the model, effective effort, tool allowlist, permission mode, credentials, provider endpoint and container network policy. It asks for a fixed response without tools in an empty temporary workspace, with no repository, staged skill, scan session or callback token. Container probes use fresh agent state; local Claude probes use the host's existing authentication and global configuration, but not a scan session. A terminal result and the expected response are both required. Tool calls, backend errors, missing or malformed results, and rejected rate limits block the scan. A two-minute deadline and bounded output prevent an unresponsive probe from holding a worker indefinitely. This checks request/toolset acceptance, not whether every tool works or whether a future scan will succeed.
+
+Results, including sanitized failures, are cached in memory for the configured TTL. Concurrent requests for the same key share one probe. The key covers the effective backend arguments (including model and allowed tools), provider environment/configuration, known credential files, resolved image identity and configured network policy. Changed keys and expired entries re-probe; process restarts invalidate the cache. An unresolved image identity disables reuse. Opaque host authentication changes that are not represented in environment or configuration files are detected on the next probe after TTL expiry. No credentials, raw output, session IDs or endpoint strings are persisted in probe evidence; the configuration identity is a process-keyed digest.
+
+Both coverage and `scrutineer.preflight` in `context.json` retain the static result and add worker-owned `backend` evidence: probe ID, receipt ID, configuration digest, status/error, check/expiry timestamps, cache reuse and usage counters. A blocked live probe caps completeness at partial and cannot be waived by `degraded_mode`. Before executing the skill, the worker commits an append-only `scan_preflight_receipts` row linking that probe to the SHA-256 of the immutable claim-time recipe. Further probes after expiry append receipts rather than rewriting the recipe or prior evidence. Probe costs are recorded separately in receipts, not charged again to every scan that reuses them; aggregate by distinct `probe_id` rather than summing per-scan receipts.
+
 ## Path filtering
 
 Before each scan, scrutineer prunes `workRoot/src/` so the skill only sees the files it cares about. The default filter drops lockfiles, minified bundles, build outputs, and generated trees:

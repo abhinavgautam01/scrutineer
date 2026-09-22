@@ -122,6 +122,7 @@ type flags struct {
 	concurrency           int
 	cloneMode             string
 	scanTimeout           time.Duration
+	backendPreflightTTL   time.Duration
 	smokeTimeout          time.Duration
 	maxTurns              int
 	modelBaseURL          string
@@ -272,6 +273,7 @@ func registerFlags(fs *flag.FlagSet, f *flags) {
 	fs.IntVar(&f.concurrency, "concurrency", queue.DefaultWorkerConcurrency, "number of scans to run in parallel")
 	fs.StringVar(&f.cloneMode, "clone", "shallow", "clone depth: shallow (--depth 1) or full")
 	fs.DurationVar(&f.scanTimeout, "scan-timeout", worker.DefaultScanTimeout, "wall-clock limit per scan")
+	fs.DurationVar(&f.backendPreflightTTL, "backend-preflight-ttl", 0, "cache lifetime for live backend probes (0 disables; probes consume model tokens)")
 	fs.DurationVar(&f.smokeTimeout, "runtime-smoke-timeout", defaultRuntimeSmokeTimeout, "timeout for each rootless-podman startup container check (keep-id image remap, SELinux mount probe); raise if first-run image remapping is slow, lower if the image is pre-warmed")
 	fs.IntVar(&f.maxTurns, "max-turns", 0, "claude --max-turns limit (0 = unlimited)")
 	fs.StringVar(&f.modelBaseURL, "model-base-url", "", "custom HTTPS model API base URL for the active backend (HTTP allowed for local development; env fallback: ANTHROPIC_BASE_URL for claude)")
@@ -366,6 +368,9 @@ func (f *flags) merge(cfg *config.Config) {
 	}
 	if d, _ := config.ParseScanTimeout(cfg.ScanTimeout); d > 0 && !f.set["scan-timeout"] {
 		f.scanTimeout = d
+	}
+	if !f.set["backend-preflight-ttl"] {
+		f.backendPreflightTTL, _ = config.ParseBackendPreflightTTL(cfg.BackendPreflightTTL)
 	}
 	if cfg.MaxTurns > 0 && !f.set["max-turns"] {
 		f.maxTurns = cfg.MaxTurns
@@ -726,6 +731,10 @@ func run(log *slog.Logger) error {
 			broker.Publish(web.Event{Name: name, Data: data, ScanID: scanID, RepoID: repoID})
 		},
 	}
+	w.BackendPreflight, err = configuredBackendPreflight(f.backendPreflightTTL)
+	if err != nil {
+		return err
+	}
 	w.Register(q)
 
 	srv, err := web.New(gdb, q, log, broker, w)
@@ -807,6 +816,13 @@ func configureEncryption(srv *web.Server, f *flags, log *slog.Logger) error {
 		log.Info("loaded identity plugins", "count", len(ids))
 	}
 	return nil
+}
+
+func configuredBackendPreflight(ttl time.Duration) (*worker.BackendPreflightCache, error) {
+	if ttl == 0 {
+		return nil, nil
+	}
+	return worker.NewBackendPreflightCache(ttl)
 }
 
 // wireEcosystems configures the worker's per-scan cache refresh and the

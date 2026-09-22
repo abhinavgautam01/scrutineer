@@ -3068,6 +3068,9 @@ func (s *Server) deleteRepository(repo db.Repository) (deletedRepository, error)
 			Delete(&db.SBOMPackage{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Where("scan_id IN (SELECT id FROM scans WHERE repository_id = ?)", repo.ID).Delete(&db.ScanPreflightReceipt{}).Error; err != nil {
+			return err
+		}
 		for _, child := range []any{
 			&db.Finding{}, &db.Scan{}, &db.Subproject{}, &db.Dependency{},
 			&db.Dependent{}, &db.Package{}, &db.Advisory{}, &db.AdvisoryAudit{}, &db.SBOMUpload{},

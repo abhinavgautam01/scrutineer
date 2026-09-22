@@ -161,6 +161,9 @@ func (w *Worker) configureCapabilityPreflight(ctx context.Context, scan *db.Scan
 			return fmt.Errorf("stored coverage did not decode")
 		}
 		// Preserve reduced coverage from an earlier attempt of this scan.
+		if rec.Preflight != nil {
+			result.Backend = rec.Preflight.Backend
+		}
 		if rec.Preflight == nil || rec.Preflight.Status == coverage.PreflightReady || result.Status != coverage.PreflightReady {
 			rec.Preflight = &result
 		}

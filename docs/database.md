@@ -122,7 +122,7 @@ One row per skill execution or external import. `skill_name` / `skill_version` p
 | diff_base_commit | text | Baseline commit used to generate `diff.patch` and `changed_files.json`. Empty for full scans. |
 | diff_threat_model_scan_id | integer FK | Prior `threat-model` scan staged as `old_threat_model.json` for a diff-aware run, when one is available. |
 | diff_stats | text | JSON metadata for the generated diff: base/head commits, changed-file count, patch size, file statuses, staged file names, and limits. |
-| coverage | text | JSON coverage metadata. Diff scans record requested versus actual mode and fallback reasons; threat-model scans also record whether the repository working model was updated or skipped for a small diff. Skills declaring runtime requirements also record worker-owned `preflight` with `status` (`ready`, `degraded`, or `blocked`), namespaced `missing` entries, a `degraded` boolean, and an optional probe `error`. Blocked or degraded preflight keeps completeness partial. |
+| coverage | text | JSON coverage metadata. Diff scans record requested versus actual mode and fallback reasons; threat-model scans also record whether the repository working model was updated or skipped for a small diff. Runtime requirements record worker-owned `preflight` with static `status`, `missing`, `degraded`, and optional `error`. When enabled, `preflight.backend` includes sanitized cached live probe evidence and its `scan_preflight_receipts` ID. Blocked or degraded preflight keeps completeness partial. |
 | scan_group | text | Groups a cohort of scans launched as one batch (Scan-all-subprojects, a single New-scan run, or a Diff rescan group). Each sibling streams a finding to `POST /repositories/{id}/findings` the moment it confirms it and reads `GET /repositories/{id}/findings?scan_group=...` before reporting, so an in-flight skill sees what a sibling has filed so far — not only after that sibling finishes — and can avoid re-filing it. Empty when not part of a batch. |
 | focus_area | text | Normalized JSON snapshot of the input-processing focus area assigned to a split `security-deep-dive`. It keeps queued work reproducible if repository `scan_config` changes. Empty means the scan is unscoped and covers its normal repository or subproject scope. |
 | triage_scan_id | integer | Nullable ID of the triage scan that requested the pipeline child. Preserved through threat-model fan-out and retries; used to bound automatic exploration to one extra audit per triage invocation. |
@@ -152,6 +152,19 @@ One row per skill execution or external import. `skill_name` / `skill_version` p
 | findings_count | integer | Denormalised count of findings parsed from the report. |
 | created_at | datetime | |
 | updated_at | datetime | |
+
+## scan_preflight_receipts
+
+Append-only runtime extensions of the immutable claim-time scan recipe. Created transactionally with coverage before a live-backend-preflight-gated skill starts. A unique `(scan_id, probe_id)` prevents duplicate receipts on retries that reuse the same cached result. Repository deletion removes its scans' receipts. The in-memory cache is not restored from this table after restart.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | integer PK | Referenced by `coverage.preflight.backend.receipt_id`. |
+| scan_id | integer | Owning scan. |
+| probe_id | text | Random identity of the actual probe, shared across scans that reuse it. |
+| recipe_sha256 | text | Digest of the exact claim-time `scans.recipe` JSON; empty for legacy scans without a recipe. |
+| report | text | Sanitized probe JSON with configuration digest, status, timestamps, reuse flag and reported usage. Never contains raw CLI output or credentials. Usage belongs to the probe: deduplicate by `probe_id` when aggregating. |
+| created_at | datetime | Time the scan pinned this probe. |
 
 ## expected_findings
 

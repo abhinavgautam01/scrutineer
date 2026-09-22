@@ -107,7 +107,8 @@ type SkillJob struct {
 	// RecordPreflight persists worker-owned evidence before the first model turn.
 	RecordPreflight func(coverage.Preflight) error
 	// Shared by job copies used for whole-tree fallback and repair runs.
-	preflight *capabilityPreflightState
+	preflight    *capabilityPreflightState
+	checkBackend func(context.Context, []byte, func(context.Context) coverage.BackendProbe) error
 	// ResumeSessionID, when non-empty, makes the runner invoke
 	// `claude -p --resume <id>` so a retried scan continues the previous
 	// conversation with full history instead of restarting from turn 0.
@@ -228,6 +229,9 @@ func (l LocalClaude) RunSkill(ctx context.Context, sj SkillJob, emit func(Event)
 	}
 
 	if err := sj.checkCapabilities(ctx, nil, true, emit); err != nil {
+		return SkillResult{Commit: commit}, err
+	}
+	if err := l.checkBackendPreflight(ctx, sj); err != nil {
 		return SkillResult{Commit: commit}, err
 	}
 
