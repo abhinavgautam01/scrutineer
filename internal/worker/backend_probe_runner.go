@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -60,6 +61,7 @@ func runBackendProbe(ctx context.Context, h Harness, binary string, args, env []
 	defer stop()
 	result := blockedBackendProbe("backend did not return the expected terminal response")
 	var terminal, answer, failed bool
+	var rateLimit *RateLimitInfo
 	limited := &io.LimitedReader{R: out, N: backendProbeOutputLimit}
 	h.ParseStream(limited, func(e Event) {
 		switch e.Kind {
@@ -83,6 +85,9 @@ func runBackendProbe(ctx context.Context, h Harness, binary string, args, env []
 			cancel()
 		case KindRateLimit:
 			if e.RateLimit.Rejected() {
+				rateLimit = preferRateLimitReset(rateLimit, e.RateLimit)
+				result.RateLimited = true
+				result.RateLimitResetAt = rateLimit.ResetTime()
 				result.Error = "backend rate limit rejected the request"
 				failed = true
 				cancel()
@@ -111,9 +116,6 @@ func credentialFileIdentity(path string) string {
 		return randomProbeID()
 	}
 	f, err := os.Open(path)
-	if os.IsNotExist(err) {
-		return "absent"
-	}
 	if err != nil {
 		return randomProbeID()
 	}
@@ -238,7 +240,11 @@ func (d ContainerRunner) checkBackendPreflight(ctx context.Context, sj SkillJob,
 		}
 		base := d.buildRunArgsForProvider(work, image, hnet, state, provider, "/work")
 		name := "scrutineer-backend-probe-" + randomProbeID()
-		base = append(base[:len(base)-2], "--name", name, "--", image)
+		delimiter := slices.Index(base, "--")
+		if delimiter < 0 {
+			return blockedBackendProbe("container arguments missing option delimiter")
+		}
+		base = slices.Insert(base, delimiter, "--name", name)
 		defer func() {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), backendProbeCleanupTimeout)
 			defer cancel()

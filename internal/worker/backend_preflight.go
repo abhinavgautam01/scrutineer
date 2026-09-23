@@ -37,6 +37,10 @@ type backendProbeEntry struct {
 	err    error
 }
 
+func (e *backendProbeEntry) readyAt(now time.Time) bool {
+	return e.err == nil && e.result.Status == coverage.PreflightReady && now.Before(e.result.ExpiresAt)
+}
+
 func NewBackendPreflightCache(ttl time.Duration) (*BackendPreflightCache, error) {
 	if ttl <= 0 {
 		return nil, fmt.Errorf("backend preflight TTL must be positive")
@@ -66,7 +70,7 @@ func (c *BackendPreflightCache) check(ctx context.Context, config []byte, run fu
 		if ok {
 			select {
 			case <-entry.done:
-				if entry.err == nil && c.now().Before(entry.result.ExpiresAt) {
+				if entry.readyAt(c.now()) {
 					result := entry.result
 					result.Reused = true
 					c.mu.Unlock()
@@ -79,7 +83,14 @@ func (c *BackendPreflightCache) check(ctx context.Context, config []byte, run fu
 				case <-ctx.Done():
 					return coverage.BackendProbe{}, ctx.Err()
 				case <-entry.done:
-					continue
+					if entry.err != nil || (entry.result.Status == coverage.PreflightReady && !c.now().Before(entry.result.ExpiresAt)) {
+						continue
+					}
+					// Existing waiters share even a failed probe, but later scans
+					// must not inherit a transient failure from the cache.
+					result := entry.result
+					result.Reused = true
+					return result, nil
 				}
 			}
 		}
@@ -96,10 +107,16 @@ func (c *BackendPreflightCache) check(ctx context.Context, config []byte, run fu
 		result.ProbeID = randomProbeID()
 		result.ConfigHash = key
 		result.CheckedAt = c.now().UTC()
-		result.ExpiresAt = result.CheckedAt.Add(c.ttl)
+		result.ExpiresAt = result.CheckedAt
+		if result.Status == coverage.PreflightReady {
+			result.ExpiresAt = result.CheckedAt.Add(c.ttl)
+		}
 		c.mu.Lock()
 		entry.result = result
 		entry.err = ctx.Err()
+		if entry.err != nil || result.Status != coverage.PreflightReady {
+			delete(c.entries, key)
+		}
 		close(entry.done)
 		c.mu.Unlock()
 		return result, entry.err
@@ -152,6 +169,9 @@ func (w *Worker) configureBackendPreflight(ctx context.Context, scan *db.Scan, s
 			return err
 		}
 		if result.Status != coverage.PreflightReady {
+			if result.RateLimited {
+				return &AccountError{Detail: "backend preflight rate limit rejected the request", ResetAt: result.RateLimitResetAt}
+			}
 			return fmt.Errorf("backend preflight blocked: %s", result.Error)
 		}
 		return nil
@@ -163,6 +183,9 @@ func (w *Worker) recordBackendPreflight(ctx context.Context, scan *db.Scan, resu
 	if !ok && scan.Coverage != "" {
 		return nil, fmt.Errorf("stored coverage did not decode")
 	}
+	if result.CostUSD == 0 {
+		result.CostUSD = CostFromUsage(scan.Model, Usage{InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, CacheReadTokens: result.CacheReadTokens, CacheWriteTokens: result.CacheWriteTokens})
+	}
 	raw, err := json.Marshal(result)
 	if err != nil {
 		return nil, err
@@ -170,8 +193,9 @@ func (w *Worker) recordBackendPreflight(ctx context.Context, scan *db.Scan, resu
 	receipt := db.ScanPreflightReceipt{ScanID: scan.ID, ProbeID: result.ProbeID, RecipeSHA256: textDigest(scan.Recipe), Report: string(raw)}
 	updated := *scan
 	if err := w.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "scan_id"}, {Name: "probe_id"}}, DoNothing: true}).Create(&receipt).Error; err != nil {
-			return err
+		insert := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "scan_id"}, {Name: "probe_id"}}, DoNothing: true}).Create(&receipt)
+		if insert.Error != nil {
+			return insert.Error
 		}
 		if err := tx.Where("scan_id = ? AND probe_id = ?", scan.ID, result.ProbeID).First(&receipt).Error; err != nil {
 			return err
@@ -185,7 +209,11 @@ func (w *Worker) recordBackendPreflight(ctx context.Context, scan *db.Scan, resu
 			rec.Completeness = coverage.CompletenessUnknown
 		}
 		setCoverage(&updated, rec)
-		update := tx.Model(&db.Scan{}).Where("id = ?", scan.ID).Updates(map[string]any{"coverage": updated.Coverage, "completeness": updated.Completeness})
+		updates := map[string]any{"coverage": updated.Coverage, "completeness": updated.Completeness}
+		if !result.Reused && insert.RowsAffected == 1 {
+			addBackendProbeUsage(&updated, result, updates)
+		}
+		update := tx.Model(&db.Scan{}).Where("id = ?", scan.ID).Updates(updates)
 		if update.Error != nil {
 			return update.Error
 		}
@@ -197,5 +225,21 @@ func (w *Worker) recordBackendPreflight(ctx context.Context, scan *db.Scan, resu
 		return nil, fmt.Errorf("record backend preflight: %w", err)
 	}
 	scan.Coverage, scan.Completeness = updated.Coverage, updated.Completeness
+	scan.CostUSD, scan.InputTokens, scan.OutputTokens = updated.CostUSD, updated.InputTokens, updated.OutputTokens
+	scan.CacheReadTokens, scan.CacheWriteTokens = updated.CacheReadTokens, updated.CacheWriteTokens
 	return rec.Preflight, nil
+}
+
+// Usage is charged once, in the same transaction that inserts the receipt.
+func addBackendProbeUsage(scan *db.Scan, result coverage.BackendProbe, updates map[string]any) {
+	updates["cost_usd"] = gorm.Expr("cost_usd + ?", result.CostUSD)
+	updates["input_tokens"] = gorm.Expr("input_tokens + ?", result.InputTokens)
+	updates["output_tokens"] = gorm.Expr("output_tokens + ?", result.OutputTokens)
+	updates["cache_read_tokens"] = gorm.Expr("cache_read_tokens + ?", result.CacheReadTokens)
+	updates["cache_write_tokens"] = gorm.Expr("cache_write_tokens + ?", result.CacheWriteTokens)
+	scan.CostUSD += result.CostUSD
+	scan.InputTokens += result.InputTokens
+	scan.OutputTokens += result.OutputTokens
+	scan.CacheReadTokens += result.CacheReadTokens
+	scan.CacheWriteTokens += result.CacheWriteTokens
 }

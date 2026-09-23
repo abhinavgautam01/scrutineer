@@ -163,7 +163,7 @@ Append-only runtime extensions of the immutable claim-time scan recipe. Created 
 | scan_id | integer | Owning scan. |
 | probe_id | text | Random identity of the actual probe, shared across scans that reuse it. |
 | recipe_sha256 | text | Digest of the exact claim-time `scans.recipe` JSON; empty for legacy scans without a recipe. |
-| report | text | Sanitized probe JSON with configuration digest, status, timestamps, reuse flag and reported usage. Never contains raw CLI output or credentials. Usage belongs to the probe: deduplicate by `probe_id` when aggregating. |
+| report | text | Sanitized probe JSON with configuration digest, status, timestamps, rate-limit/reset metadata, reuse flag and usage. Never contains raw CLI output or credentials. Probe usage is added once to the originating scan's totals in the receipt transaction; cached reuse is not charged again. |
 | created_at | datetime | Time the scan pinned this probe. |
 
 ## expected_findings

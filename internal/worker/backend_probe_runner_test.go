@@ -2,15 +2,74 @@ package worker
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"scrutineer/internal/coverage"
+	"scrutineer/internal/db"
 )
 
 const backendSuccessJSON = `{"type":"result","subtype":"success","result":"SCRUTINEER_BACKEND_READY"}`
+
+func TestBackendLocalRateLimitReturnsAccountError(t *testing.T) {
+	for _, reset := range []int64{0, time.Now().Add(time.Hour).Unix()} {
+		t.Run(fmt.Sprint(reset), func(t *testing.T) {
+			w, repo := newStreamWorker(t)
+			w.BackendPreflight = newBackendCache(t)
+			scan := db.Scan{RepositoryID: repo.ID, Status: db.ScanRunning}
+			if err := w.DB.Create(&scan).Error; err != nil {
+				t.Fatal(err)
+			}
+			bin := t.TempDir()
+			marker := filepath.Join(bin, "main-ran")
+			script := fmt.Sprintf(`#!/bin/sh
+case "$*" in
+ *SCRUTINEER_BACKEND_READY*) printf '%%s\n' '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":%d}}';;
+ *) touch "$PROBE_MAIN_MARKER";;
+esac
+`, reset)
+			if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+			t.Setenv("PROBE_MAIN_MARKER", marker)
+			sj := SkillJob{WorkRoot: t.TempDir(), SrcReady: true, Model: "test-model"}
+			if err := os.Mkdir(filepath.Join(sj.WorkRoot, "src"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			w.configureBackendPreflight(t.Context(), &scan, &sj, skillContext{})
+			_, err := (LocalClaude{}).RunSkill(t.Context(), sj, func(Event) {})
+			var accountErr *AccountError
+			if !errors.As(err, &accountErr) {
+				t.Fatalf("error=%T %v", err, err)
+			}
+			var gotReset int64
+			if accountErr.ResetAt != nil {
+				gotReset = accountErr.ResetAt.Unix()
+			}
+			if gotReset != reset {
+				t.Fatalf("reset=%v want=%d", accountErr.ResetAt, reset)
+			}
+			finishErroredScan(&scan, "", err, func(Event) {})
+			if scan.Status != db.ScanPaused {
+				t.Fatalf("status=%s", scan.Status)
+			}
+			if _, err := os.Stat(marker); !os.IsNotExist(err) {
+				t.Fatal("main skill ran after rejected rate limit")
+			}
+			if len(w.BackendPreflight.entries) != 0 {
+				t.Fatal("rate limit cached")
+			}
+		})
+	}
+}
 
 func probeCacheCallback(t *testing.T, c *BackendPreflightCache) func(context.Context, []byte, func(context.Context) coverage.BackendProbe) error {
 	t.Helper()
@@ -106,6 +165,11 @@ printf '%s\n' '` + backendSuccessJSON + `'
 	}
 	if strings.Count(string(data), backendProbeAnswer) != 1 || strings.Contains(string(data), sj.WorkRoot+":/work") || strings.Contains(string(data), "scan-secret") || strings.Contains(string(data), "scan-session") || !strings.Contains(string(data), "--permission-mode acceptEdits") || !strings.Contains(string(data), "--max-turns 1") || !strings.Contains(string(data), "ANTHROPIC_BASE_URL=https://provider.invalid") {
 		t.Fatalf("argv=%s", data)
+	}
+	nameIndex := strings.Index(string(data), "--name scrutineer-backend-probe-")
+	imageIndex := strings.Index(string(data), "-- fixture")
+	if nameIndex < 0 || nameIndex >= imageIndex {
+		t.Fatalf("container name is not before the option delimiter: %s", data)
 	}
 	t.Setenv("ANTHROPIC_API_KEY", "second-credential")
 	if err := d.checkBackendPreflight(t.Context(), sj, "fixture", hardenedNet{}, opencodeProvider{}, ""); err != nil {

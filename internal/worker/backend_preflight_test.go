@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"gorm.io/gorm"
@@ -105,11 +106,8 @@ func TestBackendCacheFailuresAndLeaderCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := c.check(t.Context(), []byte("bad"), func(context.Context) coverage.BackendProbe {
-		t.Fatal("failure not cached")
-		return coverage.BackendProbe{}
-	})
-	if err != nil || !second.Reused || first.ProbeID != second.ProbeID {
+	second, err := c.check(t.Context(), []byte("bad"), run)
+	if err != nil || second.Reused || first.ProbeID == second.ProbeID {
 		t.Fatalf("second=%+v err=%v", second, err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
@@ -129,6 +127,78 @@ func TestBackendCacheFailuresAndLeaderCancellation(t *testing.T) {
 			t.Fatal("invalid TTL accepted")
 		}
 	}
+}
+
+func TestBackendCacheSharesFailureOnlyWithExistingWaiters(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newBackendCache(t)
+		release := make(chan struct{})
+		results := make(chan coverage.BackendProbe, 4)
+		calls := 0
+		run := func(context.Context) coverage.BackendProbe {
+			calls++
+			<-release
+			return blockedBackendProbe("temporary failure")
+		}
+		check := func() {
+			result, err := c.check(t.Context(), []byte("same"), run)
+			if err != nil {
+				t.Error(err)
+			}
+			results <- result
+		}
+		go check()
+		synctest.Wait()
+		for range 3 {
+			go check()
+		}
+		synctest.Wait()
+		close(release)
+		synctest.Wait()
+		var id string
+		owners := 0
+		for range 4 {
+			result := <-results
+			if id == "" {
+				id = result.ProbeID
+			}
+			if result.ProbeID != id || result.Status != coverage.PreflightBlocked {
+				t.Fatalf("result=%+v", result)
+			}
+			if !result.Reused {
+				owners++
+			}
+		}
+		if calls != 1 || owners != 1 {
+			t.Fatalf("calls=%d owners=%d", calls, owners)
+		}
+		check()
+		result := <-results
+		if calls != 2 || result.Reused || result.ProbeID == id {
+			t.Fatalf("next scan did not re-probe: %+v calls=%d", result, calls)
+		}
+	})
+}
+
+func TestBackendCacheTimeoutReprobes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newBackendCache(t)
+		calls := 0
+		run := func(ctx context.Context) coverage.BackendProbe {
+			calls++
+			<-ctx.Done()
+			return coverage.BackendProbe{Status: coverage.PreflightReady}
+		}
+		for range 2 {
+			result, err := c.check(t.Context(), []byte("timeout"), run)
+			if err != nil || result.Reused || result.Status != coverage.PreflightBlocked || !result.ExpiresAt.Equal(result.CheckedAt) {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+		}
+		if calls != 2 {
+			t.Fatalf("calls=%d", calls)
+		}
+	})
 }
 
 func TestBackendPreflightPersistence(t *testing.T) {
@@ -205,7 +275,7 @@ func TestBackendPreflightPersistenceFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := func(context.Context) coverage.BackendProbe {
-		return coverage.BackendProbe{Status: coverage.PreflightReady}
+		return coverage.BackendProbe{Status: coverage.PreflightReady, CostUSD: 1, InputTokens: 10, OutputTokens: 5}
 	}
 	if err := sj.checkBackend(t.Context(), []byte("key"), run); err == nil {
 		t.Fatal("ignored DB failure")
@@ -217,8 +287,82 @@ func TestBackendPreflightPersistenceFailure(t *testing.T) {
 	if count != 0 || scan.Coverage != "" {
 		t.Fatal("partial persistence on rollback")
 	}
+	if scan.CostUSD != 0 || scan.InputTokens != 0 || scan.OutputTokens != 0 {
+		t.Fatal("usage changed despite rollback")
+	}
+	var stored db.Scan
+	if err := w.DB.First(&stored, scan.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.CostUSD != 0 || stored.InputTokens != 0 || stored.OutputTokens != 0 {
+		t.Fatal("usage partially committed")
+	}
 	if _, err := os.Stat(filepath.Join(sj.WorkRoot, "context.json")); !os.IsNotExist(err) {
 		t.Fatal("staged uncommitted evidence")
+	}
+}
+
+func TestBackendPreflightUsageChargedOnce(t *testing.T) {
+	w, repo := newStreamWorker(t)
+	w.BackendPreflight = newBackendCache(t)
+	calls := 0
+	run := func(context.Context) coverage.BackendProbe {
+		calls++
+		return coverage.BackendProbe{Status: coverage.PreflightReady, CostUSD: 0.25, InputTokens: 12, OutputTokens: 4, CacheReadTokens: 2, CacheWriteTokens: 1}
+	}
+	for i := 0; i < 2; i++ {
+		scan := db.Scan{RepositoryID: repo.ID, Status: db.ScanRunning, CostUSD: 1, InputTokens: 10, OutputTokens: 3, CacheReadTokens: 1, CacheWriteTokens: 1}
+		if err := w.DB.Create(&scan).Error; err != nil {
+			t.Fatal(err)
+		}
+		sj := SkillJob{WorkRoot: t.TempDir()}
+		w.configureBackendPreflight(t.Context(), &scan, &sj, skillContext{})
+		if err := sj.checkBackend(t.Context(), []byte("shared"), run); err != nil {
+			t.Fatal(err)
+		}
+		rec, _ := coverage.Parse(scan.Coverage)
+		if rec.Preflight.Backend.Reused != (i == 1) {
+			t.Fatalf("reused=%v", rec.Preflight.Backend.Reused)
+		}
+		// Re-recording the originating receipt must not charge it twice.
+		if _, err := w.recordBackendPreflight(t.Context(), &scan, *rec.Preflight.Backend); err != nil {
+			t.Fatal(err)
+		}
+		var stored db.Scan
+		if err := w.DB.First(&stored, scan.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		wantCost, wantIn, wantOut, wantRead, wantWrite := 1.0, 10, 3, 1, 1
+		if i == 0 {
+			wantCost, wantIn, wantOut, wantRead, wantWrite = 1.25, 22, 7, 3, 2
+		}
+		for _, got := range []db.Scan{scan, stored} {
+			if got.CostUSD != wantCost || got.InputTokens != wantIn || got.OutputTokens != wantOut || got.CacheReadTokens != wantRead || got.CacheWriteTokens != wantWrite {
+				t.Fatalf("scan %d usage cost=%v input=%d output=%d cache=%d/%d", i, got.CostUSD, got.InputTokens, got.OutputTokens, got.CacheReadTokens, got.CacheWriteTokens)
+			}
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("probes=%d", calls)
+	}
+}
+
+func TestBackendPreflightFailedProbeUsageAndEstimatedCost(t *testing.T) {
+	w, repo := newStreamWorker(t)
+	scan := db.Scan{RepositoryID: repo.ID, Status: db.ScanRunning, Model: "gpt-5.4"}
+	if err := w.DB.Create(&scan).Error; err != nil {
+		t.Fatal(err)
+	}
+	result := coverage.BackendProbe{ProbeID: "failed", Status: coverage.PreflightBlocked, InputTokens: 100, OutputTokens: 10}
+	if _, err := w.recordBackendPreflight(t.Context(), &scan, result); err != nil {
+		t.Fatal(err)
+	}
+	want := CostFromUsage(scan.Model, Usage{InputTokens: 100, OutputTokens: 10})
+	if want <= 0 || scan.CostUSD != want || scan.InputTokens != 100 || scan.OutputTokens != 10 {
+		t.Fatalf("cost=%v want=%v input=%d output=%d", scan.CostUSD, want, scan.InputTokens, scan.OutputTokens)
+	}
+	if scan.Completeness != coverage.CompletenessPartial {
+		t.Fatal("failure cap lost")
 	}
 }
 

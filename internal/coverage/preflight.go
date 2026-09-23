@@ -7,19 +7,21 @@ import (
 
 // BackendProbe contains sanitized evidence from a bounded live model request.
 type BackendProbe struct {
-	ProbeID          string    `json:"probe_id"`
-	ReceiptID        uint      `json:"receipt_id,omitempty"`
-	ConfigHash       string    `json:"config_hash"`
-	Status           string    `json:"status"`
-	Error            string    `json:"error,omitempty"`
-	CheckedAt        time.Time `json:"checked_at"`
-	ExpiresAt        time.Time `json:"expires_at"`
-	Reused           bool      `json:"reused"`
-	CostUSD          float64   `json:"cost_usd"`
-	InputTokens      int       `json:"input_tokens"`
-	OutputTokens     int       `json:"output_tokens"`
-	CacheReadTokens  int       `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens int       `json:"cache_write_tokens,omitempty"`
+	ProbeID          string     `json:"probe_id"`
+	ReceiptID        uint       `json:"receipt_id,omitempty"`
+	ConfigHash       string     `json:"config_hash"`
+	Status           string     `json:"status"`
+	Error            string     `json:"error,omitempty"`
+	RateLimited      bool       `json:"rate_limited,omitempty"`
+	RateLimitResetAt *time.Time `json:"rate_limit_reset_at,omitempty"`
+	CheckedAt        time.Time  `json:"checked_at"`
+	ExpiresAt        time.Time  `json:"expires_at"`
+	Reused           bool       `json:"reused"`
+	CostUSD          float64    `json:"cost_usd"`
+	InputTokens      int        `json:"input_tokens"`
+	OutputTokens     int        `json:"output_tokens"`
+	CacheReadTokens  int        `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int        `json:"cache_write_tokens,omitempty"`
 }
 
 const (
