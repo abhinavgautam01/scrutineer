@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"scrutineer/internal/db"
+	"scrutineer/internal/db/dbtest"
 	"scrutineer/internal/skills"
 )
 
@@ -74,10 +75,7 @@ func TestAdversarialSweepPaths(t *testing.T) {
 }
 
 func TestPrepareExplorationPreservesTargetAndFilters(t *testing.T) {
-	gdb, err := db.Open(filepath.Join(t.TempDir(), "exploration.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	gdb := dbtest.Open(t)
 	work := t.TempDir()
 	for _, file := range []string{"lib/main.go", "skip/secret.go", "docs/readme.md"} {
 		writeDiffTestFile(t, filepath.Join(work, "src"), file, "source")
@@ -119,10 +117,7 @@ func TestPrepareExplorationPreservesTargetAndFilters(t *testing.T) {
 }
 
 func TestPrepareAdversarialSweepAndFallback(t *testing.T) {
-	gdb, err := db.Open(filepath.Join(t.TempDir(), "adversarial.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	gdb := dbtest.Open(t)
 	work := t.TempDir()
 	writeDiffTestFile(t, filepath.Join(work, "src"), "examples/demo.go", "package main")
 	writeDiffTestFile(t, filepath.Join(work, "src"), "lib/main.go", "package lib")
@@ -213,7 +208,13 @@ func TestStageExplorationOmitsModelInputs(t *testing.T) {
 	if err := w.DB.Create(&scan).Error; err != nil {
 		t.Fatal(err)
 	}
-	skill.RequiresCommands = "sh"
+	bin := t.TempDir()
+	const present = "scrutineer-present-capability"
+	if err := os.WriteFile(filepath.Join(bin, exeName(present)), nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	skill.RequiresCommands = present
 	sj := SkillJob{WorkRoot: work, SkillDir: skillDir}
 	w.configureCapabilityPreflight(t.Context(), &scan, skill, &sj, document)
 	if err := sj.checkCapabilities(t.Context(), nil, false, func(Event) {}); err != nil {
@@ -297,10 +298,7 @@ func TestStageAdversarialSweepIncludesThreatModel(t *testing.T) {
 }
 
 func TestExplorationCannotBeDiffBaseline(t *testing.T) {
-	gdb, err := db.Open(filepath.Join(t.TempDir(), "baseline.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	gdb := dbtest.Open(t)
 	repo := db.Repository{URL: "https://example.com/baseline"}
 	if err := gdb.Create(&repo).Error; err != nil {
 		t.Fatal(err)

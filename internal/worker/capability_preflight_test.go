@@ -17,7 +17,6 @@ import (
 
 func TestContainerCapabilityPreflight(t *testing.T) {
 	bin := t.TempDir()
-	runtimePath := filepath.Join(bin, "runtime")
 	script := `#!/bin/sh
 case "$*" in
  *capability-preflight*)
@@ -32,12 +31,8 @@ PATH=/usr/bin:/bin
 export PATH
 exec "$@"
 `
-	if err := os.WriteFile(runtimePath, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(bin, "host-only-preflight-command"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	runtimePath := writeFakeBin(t, bin, "runtime", script)
+	writeFakeBin(t, bin, "host-only-preflight-command", "#!/bin/sh\nexit 0\n")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	exerciseContainerCapabilityPreflight(t, ContainerRunner{
 		Runtime: ContainerRuntime{Bin: runtimePath}, Image: "selected-profile-image", Harness: dockerNoopHarness{stubHarness{env: []string{"ANTHROPIC_API_KEY"}}},
@@ -101,7 +96,7 @@ func exerciseContainerCapabilityPreflight(t *testing.T, runner ContainerRunner) 
 func TestCapabilityProbe(t *testing.T) {
 	bin := t.TempDir()
 	marker := filepath.Join(bin, "executed")
-	if err := os.WriteFile(filepath.Join(bin, "available"), []byte("#!/bin/sh\ntouch "+marker+"\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, exeName("available")), []byte("#!/bin/sh\ntouch "+marker+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(bin, "nonexec"), []byte("data"), 0o644); err != nil {
@@ -128,6 +123,12 @@ func TestCapabilityProbe(t *testing.T) {
 }
 
 func TestCapabilityPreflightStates(t *testing.T) {
+	bin := t.TempDir()
+	const present = "scrutineer-present-capability"
+	if err := os.WriteFile(filepath.Join(bin, exeName(present)), nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
 	for _, degraded := range []bool{false, true} {
 		sj := SkillJob{WorkRoot: t.TempDir(), RequiresCommands: []string{"scrutineer-missing-capability"}, DegradedMode: degraded}
 		var got coverage.Preflight
@@ -140,7 +141,7 @@ func TestCapabilityPreflightStates(t *testing.T) {
 		} else if err == nil || got.Status != coverage.PreflightBlocked {
 			t.Fatalf("blocked=%+v err=%v", got, err)
 		}
-		sj.RequiresCommands = []string{"sh"}
+		sj.RequiresCommands = []string{present}
 		if err := sj.checkCapabilities(context.Background(), nil, false, func(Event) {}); err != nil || got.Status != coverage.PreflightReady {
 			t.Fatalf("ready=%+v err=%v", got, err)
 		}

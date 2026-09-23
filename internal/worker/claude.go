@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"github.com/alpha-omega-security/harness"
 
@@ -296,16 +295,17 @@ func (l LocalClaude) RunSkill(ctx context.Context, sj SkillJob, emit func(Event)
 func (l LocalClaude) runClaudeOnce(ctx context.Context, args []string, work string, emit func(Event)) (hitMaxTurns bool, sessionID string, waitErr error) {
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = work
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return false, "", err
 	}
 	cmd.Stderr = cmd.Stdout
-	if err := cmd.Start(); err != nil {
+	terminate, err := startSupervised(cmd)
+	if err != nil {
 		return false, "", fmt.Errorf("start claude: %w", err)
 	}
+	defer terminate()
 
 	wrappedEmit := func(e Event) {
 		switch {
@@ -318,9 +318,6 @@ func (l LocalClaude) runClaudeOnce(ctx context.Context, args []string, work stri
 	}
 	ClaudeHarness{}.ParseStream(stdout, wrappedEmit)
 	waitErr = cmd.Wait()
-	if cmd.Process != nil {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-	}
 	return hitMaxTurns, sessionID, waitErr
 }
 

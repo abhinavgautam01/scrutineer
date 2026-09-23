@@ -24,6 +24,7 @@ type betterleaksReport struct {
 }
 
 func TestBetterleaksScriptSanitizesFindings(t *testing.T) {
+	skipWithoutPython3(t)
 	root, argvLog := betterleaksWorkspace(t, fakeBetterleaksScript)
 	report, raw := runBetterleaksAdapter(t, root, true)
 
@@ -70,6 +71,7 @@ func TestBetterleaksScriptWithoutTool(t *testing.T) {
 }
 
 func TestBetterleaksScriptAcceptsNullCleanReport(t *testing.T) {
+	skipWithoutPython3(t)
 	root, _ := betterleaksWorkspace(t, fakeBetterleaksCleanScript)
 	report, raw := runBetterleaksAdapter(t, root, true)
 
@@ -101,9 +103,7 @@ func betterleaksWorkspace(t *testing.T, script string) (root, argvLog string) {
 		return root, argvLog
 	}
 	body := strings.Replace(script, "@ARGV_LOG@", argvLog, 1)
-	if err := os.WriteFile(filepath.Join(bin, "betterleaks"), []byte(body), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeFakeBin(t, bin, "betterleaks", body)
 	return root, argvLog
 }
 
