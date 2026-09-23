@@ -2273,8 +2273,8 @@ func (s *Server) repoBulkCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 // createOrTriageRepo is the shared path for both single-add and bulk-add.
-// It FirstOrCreates the Repository row and, when the row is new and triage
-// is true, enqueues the default skill. isNew reports whether the repo was
+// It creates the Repository row and its audit event, then enqueues the default
+// skill when the row is new and triage is true. isNew reports whether the repo was
 // actually created (so callers can distinguish "queued" from "already present").
 func (s *Server) createOrTriageRepo(ctx context.Context, input RepoInput, model string, triage bool) (db.Repository, bool, error) {
 	if input.Local {
@@ -2295,8 +2295,6 @@ func (s *Server) createOrTriageRepo(ctx context.Context, input RepoInput, model 
 		return db.Repository{}, false, err
 	}
 	input.SubPath = cleanedSub
-	existing := int64(0)
-	s.DB.Model(&db.Repository{}).Where("url = ?", input.CloneURL).Count(&existing)
 	// Owner, FullName, and HTMLURL seed from ParseRepoInput so the orgs
 	// view groups newly added repos and finding-location links work before
 	// the metadata job has run; the metadata job later overwrites them
@@ -2310,10 +2308,10 @@ func (s *Server) createOrTriageRepo(ctx context.Context, input RepoInput, model 
 	if input.Owner != "" {
 		repo.FullName = input.Owner + "/" + input.Name
 	}
-	if err := s.DB.Where(db.Repository{URL: input.CloneURL}).FirstOrCreate(&repo).Error; err != nil {
+	isNew, err := s.createRepositoryWithAudit(ctx, &repo)
+	if err != nil {
 		return repo, false, err
 	}
-	isNew := existing == 0
 	// Eagerly warm the ecosyste.ms cache for a freshly added remote repo, in
 	// parallel with the triage enqueue below. Local repos have no
 	// upstream entry; the goroutine is best-effort and detached from ctx.
@@ -3027,6 +3025,10 @@ func (s *Server) deleteRepository(repo db.Repository) (deletedRepository, error)
 	deleted := deletedRepository{Repo: repo}
 
 	err := s.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("id = ?", repo.ID).First(&repo).Error; err != nil {
+			return err
+		}
+		deleted.Repo = repo
 		// Match scans by the *finding's* repo, not the scan's own: a finding-
 		// scoped scan can in principle live on a different repository_id than
 		// the finding it points at, and any scan referencing a doomed finding
@@ -3096,7 +3098,7 @@ func (s *Server) deleteRepository(repo db.Repository) (deletedRepository, error)
 		if err := reopenRepoInterchangeRecords(tx, repo.ID); err != nil {
 			return err
 		}
-		return tx.Delete(&repo).Error
+		return deleteRepositoryWithAudit(tx, repo)
 	})
 	if err != nil {
 		return deletedRepository{}, err
