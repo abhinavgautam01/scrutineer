@@ -109,6 +109,8 @@ type Config struct {
 	// ScanTimeout is the wall-clock limit for a single scan, as a Go
 	// duration string ("30m", "1h"). Empty leaves the built-in default.
 	ScanTimeout string `yaml:"scan_timeout"`
+	// BackendPreflightTTL enables cached live backend probes when positive.
+	BackendPreflightTTL string `yaml:"backend_preflight_ttl"`
 	// MaxTurns is passed as --max-turns to claude-code. 0 means no limit.
 	MaxTurns int `yaml:"max_turns"`
 	// ModelBaseURL overrides the default model API endpoint for the
@@ -369,9 +371,23 @@ func validateOpencodeBinaries(id string, names []string) error {
 	return nil
 }
 
+// ParseBackendPreflightTTL permits zero (disabled) or a positive cache lifetime.
+func ParseBackendPreflightTTL(s string) (time.Duration, error) {
+	if s == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("backend_preflight_ttl: %w", err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("backend_preflight_ttl must not be negative")
+	}
+	return d, nil
+}
+
 // ParseScanTimeout validates and parses a scan_timeout string. Empty
-// returns 0 (caller keeps its default); anything else must be a positive
-// time.Duration.
+// returns 0 (caller keeps its default); anything else must be positive.
 func ParseScanTimeout(s string) (time.Duration, error) {
 	if s == "" {
 		return 0, nil
@@ -509,6 +525,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	if _, err := ParseScanTimeout(c.ScanTimeout); err != nil {
+		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	if _, err := ParseBackendPreflightTTL(c.BackendPreflightTTL); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	if err := ValidateTheme(c.Theme); err != nil {

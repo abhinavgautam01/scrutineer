@@ -247,6 +247,7 @@ func (w *Worker) doSkill(ctx context.Context, scan *db.Scan, emit func(Event)) (
 	}
 	w.applyResume(scan, &sj, emit)
 	w.configureCapabilityPreflight(ctx, scan, &skill, &sj, document)
+	w.configureBackendPreflight(ctx, scan, &sj, document)
 	res, err := w.runSkillWithFallback(ctx, scan, &skill, sj, workRoot, hardScope, emit)
 	w.applySkillResult(scan, res)
 	if err != nil {

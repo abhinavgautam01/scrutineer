@@ -140,6 +140,16 @@ The worker records `ready`, `blocked`, or `degraded` in coverage and `scrutineer
 
 Declare only requirements that apply to every invocation, not repository-specific tools such as `cargo` for all generic `verify` runs.
 
+### Cached live backend preflight
+
+Set `backend_preflight_ttl: 1h` (or `-backend-preflight-ttl=1h`) to check the selected backend with a small live request before running a skill. The default `0` disables this check. Probes consume model tokens; their cost and usage are added once to the scan that runs them, not to scans reusing a successful result.
+
+The probe uses the scan's backend configuration in an empty workspace without repository contents. Failed or timed-out checks stop the skill and cap completeness at partial; `degraded_mode` cannot waive them. Rejected rate limits use the normal account-pause flow, including the reported reset time. Static capability checks still run independently for each scan attempt.
+
+Only successful probes are cached. The worker re-probes when the TTL expires, the backend configuration/model/toolset changes, or the server restarts. Concurrent scans already waiting on a probe share its result, but failures do not prevent the next scan from trying again. Host authentication changes not visible in configuration files or environment are detected after TTL expiry.
+
+Coverage and `scrutineer.preflight` in `context.json` show the static and backend results. Probe receipts retain the link to the scan's immutable recipe without storing credentials or raw backend output.
+
 ## Path filtering
 
 Before each scan, scrutineer prunes `workRoot/src/` so the skill only sees the files it cares about. The default filter drops lockfiles, minified bundles, build outputs, and generated trees:

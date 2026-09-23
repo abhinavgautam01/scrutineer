@@ -359,6 +359,7 @@ The `docker build` commands shown for the runner image and profiles can be run a
 | `-concurrency` | `4` | Number of scans to run in parallel. Chat turns run from a separate pool sized at half this value, so a busy host can reach 1.5x this many agent containers. With `codex.auth_file`, scans and chat turns share one execution slot |
 | `-clone` | `shallow` | Clone depth: `shallow` (`--depth 1`) or `full` |
 | `-scan-timeout` | `1h` | Wall-clock limit per scan; exceeded scans fail |
+| `-backend-preflight-ttl` | `0` | Opt-in live backend probe cache lifetime, e.g. `1h`; probes consume model tokens. YAML: `backend_preflight_ttl`. |
 | `-max-turns` | `0` | Per-scan turn cap (0 = unlimited); claude and copilot backends only, codex and opencode have no turn cap |
 | `-schema-strict` | `false` | Fail a scan when its `report.json` does not validate against the skill's `schema.json` (default: warn in the scan log and parse anyway) |
 | `-model-base-url` | - | Custom model API base URL for the active backend (env fallback: `ANTHROPIC_BASE_URL` for claude). `-anthropic-base-url` is a deprecated alias. |

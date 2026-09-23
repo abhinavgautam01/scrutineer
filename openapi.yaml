@@ -1472,7 +1472,7 @@ components:
           description: Immutable gated patch attempt pinned to a re-attack scan at enqueue time.
         coverage:
           type: string
-          description: JSON coverage metadata, including diff fallback reasons, threat-model update decisions, and optional worker-owned capability preflight (status ready/degraded/blocked, missing command or feature entries, degraded boolean, and optional probe error). Blocked or degraded preflight keeps completeness partial.
+          description: JSON coverage metadata, including diff fallback reasons, threat-model update decisions, and optional worker-owned capability preflight (static status ready/degraded/blocked, missing entries, degraded boolean and error). When enabled, preflight.backend records probe_id, receipt_id, config_hash, status ready/blocked, sanitized error, rate_limited, optional rate_limit_reset_at, checked_at, expires_at, reused, cost_usd and token counters. Probe usage is included once in the originating scan's totals. The receipt links the probe to the immutable claim-time recipe. Static shortfalls or a blocked live probe keep completeness partial.
         skill_name:           { type: string }
         skill_version:        { type: integer, description: Snapshot of the Skill row version at enqueue time. }
         skill_schema_version: { type: integer, description: Snapshot of metadata.scrutineer.version at enqueue time. }

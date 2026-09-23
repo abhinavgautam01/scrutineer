@@ -179,6 +179,8 @@ type Worker struct {
 	// vidMissingOnce gates the missing-binary warning so a deployment
 	// without vid on PATH logs it once, not once per finding.
 	vidMissingOnce sync.Once
+	// BackendPreflight enables opt-in cached live model probes for skill runs.
+	BackendPreflight *BackendPreflightCache
 
 	// LogFlushInterval overrides defaultLogFlushInterval. Tests set it to
 	// a tiny or huge value to assert flush behaviour without sleeping.

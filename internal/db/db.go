@@ -1276,6 +1276,17 @@ type AuditEvent struct {
 	CreatedAt   time.Time     `gorm:"index:idx_audit_events_kind_created_at,priority:2"`
 }
 
+// ScanPreflightReceipt pins a live probe to the immutable claim-time recipe.
+// Rows are append-only for the lifetime of the scan.
+type ScanPreflightReceipt struct {
+	ID           uint   `gorm:"primarykey"`
+	ScanID       uint   `gorm:"not null;uniqueIndex:idx_scan_preflight_probe"`
+	ProbeID      string `gorm:"not null;uniqueIndex:idx_scan_preflight_probe"`
+	RecipeSHA256 string
+	Report       string `gorm:"type:text;not null"`
+	CreatedAt    time.Time
+}
+
 // FindingReview is a structured human verdict against an automation
 // outcome. Verdict mirrors the revalidate skill's enum so reviewer
 // agreement with the model can be measured directly. AutomatedOutcome
@@ -1623,7 +1634,7 @@ func Open(dsn string) (*gorm.DB, error) {
 	if err := gdb.AutoMigrate(
 		&Repository{}, &Scan{},
 		&Finding{}, &FindingLabel{}, &FindingNote{},
-		&FindingCommunication{}, &FindingReference{}, &FindingHistory{}, &FindingReview{}, &FindingVerification{}, &FindingAttackPath{},
+		&FindingCommunication{}, &FindingReference{}, &FindingHistory{}, &FindingReview{}, &FindingVerification{}, &FindingAttackPath{}, &ScanPreflightReceipt{},
 		&RemediationAttempt{}, &RemediationValidation{}, &AuditEvent{},
 		&Dependency{}, &ExpectedFinding{}, &Package{}, &PackageAlternative{}, &Dependent{}, &FindingDependent{}, &Advisory{}, &AdvisoryAudit{},
 		&Maintainer{}, &Skill{}, &Subproject{}, &ComplianceControl{},
