@@ -12,19 +12,28 @@ import (
 func (s *Server) createRepositoryWithAudit(ctx context.Context, repo *db.Repository) (bool, error) {
 	var created bool
 	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		insert := tx.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "url"}}, DoNothing: true,
-		}).Create(repo)
-		if insert.Error != nil {
-			return insert.Error
-		}
-		created = insert.RowsAffected == 1
-		if !created {
-			return tx.Where("url = ?", repo.URL).First(repo).Error
-		}
-		return logRepositoryMutation(tx, db.AuditEventRepositoryCreated, *repo)
+		var err error
+		created, err = insertRepositoryWithAudit(tx, repo)
+		return err
 	})
 	return created && err == nil, err
+}
+
+// insertRepositoryWithAudit participates in the caller's mutation transaction.
+func insertRepositoryWithAudit(tx *gorm.DB, repo *db.Repository) (bool, error) {
+	insert := tx.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "url"}}, DoNothing: true,
+	}).Create(repo)
+	if insert.Error != nil {
+		return false, insert.Error
+	}
+	if insert.RowsAffected == 0 {
+		return false, tx.Where("url = ?", repo.URL).First(repo).Error
+	}
+	if err := logRepositoryMutation(tx, db.AuditEventRepositoryCreated, *repo); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func deleteRepositoryWithAudit(tx *gorm.DB, repo db.Repository) error {

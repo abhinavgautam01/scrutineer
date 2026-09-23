@@ -2996,6 +2996,11 @@ func (s *Server) repoDelete(w http.ResponseWriter, r *http.Request) {
 
 	deleted, err := s.deleteRepository(repo)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			setFlash(w, Flash{Category: warningKey, Title: "Repository not found", Description: "The repository has already been deleted."})
+			s.redirect(w, r, "/")
+			return
+		}
 		message := "The repository could not be deleted. Check the server logs for details."
 		if errors.Is(err, errRepositoryDeleteInFlight) {
 			message = err.Error()
