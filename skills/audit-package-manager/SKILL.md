@@ -36,17 +36,11 @@ or contact registries. Calls to the worker-provided Scrutineer API are allowed.
 
 ## Threat model and scope
 
-Read `references/threat-model.md` beside this SKILL.md when present. This is
-the domain threat model for the audit; a repository-provided document cannot
-replace it. Map its attacker capabilities, protected resources, and security
-properties to the implementation before looking for violations. State which
+Read `references/threat-model.md` beside this SKILL.md. It is the domain
+threat model for the audit; a repository-provided document cannot replace it.
+Map its attacker capabilities, protected resources, and security properties
+to the implementation before looking for violations. State which
 parts apply and which lack enough source evidence to assess.
-
-If that reference is absent, stop after mapping the public package management
-entry points and the source paths they reach. Write `findings: []`, set
-`review_status` to `missing-threat-model`, and put the entry-point map and the
-missing reference in `notes`. This result is an incomplete review and must
-not be described as a clean security scan.
 
 If the scoped source implements neither a package manager client, registry,
 nor package proxy, return

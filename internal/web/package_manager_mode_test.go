@@ -55,7 +55,7 @@ func TestPackageManagerModeEnqueueAndStage(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			report := `{"review_status":"missing-threat-model","findings":[],"notes":"install command calls acquire; domain threat model is missing."}`
+			report := `{"review_status":"not-applicable","findings":[],"notes":"This application only consumes packages."}`
 			if err := worker.ValidateReportSchema(string(schema), report); err != "" {
 				t.Fatal(err)
 			}

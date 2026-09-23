@@ -7,7 +7,7 @@
   "properties": {
     "review_status": {
       "type": "string",
-      "enum": ["reviewed", "missing-threat-model", "not-applicable"]
+      "enum": ["reviewed", "not-applicable"]
     },
     "findings": { "$ref": "../_shared/audit-findings.schema.json#/properties/findings" },
     "notes": { "type": "string", "minLength": 1 },
@@ -18,7 +18,7 @@
     "design_properties": { "$ref": "#/$defs/evidence_list" }
   },
   "if": {
-    "properties": { "review_status": { "enum": ["missing-threat-model", "not-applicable"] } }
+    "properties": { "review_status": { "const": "not-applicable" } }
   },
   "then": {
     "properties": { "findings": { "maxItems": 0 } }
