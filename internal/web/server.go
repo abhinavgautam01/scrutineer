@@ -3034,23 +3034,8 @@ func (s *Server) deleteRepository(repo db.Repository) (deletedRepository, error)
 			return err
 		}
 		deleted.Repo = repo
-		// Match scans by the *finding's* repo, not the scan's own: a finding-
-		// scoped scan can in principle live on a different repository_id than
-		// the finding it points at, and any scan referencing a doomed finding
-		// must have its NO ACTION link cleared or the finding delete 787s.
-		var inFlight int64
-		// Paused scans owned by this repo are removed in this transaction.
-		// Resume uses a conditional UPDATE, so it cannot resurrect a deleted
-		// scan. A paused scan on another repo survives this deletion and must
-		// retain its finding until it finishes, just like other in-flight work.
-		if err := tx.Model(&db.Scan{}).
-			Where("(repository_id = ? OR "+findingsOfRepo+") AND status IN ?", repo.ID, repo.ID, inFlightScanStatuses()).
-			Where("NOT (repository_id = ? AND status = ?)", repo.ID, db.ScanPaused).
-			Count(&inFlight).Error; err != nil {
+		if err := checkRepositoryDeleteInFlight(tx, repo.ID); err != nil {
 			return err
-		}
-		if inFlight > 0 {
-			return fmt.Errorf("%w; finish or cancel active scans (resume paused scans first) before deleting; %d linked scan(s) remain", errRepositoryDeleteInFlight, inFlight)
 		}
 		// Collected before the transaction deletes the scan rows: each scan's
 		// per-scan workspace and claude session store under DataDir are reclaimed
@@ -3109,6 +3094,29 @@ func (s *Server) deleteRepository(repo db.Repository) (deletedRepository, error)
 		return deletedRepository{}, err
 	}
 	return deleted, nil
+}
+
+// checkRepositoryDeleteInFlight matches scans by the *finding's* repo, not the
+// scan's own: a finding-scoped scan can in principle live on a different
+// repository_id than the finding it points at, and any scan referencing a
+// doomed finding must have its NO ACTION link cleared or the finding delete 787s.
+//
+// Paused scans owned by this repo are removed in this transaction.
+// Resume uses a conditional UPDATE, so it cannot resurrect a deleted
+// scan. A paused scan on another repo survives this deletion and must
+// retain its finding until it finishes, just like other in-flight work.
+func checkRepositoryDeleteInFlight(tx *gorm.DB, repoID uint) error {
+	var inFlight int64
+	if err := tx.Model(&db.Scan{}).
+		Where("(repository_id = ? OR "+findingsOfRepo+") AND status IN ?", repoID, repoID, inFlightScanStatuses()).
+		Where("NOT (repository_id = ? AND status = ?)", repoID, db.ScanPaused).
+		Count(&inFlight).Error; err != nil {
+		return err
+	}
+	if inFlight > 0 {
+		return fmt.Errorf("%w; finish or cancel active scans (resume paused scans first) before deleting; %d linked scan(s) remain", errRepositoryDeleteInFlight, inFlight)
+	}
+	return nil
 }
 
 func (s *Server) removeRepositoryArtifacts(deleted deletedRepository) {
