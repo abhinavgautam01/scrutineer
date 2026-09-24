@@ -2273,8 +2273,8 @@ func (s *Server) repoBulkCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 // createOrTriageRepo is the shared path for both single-add and bulk-add.
-// It FirstOrCreates the Repository row and, when the row is new and triage
-// is true, enqueues the default skill. isNew reports whether the repo was
+// It creates the Repository row and its audit event, then enqueues the default
+// skill when the row is new and triage is true. isNew reports whether the repo was
 // actually created (so callers can distinguish "queued" from "already present").
 func (s *Server) createOrTriageRepo(ctx context.Context, input RepoInput, model string, triage bool) (db.Repository, bool, error) {
 	if input.Local {
@@ -2295,8 +2295,6 @@ func (s *Server) createOrTriageRepo(ctx context.Context, input RepoInput, model 
 		return db.Repository{}, false, err
 	}
 	input.SubPath = cleanedSub
-	existing := int64(0)
-	s.DB.Model(&db.Repository{}).Where("url = ?", input.CloneURL).Count(&existing)
 	// Owner, FullName, and HTMLURL seed from ParseRepoInput so the orgs
 	// view groups newly added repos and finding-location links work before
 	// the metadata job has run; the metadata job later overwrites them
@@ -2310,10 +2308,10 @@ func (s *Server) createOrTriageRepo(ctx context.Context, input RepoInput, model 
 	if input.Owner != "" {
 		repo.FullName = input.Owner + "/" + input.Name
 	}
-	if err := s.DB.Where(db.Repository{URL: input.CloneURL}).FirstOrCreate(&repo).Error; err != nil {
+	isNew, err := s.createRepositoryWithAudit(ctx, &repo)
+	if err != nil {
 		return repo, false, err
 	}
-	isNew := existing == 0
 	// Eagerly warm the ecosyste.ms cache for a freshly added remote repo, in
 	// parallel with the triage enqueue below. Local repos have no
 	// upstream entry; the goroutine is best-effort and detached from ctx.
@@ -2998,6 +2996,11 @@ func (s *Server) repoDelete(w http.ResponseWriter, r *http.Request) {
 
 	deleted, err := s.deleteRepository(repo)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			setFlash(w, Flash{Category: warningKey, Title: "Repository not found", Description: "The repository has already been deleted."})
+			s.redirect(w, r, "/")
+			return
+		}
 		message := "The repository could not be deleted. Check the server logs for details."
 		if errors.Is(err, errRepositoryDeleteInFlight) {
 			message = err.Error()
@@ -3027,23 +3030,12 @@ func (s *Server) deleteRepository(repo db.Repository) (deletedRepository, error)
 	deleted := deletedRepository{Repo: repo}
 
 	err := s.DB.Transaction(func(tx *gorm.DB) error {
-		// Match scans by the *finding's* repo, not the scan's own: a finding-
-		// scoped scan can in principle live on a different repository_id than
-		// the finding it points at, and any scan referencing a doomed finding
-		// must have its NO ACTION link cleared or the finding delete 787s.
-		var inFlight int64
-		// Paused scans owned by this repo are removed in this transaction.
-		// Resume uses a conditional UPDATE, so it cannot resurrect a deleted
-		// scan. A paused scan on another repo survives this deletion and must
-		// retain its finding until it finishes, just like other in-flight work.
-		if err := tx.Model(&db.Scan{}).
-			Where("(repository_id = ? OR "+findingsOfRepo+") AND status IN ?", repo.ID, repo.ID, inFlightScanStatuses()).
-			Where("NOT (repository_id = ? AND status = ?)", repo.ID, db.ScanPaused).
-			Count(&inFlight).Error; err != nil {
+		if err := tx.Where("id = ?", repo.ID).First(&repo).Error; err != nil {
 			return err
 		}
-		if inFlight > 0 {
-			return fmt.Errorf("%w; finish or cancel active scans (resume paused scans first) before deleting; %d linked scan(s) remain", errRepositoryDeleteInFlight, inFlight)
+		deleted.Repo = repo
+		if err := checkRepositoryDeleteInFlight(tx, repo.ID); err != nil {
+			return err
 		}
 		// Collected before the transaction deletes the scan rows: each scan's
 		// per-scan workspace and claude session store under DataDir are reclaimed
@@ -3096,12 +3088,35 @@ func (s *Server) deleteRepository(repo db.Repository) (deletedRepository, error)
 		if err := reopenRepoInterchangeRecords(tx, repo.ID); err != nil {
 			return err
 		}
-		return tx.Delete(&repo).Error
+		return deleteRepositoryWithAudit(tx, repo)
 	})
 	if err != nil {
 		return deletedRepository{}, err
 	}
 	return deleted, nil
+}
+
+// checkRepositoryDeleteInFlight matches scans by the *finding's* repo, not the
+// scan's own: a finding-scoped scan can in principle live on a different
+// repository_id than the finding it points at, and any scan referencing a
+// doomed finding must have its NO ACTION link cleared or the finding delete 787s.
+//
+// Paused scans owned by this repo are removed in this transaction.
+// Resume uses a conditional UPDATE, so it cannot resurrect a deleted
+// scan. A paused scan on another repo survives this deletion and must
+// retain its finding until it finishes, just like other in-flight work.
+func checkRepositoryDeleteInFlight(tx *gorm.DB, repoID uint) error {
+	var inFlight int64
+	if err := tx.Model(&db.Scan{}).
+		Where("(repository_id = ? OR "+findingsOfRepo+") AND status IN ?", repoID, repoID, inFlightScanStatuses()).
+		Where("NOT (repository_id = ? AND status = ?)", repoID, db.ScanPaused).
+		Count(&inFlight).Error; err != nil {
+		return err
+	}
+	if inFlight > 0 {
+		return fmt.Errorf("%w; finish or cancel active scans (resume paused scans first) before deleting; %d linked scan(s) remain", errRepositoryDeleteInFlight, inFlight)
+	}
+	return nil
 }
 
 func (s *Server) removeRepositoryArtifacts(deleted deletedRepository) {

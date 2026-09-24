@@ -11,8 +11,12 @@ import (
 )
 
 const (
-	AuditSubjectScan    = "scan"
-	AuditSubjectFinding = "finding"
+	AuditSubjectScan       = "scan"
+	AuditSubjectFinding    = "finding"
+	AuditSubjectRepository = "repository"
+
+	AuditEventRepositoryCreated = "repo.created"
+	AuditEventRepositoryDeleted = "repo.deleted"
 
 	AuditEventFindingStatusChanged   = "finding.status_changed"
 	AuditEventFindingSeverityChanged = "finding.severity_changed"
