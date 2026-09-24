@@ -222,6 +222,9 @@ func (p *Parsed) validateMetadata() error {
 		if !OutputKinds[strings.TrimSpace(s)] {
 			return fmt.Errorf("%s %q is not a recognised parser", metaOutputKind, s)
 		}
+		if strings.TrimSpace(s) == "reflection" && p.Name != "reflect" {
+			return fmt.Errorf("%s: reflection output is reserved for the reflect skill", metaOutputKind)
+		}
 	}
 	if v, ok := p.Metadata[metaMaxTurns]; ok {
 		if _, ok := v.(int); !ok {
