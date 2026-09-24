@@ -617,6 +617,16 @@ body`)
 	}
 }
 
+func TestBundledReflectionSkill(t *testing.T) {
+	skill, err := ParseFile("../../skills/reflect/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skill.OutputKind != "reflection" || skill.Model != "mid" || skill.MaxTurns != 8 || skill.SchemaJSON == "" {
+		t.Fatalf("invalid reflection metadata: %+v", skill)
+	}
+}
+
 func TestParseFile_acceptsVersion1(t *testing.T) {
 	dir := t.TempDir()
 	path := writeSkill(t, dir, "v1", `---

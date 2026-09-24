@@ -82,6 +82,7 @@ var severityLevels = map[string]bool{"Low": true, "Medium": true, "High": true, 
 // without parsing"; everything else maps to a parser in
 // internal/worker/skill.go.
 var OutputKinds = map[string]bool{
+	"reflection":      true,
 	"":                true,
 	"freeform":        true,
 	"findings":        true,
