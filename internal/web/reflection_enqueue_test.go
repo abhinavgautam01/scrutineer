@@ -1,11 +1,49 @@
 package web
 
 import (
+	"fmt"
+	"net/http"
 	"sync"
 	"testing"
 
 	"scrutineer/internal/db"
 )
+
+func TestTriageFindingSkillJoinsReflectionCohort(t *testing.T) {
+	for _, callerSkill := range []string{"triage", "metadata"} {
+		t.Run(callerSkill, func(t *testing.T) {
+			s, done := newTestServer(t)
+			defer done()
+			repo, caller := seedRunningScan(t, s)
+			if err := s.DB.Model(&caller).Update("skill_name", callerSkill).Error; err != nil {
+				t.Fatal(err)
+			}
+			finding := db.Finding{RepositoryID: repo.ID, ScanID: caller.ID, FindingID: "F1", Title: "test", Severity: "High", Status: db.FindingNew}
+			if err := s.DB.Create(&finding).Error; err != nil {
+				t.Fatal(err)
+			}
+			skill := db.Skill{Name: "verify", Active: true, OutputKind: "verify", Body: "verify", Source: "ui"}
+			if err := s.DB.Create(&skill).Error; err != nil {
+				t.Fatal(err)
+			}
+			response := apiReq(t, s, http.MethodPost, fmt.Sprintf("/api/findings/%d/skills/verify/run", finding.ID), caller.APIToken, `{}`)
+			if response.Code != http.StatusCreated {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body)
+			}
+			var child db.Scan
+			if err := s.DB.Where("skill_id = ?", skill.ID).First(&child).Error; err != nil {
+				t.Fatal(err)
+			}
+			if callerSkill == "triage" {
+				if child.TriageScanID == nil || *child.TriageScanID != caller.ID {
+					t.Fatal("triage finding scan missing cohort provenance")
+				}
+			} else if child.TriageScanID != nil {
+				t.Fatal("non-triage caller assigned cohort provenance")
+			}
+		})
+	}
+}
 
 func TestAutoEnqueueReflection(t *testing.T) {
 	s, done := newTestServer(t)

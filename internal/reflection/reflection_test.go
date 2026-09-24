@@ -97,3 +97,54 @@ func TestMergePreservesContractAndBoundsNotes(t *testing.T) {
 		t.Fatalf("bad preservation: %s", fresh)
 	}
 }
+
+func TestMergeKeepsNewerReflection(t *testing.T) {
+	in, out := fixture()
+	newer, err := Merge(`{"controls":[]}`, in, out, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out.Notes[0].Summary = "older attempt completed late"
+	got, err := Merge(newer, in, out, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != newer {
+		t.Fatalf("older reflection replaced newer notes: %s", got)
+	}
+}
+
+func TestPreserveAllowsReplacingLegacyNonObject(t *testing.T) {
+	for _, previous := range []string{`[]`, `"legacy"`, `null`, `true`, `1`} {
+		got, err := Preserve(previous, `{"description":"fresh"}`)
+		if err != nil || !strings.Contains(got, `"fresh"`) {
+			t.Fatalf("previous=%s result=%s err=%v", previous, got, err)
+		}
+	}
+	if _, err := Preserve(`{"broken":`, `{"description":"fresh"}`); err == nil {
+		t.Fatal("silently discarded corrupt JSON")
+	}
+}
+
+func TestValidateInputRejectsCorruptSnapshots(t *testing.T) {
+	for _, name := range []string{"empty", "wrong_id", "duplicate", "empty_stage", "oversized"} {
+		t.Run(name, func(t *testing.T) {
+			input, _ := fixture()
+			switch name {
+			case "empty":
+				input.Sources = nil
+			case "wrong_id":
+				input.Sources[0].ScanID = 0
+			case "duplicate":
+				input.Sources = append(input.Sources, input.Sources[0])
+			case "empty_stage":
+				input.Sources[0].Stage = " "
+			case "oversized":
+				input.Sources[0].Excerpt = strings.Repeat("x", MaxExcerpt+1)
+			}
+			if err := ValidateInput(input); err == nil {
+				t.Fatal("accepted invalid snapshot")
+			}
+		})
+	}
+}

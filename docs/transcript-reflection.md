@@ -4,11 +4,15 @@ After a successful repository-root, default-branch triage invocation, Scrutineer
 
 ## Bounded input
 
+Finding-scoped jobs requested directly by triage, including verification and release-watch, carry the same triage provenance as repository-scoped jobs and participate in the compatible cohort. Unrelated finding jobs are not attached to it.
+
 Reflection reads persisted `Scan.Log`, not ephemeral runner workspace files. The worker snapshots at most 128 root/default-branch child scans from the exact triage invocation into the reflection scan's existing `ImportPayload` field and stages it as `./import/report`. Other repositories, triage invocations, branch/subproject scopes, and reflection scans are excluded. An oversized cohort fails explicitly instead of silently omitting scans. No compatible child scans means no automatic reflection job.
 
 For each scan, the database returns only the first and last 8192 characters of its log. Error-marker lines from the prefix and the final output are reduced to at most 4096 UTF-8 bytes per scan. `truncated` identifies incomplete excerpts, and an empty or unavailable log is explicitly marked `missing`. Database read errors fail the pass rather than appearing as clean transcripts. The snapshot remains fixed across retries and is fingerprinted as `reflection_input_sha256` in the scan recipe. No backend-native transcript format is required.
 
 ## Notes and safety
+
+Once a snapshot is recorded, retries validate and replay it without waiting on the source scans again. Source scans or their triage row may subsequently be removed by retention, or a source may be paused for another attempt, without invalidating the frozen input. An existing valid repository threat model is still required. Within a run/stage, notes from a newer reflection scan take precedence over an older attempt that finishes later.
 
 The report contains exactly one outcome per distinct skill stage. Each outcome identifies a source scan and is one of `tool_failure`, `missing_dependency`, `reproducer_entrypoint`, `missing_transcript`, or `no_observation`. If any transcript for a stage is missing, that stage must report `missing_transcript`. Other observations require exact quoted evidence from the selected staged excerpt. `no_observation` means no supported lesson in the bounded input, not that the complete stage succeeded without problems.
 

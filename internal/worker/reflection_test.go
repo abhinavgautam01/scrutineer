@@ -235,3 +235,31 @@ func TestReflectionCohortComparison(t *testing.T) {
 		t.Fatal("resume was missed")
 	}
 }
+
+func TestReflectionRetryUsesFrozenSnapshot(t *testing.T) {
+	for _, action := range []string{"paused_source", "deleted_sources"} {
+		t.Run(action, func(t *testing.T) {
+			w, scan, child := reflectionFixture(t)
+			if _, err := w.prepareReflection(scan); err != nil {
+				t.Fatal(err)
+			}
+			frozen := string(scan.ImportPayload)
+			if action == "paused_source" {
+				if err := w.DB.Model(child).Update("status", db.ScanPaused).Error; err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := w.DB.Delete(child).Error; err != nil {
+					t.Fatal(err)
+				}
+				if err := w.DB.Delete(&db.Scan{}, *scan.TriageScanID).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			pending, err := w.prepareReflection(scan)
+			if err != nil || pending || string(scan.ImportPayload) != frozen {
+				t.Fatalf("frozen retry pending=%v err=%v", pending, err)
+			}
+		})
+	}
+}

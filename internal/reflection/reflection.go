@@ -3,9 +3,11 @@ package reflection
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -78,15 +80,29 @@ func clipTail(s string, n int) string {
 	return s
 }
 
+func ValidateInput(input Input) error {
+	if input.TriageScanID == 0 || len(input.Sources) == 0 || len(input.Sources) > MaxScans {
+		return fmt.Errorf("invalid reflection input")
+	}
+	seen := map[uint]bool{}
+	for _, source := range input.Sources {
+		if source.ScanID == 0 || seen[source.ScanID] || strings.TrimSpace(source.Stage) == "" || len(source.Excerpt) > MaxExcerpt || !utf8.ValidString(source.Excerpt) {
+			return fmt.Errorf("invalid reflection source %d", source.ScanID)
+		}
+		seen[source.ScanID] = true
+	}
+	return nil
+}
+
 func Validate(input Input, report Report) error {
+	if err := ValidateInput(input); err != nil {
+		return err
+	}
 	stages := map[string]bool{}
 	sources := map[uint]Source{}
 	for _, source := range input.Sources {
 		stages[source.Stage] = true
 		sources[source.ScanID] = source
-	}
-	if input.TriageScanID == 0 || len(sources) == 0 || len(sources) > MaxScans {
-		return fmt.Errorf("invalid reflection input")
 	}
 	if len(report.Notes) != len(stages) {
 		return fmt.Errorf("reflection must report exactly one outcome per stage")
@@ -119,7 +135,12 @@ func Preserve(previous, next string) (string, error) {
 	var old, fresh map[string]json.RawMessage
 	if strings.TrimSpace(previous) != "" {
 		if err := json.Unmarshal([]byte(previous), &old); err != nil {
-			return "", err
+			// The workbench historically accepts any JSON value. A valid
+			// non-object has no notes to retain and must not block refresh.
+			var typeErr *json.UnmarshalTypeError
+			if !errors.As(err, &typeErr) {
+				return "", err
+			}
 		}
 	}
 	if err := json.Unmarshal([]byte(next), &fresh); err != nil {
@@ -185,7 +206,11 @@ func Merge(model string, input Input, report Report, scanID uint) (string, error
 	}
 	for _, note := range report.Notes {
 		stored := StoredNote{Note: note, TriageScanID: input.TriageScanID, ReflectionScanID: scanID, Commit: commits[note.ScanID]}
-		byKey[fmt.Sprintf("%d:%s", input.TriageScanID, note.Stage)] = stored
+		key := fmt.Sprintf("%d:%s", input.TriageScanID, note.Stage)
+		if prior, ok := byKey[key]; ok && prior.ReflectionScanID > scanID {
+			continue
+		}
+		byKey[key] = stored
 	}
 	notes = make([]StoredNote, 0, len(byKey))
 	for _, note := range byKey {

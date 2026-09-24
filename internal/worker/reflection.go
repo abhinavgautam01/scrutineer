@@ -16,6 +16,21 @@ func (w *Worker) prepareReflection(scan *db.Scan) (bool, error) {
 	if scan.TriageScanID == nil || scan.SubPath != "" || scan.Ref != "" || scan.FindingID != nil {
 		return false, fmt.Errorf("reflect requires a root default-branch triage invocation")
 	}
+	// A retry replays the recorded input, not the current state of the source
+	// scans. Those may have been retried, paused, or removed by retention.
+	if len(scan.ImportPayload) != 0 {
+		var input reflection.Input
+		if err := json.Unmarshal(scan.ImportPayload, &input); err != nil {
+			return false, fmt.Errorf("read reflection snapshot: %w", err)
+		}
+		if input.TriageScanID != *scan.TriageScanID {
+			return false, fmt.Errorf("reflection snapshot belongs to another triage")
+		}
+		if err := reflection.ValidateInput(input); err != nil {
+			return false, err
+		}
+		return false, w.validateReflectionModel(scan.RepositoryID)
+	}
 	var triage db.Scan
 	if err := w.DB.Select("id, repository_id, skill_name, status, sub_path, ref").First(&triage, *scan.TriageScanID).Error; err != nil {
 		return false, fmt.Errorf("load reflection triage: %w", err)
@@ -50,16 +65,8 @@ func (w *Worker) prepareReflection(scan *db.Scan) (bool, error) {
 	if !sameReflectionSources(sources, latest) {
 		return true, nil
 	}
-	var repo db.Repository
-	if err := w.DB.Select("id, threat_model").First(&repo, scan.RepositoryID).Error; err != nil {
+	if err := w.validateReflectionModel(scan.RepositoryID); err != nil {
 		return false, err
-	}
-	var model map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(repo.ThreatModel), &model); err != nil || model == nil {
-		return false, fmt.Errorf("reflect requires an existing threat-model object; run threat-model first")
-	}
-	if len(scan.ImportPayload) != 0 {
-		return false, nil
 	}
 	input := reflection.Input{TriageScanID: triage.ID, Sources: make([]reflection.Source, 0, len(sources))}
 	for _, source := range sources {
@@ -78,6 +85,18 @@ func (w *Worker) prepareReflection(scan *db.Scan) (bool, error) {
 	}
 	scan.ImportPayload = raw
 	return false, nil
+}
+
+func (w *Worker) validateReflectionModel(repoID uint) error {
+	var repo db.Repository
+	if err := w.DB.Select("id, threat_model").First(&repo, repoID).Error; err != nil {
+		return err
+	}
+	var model map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(repo.ThreatModel), &model); err != nil || model == nil {
+		return fmt.Errorf("reflect requires an existing threat-model object; run threat-model first")
+	}
+	return nil
 }
 
 func (w *Worker) reflectionSources(scan *db.Scan) ([]db.Scan, error) {
