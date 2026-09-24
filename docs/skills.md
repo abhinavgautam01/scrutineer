@@ -29,6 +29,7 @@ These live in `skills/` and are embedded in the Scrutineer executable. At startu
 | `audit-authz` | Focused static audit for IDOR, tenant-isolation failures, missing or fail-open guards, privilege escalation, and unverified claims used for authorization. Uses ecosystem and GraphQL reference notes and runs on demand. |
 | `audit-pii` | Focused static audit for real personal or customer-identifying data committed to source or exposed through logs, URLs, telemetry, exports, and responses. Distinguishes concrete exposure from synthetic examples, reserved addresses, and public author metadata; runs on demand. |
 | `audit-memory` | Focused static audit for reachable memory corruption in first-party C, C++, unsafe Rust, native extensions, and FFI boundaries. Requires complete primitive-hit accounting and keeps library, CLI, parser, and foreign-runtime boundaries separate; runs on demand. |
+| `audit-package-manager` | Audits package manager clients, registries, and proxies against a bundled threat model. Triage selects it from source evidence; findings remain separate from design properties and unresolved assumptions. |
 | `cna-match` | Matches the repository to its CVE Numbering Authority so disclosures route to the right contact. |
 | `semgrep` | Runs semgrep with the `p/security-audit` and `p/secrets` rulesets and maps hits into the findings shape. |
 | `bandit` | Runs bandit over the repository's Python and maps its hits into the findings shape, grouped per test id and carrying bandit's confidence level, CWE, and rule documentation link. Gated on Python being one of the detected languages. |
@@ -66,6 +67,22 @@ The descriptions above are the first sentence of each skill's frontmatter `descr
       ...               anything else the body references
 
 The loader first loads configured local and remote overrides, then fills in every name not overridden from the bundled directory. It walks each directory looking for `SKILL.md` files up to six levels deep and skips `.git`, `node_modules`, `vendor`, `.venv`, and `__pycache__`. Each skill is parsed and upserted into the database keyed by `name`. A content hash over `SKILL.md` and `schema.json` decides whether the row's version is bumped on restart, so editing a skill's body and restarting is enough to roll out a change. The content-addressed identity of the complete embedded bundle also covers auxiliary scripts and references, ensuring an updated binary materialises a new immutable tree when any shipped asset changes.
+
+## Repository modes
+
+Repository modes add focused audits alongside the normal pipeline. Triage
+reads `skills/triage/references/modes.md`, checks the source for each listed
+repository type, and records matching modes with evidence in its report.
+Each mode names ordinary skills, so loading, enqueueing, scope forwarding,
+and finding ingestion use the existing paths. Several modes may match a repo.
+
+The `package-manager` mode selects `audit-package-manager` for client,
+registry, and package proxy implementations. Its bundled threat model covers
+weakness patterns and design properties, with source-and-sink evidence,
+negative results, and unresolved assumptions retained beside the findings.
+Add another mode by defining its detection criteria in the triage reference
+and bundling its audit skill and threat model. Web application and embedded
+device modes are not bundled yet.
 
 ## Frontmatter
 
