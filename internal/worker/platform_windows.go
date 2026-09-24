@@ -53,6 +53,10 @@ func startSupervised(cmd *exec.Cmd) (func(), error) {
 	return closeJob, nil
 }
 
+func startBackendProbe(cmd *exec.Cmd) (func(), error) {
+	return startSupervised(cmd)
+}
+
 // adoptAndResume assigns the suspended process to job and lets it run. Go's
 // exec keeps no handle on the initial thread, so a toolhelp snapshot is the
 // only route to ResumeThread; a process created suspended has exactly one
