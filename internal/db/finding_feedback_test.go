@@ -3,7 +3,6 @@ package db
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,10 +11,7 @@ import (
 
 func feedbackFixture(t *testing.T) (*gorm.DB, Finding) {
 	t.Helper()
-	gdb, err := Open(filepath.Join(t.TempDir(), "feedback.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	gdb := newTestDB(t)
 	repo := Repository{URL: "https://example.com/feedback"}
 	if err := gdb.Create(&repo).Error; err != nil {
 		t.Fatal(err)

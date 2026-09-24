@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +17,75 @@ import (
 )
 
 const backendSuccessJSON = `{"type":"result","subtype":"success","result":"SCRUTINEER_BACKEND_READY"}`
+
+func TestBackendProbeChild(t *testing.T) {
+	address := os.Getenv("PROBE_TEST_CHILD_ADDRESS")
+	if address == "" {
+		return
+	}
+	conn, err := net.Dial("tcp", address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	_, _ = io.Copy(io.Discard, conn)
+}
+
+func TestBackendLocalCancellationKillsDescendants(t *testing.T) {
+	listener, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+	deadline := time.Now().Add(10 * time.Second)
+	if err := listener.SetDeadline(deadline); err != nil {
+		t.Fatal(err)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	writeFakeBin(t, bin, "claude", "#!/bin/sh\n\"$PROBE_TEST_BINARY\" -test.run='^TestBackendProbeChild$'\n")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("PROBE_TEST_BINARY", self)
+	t.Setenv("PROBE_TEST_CHILD_ADDRESS", listener.Addr().String())
+	sj := SkillJob{WorkRoot: t.TempDir(), SrcReady: true, checkBackend: func(ctx context.Context, _ []byte, run func(context.Context) coverage.BackendProbe) error {
+		result := run(ctx)
+		return errors.New(result.Error)
+	}}
+	if err := os.Mkdir(filepath.Join(sj.WorkRoot, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := (LocalClaude{}).RunSkill(ctx, sj, func(Event) {})
+		done <- err
+	}()
+	conn, err := listener.AcceptTCP()
+	if err != nil {
+		t.Fatalf("probe descendant did not start: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if err := conn.SetReadDeadline(deadline); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("canceled probe allowed the skill to run")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("skill did not return after probe cancellation")
+	}
+	var b [1]byte
+	if _, err := conn.Read(b[:]); errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("probe descendant did not close its connection: %v", err)
+	}
+}
 
 func TestBackendLocalRateLimitReturnsAccountError(t *testing.T) {
 	for _, reset := range []int64{0, time.Now().Add(time.Hour).Unix()} {
@@ -33,9 +104,7 @@ case "$*" in
  *) touch "$PROBE_MAIN_MARKER";;
 esac
 `, reset)
-			if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o755); err != nil {
-				t.Fatal(err)
-			}
+			writeFakeBin(t, bin, "claude", script)
 			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 			t.Setenv("HOME", t.TempDir())
 			t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
@@ -89,9 +158,7 @@ func TestBackendLocalRunnerUsesCacheAndActualArgs(t *testing.T) {
 	bin := t.TempDir()
 	log := filepath.Join(bin, "invocations")
 	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$PROBE_TEST_LOG\"\nprintf '%s\\n' '" + backendSuccessJSON + "'\n"
-	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeFakeBin(t, bin, "claude", script)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("PROBE_TEST_LOG", log)
 	t.Setenv("HOME", t.TempDir())
@@ -133,7 +200,6 @@ func TestBackendLocalRunnerUsesCacheAndActualArgs(t *testing.T) {
 func TestBackendContainerProbeIsolationAndCache(t *testing.T) {
 	bin := t.TempDir()
 	log := filepath.Join(bin, "invocations")
-	runtime := filepath.Join(bin, "runtime")
 	script := `#!/bin/sh
 case "$1" in
  image) printf '%s\n' 'sha256:fixture'; exit 0;;
@@ -147,9 +213,7 @@ for arg in "$@"; do
 done
 printf '%s\n' '` + backendSuccessJSON + `'
 `
-	if err := os.WriteFile(runtime, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	runtime := writeFakeBin(t, bin, "runtime", script)
 	t.Setenv("PROBE_TEST_LOG", log)
 	t.Setenv("ANTHROPIC_API_KEY", "first-credential")
 	d := ContainerRunner{Runtime: ContainerRuntime{Bin: runtime}, Image: "fixture", Harness: ClaudeHarness{}, ModelBaseURL: "https://provider.invalid"}
@@ -199,10 +263,7 @@ func TestBackendPreflightDoesNotBypassStaticBlock(t *testing.T) {
 }
 
 func TestBackendKeyIncludesToolsWithoutNativeAllowlistFlag(t *testing.T) {
-	bin := filepath.Join(t.TempDir(), "runtime")
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf '%s\\n' 'sha256:fixture'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	bin := writeFakeBin(t, t.TempDir(), "runtime", "#!/bin/sh\nprintf '%s\\n' 'sha256:fixture'\n")
 	d := ContainerRunner{Runtime: ContainerRuntime{Bin: bin}, Harness: CodexHarness{}}
 	var keys []string
 	sj := SkillJob{Model: "model", AllowedTools: "Read", checkBackend: func(_ context.Context, key []byte, _ func(context.Context) coverage.BackendProbe) error {

@@ -367,6 +367,7 @@ func TestBackendPreflightFailedProbeUsageAndEstimatedCost(t *testing.T) {
 }
 
 func TestBackendProbeStream(t *testing.T) {
+	skipWithoutPOSIXShell(t)
 	const success = `{"type":"result","subtype":"success","result":"SCRUTINEER_BACKEND_READY","total_cost_usd":0.02,"usage":{"input_tokens":2,"output_tokens":3}}`
 	for _, tc := range []struct {
 		name, output string
@@ -382,7 +383,7 @@ func TestBackendProbeStream(t *testing.T) {
 			script := "printf '%s\\n' '" + tc.output + "'"
 			ctx, cancel := context.WithTimeout(t.Context(), time.Second*5)
 			defer cancel()
-			result := runBackendProbe(ctx, ClaudeHarness{}, "/bin/sh", []string{"-c", script}, os.Environ(), t.TempDir())
+			result := runBackendProbe(ctx, ClaudeHarness{}, hostShell, []string{"-c", script}, os.Environ(), t.TempDir())
 			if (result.Status == coverage.PreflightReady) != tc.ready || strings.Contains(result.Error, "credential-secret") {
 				t.Fatalf("result=%+v", result)
 			}
@@ -394,16 +395,18 @@ func TestBackendProbeStream(t *testing.T) {
 }
 
 func TestBackendProbeCancellation(t *testing.T) {
+	skipWithoutPOSIXShell(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	result := runBackendProbe(ctx, ClaudeHarness{}, "/bin/sh", []string{"-c", "sleep 30"}, os.Environ(), t.TempDir())
+	result := runBackendProbe(ctx, ClaudeHarness{}, hostShell, []string{"-c", "sleep 30"}, os.Environ(), t.TempDir())
 	if result.Status != coverage.PreflightBlocked || time.Since(start) > 5*time.Second {
 		t.Fatalf("result=%+v elapsed=%s", result, time.Since(start))
 	}
 }
 
 func TestBackendProbeOtherStreams(t *testing.T) {
+	skipWithoutPOSIXShell(t)
 	for _, tc := range []struct {
 		name   string
 		h      Harness
@@ -418,7 +421,7 @@ func TestBackendProbeOtherStreams(t *testing.T) {
 {"type":"result","sessionId":"session","exitCode":0}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			result := runBackendProbe(t.Context(), tc.h, "/bin/sh", []string{"-c", "printf '%s\\n' '" + tc.stream + "'"}, os.Environ(), t.TempDir())
+			result := runBackendProbe(t.Context(), tc.h, hostShell, []string{"-c", "printf '%s\\n' '" + tc.stream + "'"}, os.Environ(), t.TempDir())
 			if result.Status != coverage.PreflightReady {
 				t.Fatalf("result=%+v", result)
 			}
@@ -427,10 +430,11 @@ func TestBackendProbeOtherStreams(t *testing.T) {
 }
 
 func TestBackendProbeRejectsTools(t *testing.T) {
+	skipWithoutPOSIXShell(t)
 	stream := `{"type":"tool","part":{"type":"tool","tool":"bash","state":{"input":{"command":"secret-command"}}}}
 {"type":"text","part":{"type":"text","text":"SCRUTINEER_BACKEND_READY"}}
 {"type":"step_finish","part":{"type":"step-finish"}}`
-	result := runBackendProbe(t.Context(), OpencodeHarness{}, "/bin/sh", []string{"-c", "printf '%s\\n' '" + stream + "'"}, os.Environ(), t.TempDir())
+	result := runBackendProbe(t.Context(), OpencodeHarness{}, hostShell, []string{"-c", "printf '%s\\n' '" + stream + "'"}, os.Environ(), t.TempDir())
 	if result.Status != coverage.PreflightBlocked || strings.Contains(result.Error, "secret") {
 		t.Fatalf("result=%+v", result)
 	}

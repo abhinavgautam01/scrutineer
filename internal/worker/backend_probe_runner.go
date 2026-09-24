@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 
 	"scrutineer/internal/coverage"
@@ -46,17 +45,17 @@ func runBackendProbe(ctx context.Context, h Harness, binary string, args, env []
 	defer cancel()
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Dir, cmd.Env = work, env
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = time.Second
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		return blockedBackendProbe("could not open backend output")
 	}
 	cmd.Stderr = io.Discard
-	if err := cmd.Start(); err != nil {
+	terminate, err := startBackendProbe(cmd)
+	if err != nil {
 		return blockedBackendProbe("could not start backend")
 	}
+	defer terminate()
 	stop := context.AfterFunc(ctx, func() { _ = out.Close() })
 	defer stop()
 	result := blockedBackendProbe("backend did not return the expected terminal response")

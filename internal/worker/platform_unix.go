@@ -22,6 +22,15 @@ func startSupervised(cmd *exec.Cmd) (func(), error) {
 	return func() { _ = syscall.Kill(-pid, syscall.SIGTERM) }, nil
 }
 
+func startBackendProbe(cmd *exec.Cmd) (func(), error) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return func() { _ = cmd.Cancel() }, nil
+}
+
 // containerUserArgs maps the container user onto the invoking host user so
 // bind-mount writes stay host-owned.
 func containerUserArgs() []string {
