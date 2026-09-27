@@ -41,10 +41,16 @@ func TestPackageManagerAuditLive(t *testing.T) {
 
 type triageModeRunner struct {
 	worker.LocalClaude
-	apiBase string
+	apiBase  string
+	subPath  string
+	ref      string
+	maxTurns int
 }
 
 func (r triageModeRunner) RunSkill(ctx context.Context, job worker.SkillJob, emit func(worker.Event)) (worker.SkillResult, error) {
+	if r.maxTurns > 0 {
+		job.MaxTurns = r.maxTurns
+	}
 	for _, dir := range []string{job.WorkRoot, job.SkillDir} {
 		path := filepath.Join(dir, "context.json")
 		raw, err := os.ReadFile(path)
@@ -57,6 +63,7 @@ func (r triageModeRunner) RunSkill(ctx context.Context, job worker.SkillJob, emi
 		}
 		document["scrutineer"] = map[string]any{
 			"api_base": r.apiBase, "token": "fixture-token", "repository_id": 1,
+			"scan_subpath": r.subPath, "scan_ref": r.ref,
 		}
 		raw, err = json.Marshal(document)
 		if err != nil {
