@@ -110,6 +110,7 @@ type flags struct {
 	backend               string
 	codexAuthFile         string
 	noContainer           bool
+	modelProxy            bool
 	hostSkills            []string
 	runtime               string
 	selinux               string
@@ -278,6 +279,7 @@ func registerFlags(fs *flag.FlagSet, f *flags) {
 	fs.IntVar(&f.maxTurns, "max-turns", 0, "claude --max-turns limit (0 = unlimited)")
 	fs.StringVar(&f.modelBaseURL, "model-base-url", "", "custom HTTPS model API base URL for the active backend (HTTP allowed for local development; env fallback: ANTHROPIC_BASE_URL for claude)")
 	fs.StringVar(&f.modelBaseURL, "anthropic-base-url", "", "deprecated alias for -model-base-url")
+	fs.BoolVar(&f.modelProxy, "model-proxy", false, "keep ANTHROPIC_API_KEY on the host: container scans get a per-scan token for a host-side Anthropic API proxy (claude backend with API-key auth only)")
 	fs.StringVar(&f.forkOrg, "fork-org", "", "GitHub org the fork skill forks into and files draft advisories against")
 	fs.StringVar(&f.subprojectScope, "subproject-scope", "hard", "how a subproject-scoped scan stages its workspace: \"hard\" (copy only the sub-folder so build+findings are confined to the sub-package) or \"soft\" (stage the whole clone, sub-path is an advisory hint)")
 	fs.BoolVar(&f.monorepoAttribution, "monorepo-attribution", true, "link packages, advisories, maintainers and disclosure channel to the sub-package they belong to (matched by manifest name) instead of rolling up flat under the repository")
@@ -548,7 +550,35 @@ func validateFlags(f *flags) error {
 	if err := validateFederation(f); err != nil {
 		return err
 	}
+	if err := validateModelProxyFlags(f); err != nil {
+		return err
+	}
 	return validateModelBaseURL(f.modelBaseURL)
+}
+
+// validateModelProxyFlags refuses a -model-proxy configuration this narrow
+// scope does not support. Only the claude backend with a plain
+// ANTHROPIC_API_KEY is covered: account/OAuth login is out of scope. The
+// containerised runner is also required, since a bare-metal scan has no
+// container to keep the key out of.
+func validateModelProxyFlags(f *flags) error {
+	if !f.modelProxy {
+		return nil
+	}
+	h, err := worker.HarnessByName(f.backend)
+	if err != nil {
+		return err
+	}
+	if _, ok := h.(worker.ClaudeHarness); !ok {
+		return fmt.Errorf("-model-proxy requires the claude backend, got %q", worker.HarnessName(h))
+	}
+	if f.noContainer {
+		return errors.New("-model-proxy requires the containerised runner; remove -no-container")
+	}
+	if os.Getenv("ANTHROPIC_API_KEY") == "" {
+		return errors.New("-model-proxy requires ANTHROPIC_API_KEY; account login via CLAUDE_CODE_OAUTH_TOKEN is not supported by -model-proxy")
+	}
+	return nil
 }
 
 func isLoopbackListenAddr(addr string) bool {
@@ -769,7 +799,7 @@ func run(log *slog.Logger) error {
 	go srv.StartRepositoryHealthScorer(ctx)
 	go srv.StartFederation(ctx)
 
-	httpSrv := &http.Server{Addr: f.addr, Handler: srv.Handler(), ReadHeaderTimeout: shutdownTimeout}
+	httpSrv := &http.Server{Addr: f.addr, Handler: withModelProxy(srv.Handler(), worker.ModelProxyOf(runner)), ReadHeaderTimeout: shutdownTimeout}
 	go func() {
 		<-ctx.Done()
 		sctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
@@ -1150,7 +1180,60 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 		OpencodeReadiness: worker.NewOpencodeReadinessCache(),
 		CodexAccountAuth:  worker.NewCodexAccountAuth(f.codexAuthFile),
 	}
+	if err := applyModelProxy(f, log, apiHost, &runner); err != nil {
+		return nil, "", err
+	}
 	return splitHostSkills(f, runner, local, hostBase, log), apiBase, nil
+}
+
+// setupModelProxy builds the host-side Anthropic API proxy for -model-proxy:
+// each scan gets a short-lived token instead of the real ANTHROPIC_API_KEY, so
+// a hostile scan container never sees it. See docs/model-proxy.md.
+// validateModelProxyFlags has already confirmed ANTHROPIC_API_KEY is set and
+// the backend is claude; this only builds the proxy itself.
+func setupModelProxy(f *flags, log *slog.Logger) (*worker.ModelProxy, error) {
+	mp, err := worker.NewModelProxy(f.modelBaseURL, os.Getenv("ANTHROPIC_API_KEY"), log)
+	if err != nil {
+		return nil, fmt.Errorf("model proxy: %w", err)
+	}
+	upstream := baseURLHost(f.modelBaseURL)
+	if upstream == "" {
+		upstream = "api.anthropic.com"
+	}
+	log.Info("model proxy enabled, keeping ANTHROPIC_API_KEY off scan containers", "upstream_host", upstream)
+	return mp, nil
+}
+
+// applyModelProxy sets ModelProxy and ModelProxyURL on runner when
+// -model-proxy is set, isolating setupRunner's model-proxy branch (and its
+// nested error check) from setupRunner's own cognitive complexity budget.
+// A no-op when the flag is unset.
+func applyModelProxy(f *flags, log *slog.Logger, apiHost string, runner *worker.ContainerRunner) error {
+	if !f.modelProxy {
+		return nil
+	}
+	mp, err := setupModelProxy(f, log)
+	if err != nil {
+		return err
+	}
+	runner.ModelProxy = mp
+	runner.ModelProxyURL = "http://" + net.JoinHostPort(apiHost, addrPort(f.addr)) + worker.ModelProxyPathPrefix
+	return nil
+}
+
+// withModelProxy routes ModelProxyPathPrefix to mp, the -model-proxy host
+// listener a scan container reaches through the egress proxy, ahead of the
+// ordinary app handler h. A nil mp (the flag was not set) returns h unchanged.
+//
+//nolint:ireturn // returns http.Handler: a passthrough or a *http.ServeMux depending on mp
+func withModelProxy(h http.Handler, mp *worker.ModelProxy) http.Handler {
+	if mp == nil {
+		return h
+	}
+	mux := http.NewServeMux()
+	mux.Handle(worker.ModelProxyPathPrefix+"/", mp)
+	mux.Handle("/", h)
+	return mux
 }
 
 // enforceCodexAccountAuthConcurrency starts the queue at the same one-slot
