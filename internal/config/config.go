@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -100,6 +102,12 @@ type Config struct {
 	// extra hostnames. Entries are appended to worker.DefaultEgressAllow,
 	// not replacing it. "*.example.com" matches subdomains.
 	EgressAllow []string `yaml:"egress_allow"`
+	// EgressPolicies grants extra egress to named skills only, keyed by skill
+	// name. Each allow entry is "host:port" and the port is mandatory: the
+	// granted host is reachable on that port alone. Grants need --hardened so
+	// the per-scan --internal network makes the proxy the only way out. Only
+	// this file can grant egress; nothing a scan or a skill file says can.
+	EgressPolicies map[string]EgressPolicy `yaml:"egress_policies"`
 	// Concurrency controls how many scans the worker runs in parallel.
 	// 0 or negative leaves the built-in default (see queue.DefaultWorkerConcurrency).
 	Concurrency int `yaml:"concurrency"`
@@ -264,12 +272,19 @@ type OpencodeProvider struct {
 	StateDir string `yaml:"state_dir"`
 }
 
+// EgressPolicy is the extra egress one skill is granted. Allow entries are
+// "host:port" where host is a DNS hostname or "*.domain" and port is 1..65535.
+type EgressPolicy struct {
+	Allow []string `yaml:"allow"`
+}
+
 const maxTCPPort = 65535
 
 var (
 	opencodeProviderID = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 	environmentName    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	binaryName         = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
+	egressPolicyHost   = regexp.MustCompile(`^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$`)
 )
 
 var reservedOpencodePassEnv = map[string]bool{
@@ -338,6 +353,57 @@ func validateOpencodeProvider(id string, provider OpencodeProvider) error {
 		}
 	}
 	return nil
+}
+
+// ValidateEgressPolicies checks every per-skill grant before any scan can use
+// it. Entries must name a DNS host and an explicit port so a grant can never
+// widen to IP literals or to the host services the sandbox keeps private.
+func ValidateEgressPolicies(policies map[string]EgressPolicy) error {
+	for skill, policy := range policies {
+		if strings.TrimSpace(skill) == "" {
+			return errors.New("egress_policies: skill name must not be empty")
+		}
+		if len(policy.Allow) == 0 {
+			return fmt.Errorf("egress_policies.%s.allow: at least one host:port entry is required", skill)
+		}
+		for _, entry := range policy.Allow {
+			if err := validateEgressPolicyEntry(entry); err != nil {
+				return fmt.Errorf("egress_policies.%s.allow: %w", skill, err)
+			}
+		}
+	}
+	return nil
+}
+
+func validateEgressPolicyEntry(entry string) error {
+	if strings.TrimSpace(entry) != entry || entry == "" || strings.Contains(entry, "://") || strings.ContainsAny(entry, "/@ ") {
+		return fmt.Errorf("%q must be host:port without a scheme, path or userinfo", entry)
+	}
+	host, port, ok := strings.Cut(entry, ":")
+	if !ok || strings.Contains(port, ":") {
+		return fmt.Errorf("%q must be a DNS hostname and a port (host:port); IP literals are not allowed", entry)
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > maxTCPPort {
+		return fmt.Errorf("%q has an invalid port (want 1 to %d)", entry, maxTCPPort)
+	}
+	host = strings.ToLower(host)
+	if !egressPolicyHost.MatchString(host) {
+		return fmt.Errorf("%q must name a DNS hostname or *.domain", entry)
+	}
+	if net.ParseIP(host) != nil || allDigitsAndDots(host) {
+		return fmt.Errorf("%q must not be an IP address", entry)
+	}
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") || host == "host.docker.internal" {
+		return fmt.Errorf("%q names a local or host address, which policies cannot grant", entry)
+	}
+	return nil
+}
+
+// allDigitsAndDots catches shorthand IPv4 forms such as "127.1" or "2130706433"
+// that a lenient resolver would accept even though ParseIP does not.
+func allDigitsAndDots(host string) bool {
+	return strings.Trim(host, "0123456789.") == ""
 }
 
 func validateOpencodePassEnv(id string, names []string) error {
@@ -540,6 +606,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	if err := ValidateOpencode(c.Opencode); err != nil {
+		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	if err := ValidateEgressPolicies(c.EgressPolicies); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	if c.VINCE.Enabled() {

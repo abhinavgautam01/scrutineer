@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -629,6 +630,9 @@ func run(log *slog.Logger) error {
 	if err := validateFlags(f); err != nil {
 		return err
 	}
+	if err := validateEgressPolicies(f, cfg); err != nil {
+		return err
+	}
 	warnIfNonLoopbackListenAddr(log, f.addr)
 	// When --selinux is given explicitly, surface the host's SELinux mode at
 	// startup so the operator can confirm what scrutineer detected (e.g. that an
@@ -696,6 +700,7 @@ func run(log *slog.Logger) error {
 	}
 	retireRemovedSkills(log, gdb)
 	warnUnknownHostSkills(log, gdb, f.hostSkills)
+	warnEgressPolicySkills(log, gdb, cfg.EgressPolicies, f.hostSkills)
 
 	go func() {
 		if n, err := worker.SyncCNAs(context.Background(), gdb, ""); err != nil {
@@ -1063,6 +1068,10 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 	if err != nil {
 		return nil, "", err
 	}
+	policies, err := egressPolicyGrants(cfg)
+	if err != nil {
+		return nil, "", err
+	}
 	var egress worker.EgressSidecarConfig
 	var configuredProviders map[string]config.OpencodeProvider
 	if cfg != nil {
@@ -1092,7 +1101,7 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 	// the egress proxy as a per-scan sidecar. Resolve it before the in-process
 	// host proxy so the latter can be skipped when the sidecar is in charge.
 	if f.hardened {
-		egress, err = resolveEgressSidecar(rt, f, allow, token, log)
+		egress, err = resolveEgressSidecar(rt, f, allow, token, log, policyCapabilities(policies)...)
 		if err != nil {
 			return nil, "", err
 		}
@@ -1146,6 +1155,7 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 			ContainerHost: apiHost,
 			Log:           log,
 		},
+		EgressPolicies:    policies,
 		OpencodeProviders: opencodeProviders,
 		OpencodeReadiness: worker.NewOpencodeReadinessCache(),
 		CodexAccountAuth:  worker.NewCodexAccountAuth(f.codexAuthFile),
@@ -1236,6 +1246,70 @@ func warnUnknownHostSkills(log *slog.Logger, gdb *gorm.DB, names []string) {
 			log.Warn("host_skills names no active skill", "skill", name)
 		case s.RequiresProfile != "":
 			log.Warn("host_skills names a skill that requires a runner profile; the local runner refuses it", "skill", name, "profile", s.RequiresProfile)
+		}
+	}
+}
+
+// validateEgressPolicies refuses per-skill egress grants that nothing would
+// enforce. Grants are only sound on the per-scan --internal network that
+// --hardened creates. --no-container has no container to confine.
+func validateEgressPolicies(f *flags, cfg *config.Config) error {
+	if cfg == nil || len(cfg.EgressPolicies) == 0 {
+		return nil
+	}
+	if f.noContainer {
+		return errors.New("egress_policies cannot be enforced with --no-container (no container to confine)")
+	}
+	if !f.hardened {
+		return errors.New("egress_policies require --hardened so grants are enforced on an isolated network")
+	}
+	return nil
+}
+
+// egressPolicyGrants converts the validated config policies into the worker's
+// per-skill grants.
+func egressPolicyGrants(cfg *config.Config) (map[string][]worker.EgressGrant, error) {
+	if cfg == nil || len(cfg.EgressPolicies) == 0 {
+		return nil, nil
+	}
+	out := make(map[string][]worker.EgressGrant, len(cfg.EgressPolicies))
+	for skill, policy := range cfg.EgressPolicies {
+		grants, err := worker.ParseEgressGrants(policy.Allow)
+		if err != nil {
+			return nil, fmt.Errorf("egress_policies.%s.allow: %w", skill, err)
+		}
+		out[skill] = grants
+	}
+	return out, nil
+}
+
+// policyCapabilities lists the extra sidecar capabilities the configured
+// policies need from the runner image.
+func policyCapabilities(policies map[string][]worker.EgressGrant) []string {
+	if len(policies) == 0 {
+		return nil
+	}
+	return []string{worker.ProxyCapabilityEgressPortGrants}
+}
+
+// warnEgressPolicySkills flags egress_policies entries that can never apply: a
+// skill that does not exist (a typo silently leaves it without egress) or one
+// listed in host_skills, which runs on the host and ignores policies.
+func warnEgressPolicySkills(log *slog.Logger, gdb *gorm.DB, policies map[string]config.EgressPolicy, hostSkills []string) {
+	if len(policies) == 0 {
+		return
+	}
+	var active []string
+	if err := gdb.Model(&db.Skill{}).Where("active = ?", true).Pluck("name", &active).Error; err != nil {
+		log.Warn("egress_policies check failed", "err", err)
+		return
+	}
+	for name := range policies {
+		switch {
+		case slices.Contains(hostSkills, name):
+			log.Warn("egress_policies names a host_skills skill; host skills run on the host and ignore policies", "skill", name)
+		case !slices.Contains(active, name):
+			log.Warn("egress_policies names no active skill", "skill", name)
 		}
 	}
 }
@@ -1359,7 +1433,7 @@ func resolveScanNetworking(rt worker.ContainerRuntime, f *flags, log *slog.Logge
 // default-network host gateway the sidecar dials to reach the loopback-bound
 // host skill API. Docker Engine, rootful podman, and Apple keep the in-process
 // proxy and return the zero value.
-func resolveEgressSidecar(rt worker.ContainerRuntime, f *flags, allow []string, token string, log *slog.Logger) (worker.EgressSidecarConfig, error) {
+func resolveEgressSidecar(rt worker.ContainerRuntime, f *flags, allow []string, token string, log *slog.Logger, extraCaps ...string) (worker.EgressSidecarConfig, error) {
 	if !rt.NeedsEgressSidecar() {
 		return worker.EgressSidecarConfig{}, nil
 	}
@@ -1367,7 +1441,7 @@ func resolveEgressSidecar(rt worker.ContainerRuntime, f *flags, allow []string, 
 	// requires, rather than letting every hardened scan fail with a cryptic error.
 	smokeCtx, cancel := context.WithTimeout(context.Background(), f.smokeTimeout)
 	defer cancel()
-	if err := worker.VerifyProxyBinary(smokeCtx, rt, f.runnerImage); err != nil {
+	if err := worker.VerifyProxyBinaryCapabilities(smokeCtx, rt, f.runnerImage, extraCaps...); err != nil {
 		return worker.EgressSidecarConfig{}, err
 	}
 	// The sidecar reaches the host skill API over its egress leg through the
@@ -1405,7 +1479,7 @@ func buildEgressAllow(harnessHosts []string, hardened bool, cfg *config.Config, 
 	if hardened {
 		allow = append(allow, worker.HardenedEgressAllow...)
 		if cfg != nil && len(cfg.EgressAllow) > 0 {
-			log.Warn("ignoring egress_allow config entries under --hardened", "count", len(cfg.EgressAllow))
+			log.Warn("ignoring egress_allow config entries under --hardened; grant a skill host:port pairs with egress_policies instead (docs/egress-policies.md)", "count", len(cfg.EgressAllow))
 		}
 	} else {
 		allow = append(allow, worker.DefaultEgressAllow...)

@@ -26,6 +26,11 @@ const (
 	// image supplies the hardened egress sidecar binary. Older binaries do not
 	// recognise the corresponding flag and therefore fail closed.
 	ProxyCapabilityDenyAPIConnect = "deny-api-connect-v1"
+	// ProxyCapabilityEgressPortGrants is required in addition when a scan
+	// carries per-skill egress grants. A sidecar binary that predates the
+	// grant gate rejects the unknown value and exits, which fails the scan
+	// closed instead of running without the port restriction.
+	ProxyCapabilityEgressPortGrants = "egress-port-grants-v1"
 )
 
 var (
@@ -60,10 +65,20 @@ func StartEgressProxy(p *EgressProxy) (int, error) {
 
 // ServeEgressProxy runs the fixed-address proxy used by hardened sidecars.
 func ServeEgressProxy(p *EgressProxy, addr string) error {
+	return ServeEgressProxyWithGrants(p, addr, nil)
+}
+
+// ServeEgressProxyWithGrants is ServeEgressProxy plus per-skill grants: the
+// granted hosts are reachable only on their declared ports.
+func ServeEgressProxyWithGrants(p *EgressProxy, addr string, grants []EgressGrant) error {
 	if err := validateEgressProxy(p); err != nil {
 		return err
 	}
-	srv := newEgressProxyServer(p, addr)
+	inner, err := grantedProxy(p, grants)
+	if err != nil {
+		return err
+	}
+	srv := newEgressProxyServerWithGrants(inner, addr, p.Allow, grants)
 	return srv.ListenAndServe()
 }
 
@@ -86,11 +101,26 @@ func validateEgressProxy(p *EgressProxy) error {
 }
 
 func newEgressProxyServer(p *EgressProxy, addr string) *http.Server {
+	return newEgressProxyServerWithGrants(p, addr, p.Allow, nil)
+}
+
+// newEgressProxyServerWithGrants fronts the proxy with the port gate when there
+// are grants. base is the allowlist that keeps its any-port behaviour; the
+// proxy's own Allow already includes the granted hosts.
+func newEgressProxyServerWithGrants(p *EgressProxy, addr string, base []string, grants []EgressGrant) *http.Server {
 	return &http.Server{
 		Addr:              addr,
-		Handler:           apiConnectGuard(p),
+		Handler:           egressProxyHandler(p, base, grants),
 		ReadHeaderTimeout: egressProxyReadHeaderTimeout,
 	}
+}
+
+func egressProxyHandler(p *EgressProxy, base []string, grants []EgressGrant) http.Handler {
+	guarded := apiConnectGuard(p)
+	if len(grants) == 0 {
+		return guarded
+	}
+	return egressPortGuard(p.Token, base, grants, p.Log, guarded)
 }
 
 // apiConnectGuard keeps the host skill API on the proxy's parsed HTTP path.
@@ -160,15 +190,26 @@ func proxyAPIHost(p *EgressProxy, host string) bool {
 // harness package's process-wide starter intentionally has no close hook, so
 // provider-specific allowlists use this variant to avoid leaking listeners.
 func StartScopedEgressProxy(p *EgressProxy) (int, func(), error) {
+	return StartScopedEgressProxyWithGrants(p, nil)
+}
+
+// StartScopedEgressProxyWithGrants is StartScopedEgressProxy plus per-skill
+// grants. p.Allow stays the any-port base; each grant host is added to the
+// inner proxy's allowlist behind a gate that admits it on declared ports only.
+func StartScopedEgressProxyWithGrants(p *EgressProxy, grants []EgressGrant) (int, func(), error) {
 	noop := func() {}
 	if err := validateEgressProxy(p); err != nil {
+		return 0, noop, err
+	}
+	inner, err := grantedProxy(p, grants)
+	if err != nil {
 		return 0, noop, err
 	}
 	ln, err := net.Listen("tcp", ":0")
 	if err != nil {
 		return 0, noop, err
 	}
-	srv := newEgressProxyServer(p, "")
+	srv := newEgressProxyServerWithGrants(inner, "", p.Allow, grants)
 	go func() { _ = srv.Serve(ln) }()
 	// srv.Close only closes listeners Serve has already tracked; if the Serve
 	// goroutine has not been scheduled yet, srv.listeners is empty and ln stays
