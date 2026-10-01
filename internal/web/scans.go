@@ -597,7 +597,7 @@ func (s *Server) bulkResumePaused(base *gorm.DB) ([]db.Scan, error) {
 		resumed = make([]db.Scan, 0, len(claimed))
 		for _, scan := range claimed {
 			resumed = append(resumed, byID[scan.ID])
-			if err := logScanControl(tx.Session(&gorm.Session{NewDB: true}), db.AuditEventScanResumeRequested, byID[scan.ID], db.ScanPaused, db.ScanQueued, db.SourceAnalyst); err != nil {
+			if err := logScanControl(tx.Session(&gorm.Session{NewDB: true}), db.AuditEventScanResumeRequested, byID[scan.ID], scanLineage{}, db.ScanPaused, db.ScanQueued, db.SourceAnalyst); err != nil {
 				return err
 			}
 		}
@@ -785,21 +785,6 @@ func sameOriginReferer(r *http.Request) string {
 		return ""
 	}
 	return ref
-}
-
-// cancelScan aborts one non-terminal scan, recording reason as the row's
-// error whichever path stops it. A running scan is signalled through the
-// worker, which carries the reason through to the row it writes and publishes
-// scan-status as it unwinds; a queued scan isn't in flight, so we flip the row
-// here (the queue handler drops a cancelled row on pickup) and return true so
-// the caller can publish a scan-status event itself. Returns false when there
-// was nothing to do.
-func (s *Server) cancelScan(scan *db.Scan, reason string) (flippedQueued bool) {
-	changed, err := s.cancelScanWithAudit(scan, reason)
-	if err != nil {
-		s.Log.Error("cancel scan", "scan", scan.ID, "err", err)
-	}
-	return changed
 }
 
 // settleCancelledScanGroups fires the worker's cohort-settled hook for scans

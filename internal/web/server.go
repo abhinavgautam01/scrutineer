@@ -3539,7 +3539,7 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 			return ErrRepoFederationOptOut
 		}
 		if opts.AuditRetry {
-			return logScanControl(tx, db.AuditEventScanRetryRequested, scan, "", db.ScanQueued, db.SourceAnalyst)
+			return logScanControl(tx, db.AuditEventScanRetryRequested, scan, retryLineage(scan), "", db.ScanQueued, db.SourceAnalyst)
 		}
 		return nil
 	}); err != nil {

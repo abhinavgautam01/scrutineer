@@ -362,20 +362,13 @@ type runningScan struct {
 	reason   string
 }
 
-// Cancel aborts an in-flight scan and records reason as the row's error when it
-// unwinds; an empty reason falls back to CancelledByUser. Returns true if a
-// running job was found and signalled; false means the scan is queued (or
-// already finished) and the caller should flip the DB row itself so the queue
-// handler drops it.
-func (w *Worker) Cancel(scanID uint, reason string) bool {
-	ok, _ := w.CancelWithAudit(scanID, reason, nil)
-	return ok
-}
-
-// CancelWithAudit records a cancellation request before signalling the runner.
-// The callback must not request another cancellation of the same scan. A failed
-// audit leaves the runner untouched; repeated requests with the same reason do
-// not repeat the audit.
+// CancelWithAudit records a cancellation request before signalling the runner,
+// whose row takes reason as its error when it unwinds; an empty reason falls
+// back to CancelledByUser and a nil audit skips the record. It returns true when
+// a running job was found or false when the scan is queued or already finished,
+// in which case the caller should flip the row itself. The callback must not request
+// another cancellation of the same scan. A failed audit leaves the runner
+// untouched; repeated requests with the same reason do not repeat the audit.
 func (w *Worker) CancelWithAudit(scanID uint, reason string, audit func() error) (bool, error) {
 	if reason == "" {
 		reason = CancelledByUser

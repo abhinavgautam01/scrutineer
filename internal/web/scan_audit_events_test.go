@@ -404,3 +404,57 @@ func testScanControlRetryAudit(t *testing.T, mode string) {
 		assertQueuedJobCount(t, s, 1)
 	}
 }
+
+// A federation opt-out must not report success while a scan it could not stop
+// keeps running. Each running scan is attempted, so one failed audit write does
+// not strand the rest while the failures still reach the caller.
+func TestStopScansForOptOutReportsCancelAuditFailure(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	first := seedControlScan(t, s, db.ScanRunning)
+	second := seedControlScan(t, s, db.ScanRunning)
+	failScanAudit(t, s)
+
+	err := s.stopScansForOptOut(first.RepositoryID)
+	if err == nil {
+		t.Fatal("opt-out sweep reported success although its audit writes failed")
+	}
+	for _, scan := range []db.Scan{first, second} {
+		if !strings.Contains(err.Error(), fmt.Sprintf("stop scan %d", scan.ID)) {
+			t.Errorf("err = %v, want it to name scan %d", err, scan.ID)
+		}
+		assertScanStatus(t, s, scan.ID, db.ScanRunning)
+	}
+	if events := scanControlEvents(t, s); len(events) != 0 {
+		t.Fatalf("events = %+v, want none after a rolled-back cancel", events)
+	}
+}
+
+// Lineage is explicit: a cancel event records none even when the cancelled
+// scan is itself a retry, because only retry events carry ancestry.
+func TestScanControlCancelOmitsLineage(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	parent := seedControlScan(t, s, db.ScanDone)
+	scan := seedControlScan(t, s, db.ScanQueued)
+	if err := s.DB.Model(&scan).Updates(map[string]any{"parent_scan_id": parent.ID, "resumed_from_scan_id": parent.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.cancelScanWithAudit(&scan, worker.CancelledByUser); err != nil {
+		t.Fatal(err)
+	}
+	events := scanControlEvents(t, s)
+	if len(events) != 1 {
+		t.Fatalf("events = %+v", events)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(events[0].Payload), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := payload["parent_scan_id"]; ok {
+		t.Errorf("cancel event recorded lineage: %v", payload)
+	}
+	if _, ok := payload["resumed_from_scan_id"]; ok {
+		t.Errorf("cancel event recorded lineage: %v", payload)
+	}
+}
