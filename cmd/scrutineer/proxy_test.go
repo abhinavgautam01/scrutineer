@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"scrutineer/internal/egressgrant"
 	"scrutineer/internal/worker"
 )
 
@@ -227,7 +228,7 @@ func TestParseProxyConfig_Grants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []worker.EgressGrant{
+	want := []egressgrant.Grant{
 		{Host: "*.example.org", Ports: []string{"443", "8443"}},
 		{Host: "api.ecosyste.ms", Ports: []string{"443"}},
 	}

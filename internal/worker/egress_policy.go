@@ -3,129 +3,16 @@ package worker
 import (
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
-	"regexp"
 	"slices"
-	"strconv"
-	"strings"
 
 	"github.com/alpha-omega-security/harness/egress"
+
+	"scrutineer/internal/egressgrant"
 )
 
-const (
-	minTCPPort        = 1
-	maxTCPPort        = 65535
-	grantPortSep      = "|"
-	grantHostPortSep  = ":"
-	grantEntrySep     = ","
-	localhostSuffix   = ".localhost"
-	localhostHostname = "localhost"
-)
-
-var grantHostPattern = regexp.MustCompile(`^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$`)
-
-// EgressGrant is one operator-granted destination: a hostname (or *.domain)
-// reachable only on Ports.
-type EgressGrant struct {
-	Host  string
-	Ports []string
-}
-
-// ParseEgressGrants turns "host:port" entries into grants. Entries for the
-// same host merge and the result is sorted and deduplicated so the formatted
-// policy is stable. The rules mirror config.ValidateEgressPolicies, which the
-// config package enforces first; they are repeated here because worker cannot
-// be imported by config and the sidecar parses its own environment.
-func ParseEgressGrants(entries []string) ([]EgressGrant, error) {
-	byHost := map[string][]string{}
-	for _, entry := range entries {
-		host, port, err := parseEgressGrantEntry(entry)
-		if err != nil {
-			return nil, err
-		}
-		byHost[host] = append(byHost[host], port)
-	}
-	hosts := make([]string, 0, len(byHost))
-	for host := range byHost {
-		hosts = append(hosts, host)
-	}
-	slices.Sort(hosts)
-	grants := make([]EgressGrant, 0, len(hosts))
-	for _, host := range hosts {
-		ports := byHost[host]
-		slices.SortFunc(ports, func(a, b string) int {
-			na, _ := strconv.Atoi(a)
-			nb, _ := strconv.Atoi(b)
-			return na - nb
-		})
-		grants = append(grants, EgressGrant{Host: host, Ports: slices.Compact(ports)})
-	}
-	return grants, nil
-}
-
-func parseEgressGrantEntry(entry string) (host, port string, err error) {
-	if strings.TrimSpace(entry) != entry || entry == "" || strings.Contains(entry, "://") || strings.ContainsAny(entry, "/@ ") {
-		return "", "", fmt.Errorf("egress grant %q must be host:port without a scheme, path or userinfo", entry)
-	}
-	host, port, ok := strings.Cut(entry, grantHostPortSep)
-	if !ok || strings.Contains(port, grantHostPortSep) {
-		return "", "", fmt.Errorf("egress grant %q must be a DNS hostname and a port (host:port)", entry)
-	}
-	n, convErr := strconv.Atoi(port)
-	if convErr != nil || n < minTCPPort || n > maxTCPPort || strconv.Itoa(n) != port {
-		return "", "", fmt.Errorf("egress grant %q has an invalid port (want %d to %d)", entry, minTCPPort, maxTCPPort)
-	}
-	host = strings.ToLower(host)
-	if !grantHostPattern.MatchString(host) || net.ParseIP(host) != nil || strings.Trim(host, "0123456789.") == "" {
-		return "", "", fmt.Errorf("egress grant %q must name a DNS hostname or *.domain, not an IP address", entry)
-	}
-	if host == localhostHostname || strings.HasSuffix(host, localhostSuffix) || host == HostGatewayAlias {
-		return "", "", fmt.Errorf("egress grant %q names a local or host address, which grants cannot cover", entry)
-	}
-	return host, port, nil
-}
-
-// FormatEgressGrants renders grants as "host:p1|p2,host2:p" for the sidecar
-// environment and the scan record. The output is deterministic for a given
-// set of grants as ParseEgressGrants sorts them.
-func FormatEgressGrants(g []EgressGrant) string {
-	parts := make([]string, 0, len(g))
-	for _, grant := range g {
-		parts = append(parts, grant.Host+grantHostPortSep+strings.Join(grant.Ports, grantPortSep))
-	}
-	return strings.Join(parts, grantEntrySep)
-}
-
-// ParseEgressGrantsEnv is the inverse of FormatEgressGrants. An empty string
-// means no grants.
-func ParseEgressGrantsEnv(s string) ([]EgressGrant, error) {
-	var entries []string
-	for item := range strings.SplitSeq(s, grantEntrySep) {
-		if item = strings.TrimSpace(item); item == "" {
-			continue
-		}
-		host, ports, ok := strings.Cut(item, grantHostPortSep)
-		if !ok {
-			return nil, fmt.Errorf("egress grant %q must be host:port", item)
-		}
-		for port := range strings.SplitSeq(ports, grantPortSep) {
-			entries = append(entries, host+grantHostPortSep+port)
-		}
-	}
-	if len(entries) == 0 {
-		return nil, nil
-	}
-	return ParseEgressGrants(entries)
-}
-
-func grantHosts(g []EgressGrant) []string {
-	hosts := make([]string, 0, len(g))
-	for _, grant := range g {
-		hosts = append(hosts, grant.Host)
-	}
-	return hosts
-}
+// EgressGrant is one operator-granted destination, see egressgrant.Grant.
+type EgressGrant = egressgrant.Grant
 
 // grantedProxy returns the proxy that should serve p with grants applied: a
 // fresh Proxy whose allowlist is p.Allow plus the granted hosts. p itself is
@@ -141,7 +28,7 @@ func grantedProxy(p *EgressProxy, grants []EgressGrant) (*EgressProxy, error) {
 		}
 	}
 	return &EgressProxy{
-		Allow:           append(slices.Clone(p.Allow), grantHosts(grants)...),
+		Allow:           append(slices.Clone(p.Allow), egressgrant.Hosts(grants)...),
 		Token:           p.Token,
 		APIPort:         p.APIPort,
 		APIHosts:        p.APIHosts,

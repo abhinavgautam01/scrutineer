@@ -27,7 +27,9 @@ The key is the skill name. Each `allow` entry is `host:port`:
 - The host is a DNS name or `*.domain` (which matches subdomains but not the
   apex, so list the apex separately if you need it).
 - Schemes, paths, userinfo, IP addresses, `localhost`, `*.localhost` and
-  `host.docker.internal` are rejected when the config loads.
+  `host.docker.internal` are rejected when the config loads, as is any
+  wildcard that would cover `localhost` or `host.docker.internal` (for example
+  `*.internal`).
 
 ## Requirements
 

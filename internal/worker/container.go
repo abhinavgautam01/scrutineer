@@ -22,6 +22,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"scrutineer/internal/egressgrant"
 )
 
 const DefaultRunnerImage = "ghcr.io/alpha-omega-security/scrutineer-runner:latest"
@@ -404,7 +406,7 @@ func (d ContainerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Ev
 // prepareScanExecution resolves the OpenCode provider egress then layers the
 // skill's egress policy on top of it. The returned cleanup releases both.
 func (d ContainerRunner) prepareScanExecution(ctx context.Context, sj SkillJob, emit func(Event)) (ContainerRunner, opencodeProvider, SkillResult, func(), error) {
-	d, provider, result, cleanupProvider, err := d.prepareOpencodeExecution(ctx, sj.Model)
+	d, provider, result, cleanupProvider, err := d.prepareOpencodeExecution(ctx, sj.Model, len(d.EgressPolicies[sj.Name]) > 0)
 	if err != nil {
 		return d, provider, result, cleanupProvider, err
 	}
@@ -1121,7 +1123,7 @@ func EgressSidecarEnv(cfg EgressSidecarConfig, listen string) []string {
 		"SCRUTINEER_PROXY_LISTEN=" + listen,
 	}
 	if len(cfg.Grants) > 0 {
-		env = append(env, "SCRUTINEER_PROXY_GRANTS="+FormatEgressGrants(cfg.Grants))
+		env = append(env, "SCRUTINEER_PROXY_GRANTS="+egressgrant.Format(cfg.Grants))
 	}
 	return env
 }
@@ -1176,14 +1178,9 @@ func noteworthyProxyLogLine(line string) bool {
 // present locally yet (the first scan pulls it and the actual sidecar command
 // enforces the same capability), matching container.VerifyKeepID.
 // Only meaningful on the sidecar path; the caller checks the runtime trait.
-func VerifyProxyBinary(ctx context.Context, rt ContainerRuntime, image string) error {
-	return VerifyProxyBinaryCapabilities(ctx, rt, image)
-}
-
-// VerifyProxyBinaryCapabilities is VerifyProxyBinary that also requires the
-// extra capabilities, such as ProxyCapabilityEgressPortGrants when the operator
-// configured egress policies.
-func VerifyProxyBinaryCapabilities(ctx context.Context, rt ContainerRuntime, image string, extra ...string) error {
+// The extra capabilities, such as ProxyCapabilityEgressPortGrants when the
+// operator configured egress policies, are required on top of the base one.
+func VerifyProxyBinary(ctx context.Context, rt ContainerRuntime, image string, extra ...string) error {
 	if image == "" || !imageExistsLocally(ctx, rt, image) {
 		return nil
 	}

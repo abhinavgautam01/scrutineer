@@ -794,7 +794,7 @@ func TestResolveEgressSidecar_HostProxyRuntimes(t *testing.T) {
 		{Bin: "podman"}, // rootful
 		{Bin: "apple"},  // apple -- hardened, but uses the host proxy, not a sidecar
 	} {
-		got, err := resolveEgressSidecar(rt, f, []string{"x"}, "tok", quietLog())
+		got, err := resolveEgressSidecar(rt, f, []string{"x"}, "tok", quietLog(), nil)
 		if err != nil {
 			t.Errorf("runtime %+v: unexpected error: %v", rt, err)
 		}

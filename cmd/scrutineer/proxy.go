@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"scrutineer/internal/egressgrant"
 	"scrutineer/internal/worker"
 )
 
@@ -34,7 +35,7 @@ type proxyConfig struct {
 	hostPorts []string // additional host-alias ports (host-local model server)
 	allow     []string // egress allowlist
 	// grants are per-skill hosts reachable only on their declared ports.
-	grants []worker.EgressGrant
+	grants []egressgrant.Grant
 }
 
 // parseProxyConfig resolves the sidecar configuration from flags layered over
@@ -65,7 +66,7 @@ func parseProxyConfig(args []string, getenv func(string) string) (proxyConfig, e
 	if parseErr != nil {
 		return proxyConfig{}, parseErr
 	}
-	parsedGrants, err := worker.ParseEgressGrantsEnv(grants)
+	parsedGrants, err := egressgrant.ParseEnv(grants)
 	if err != nil {
 		return proxyConfig{}, fmt.Errorf("proxy: invalid egress grants: %w", err)
 	}
@@ -168,7 +169,7 @@ func runProxy(args []string) error {
 		// Upstream names are resolved here in the sidecar, not on the host, so a
 		// rootless netns without working DNS would fail every scan mid-run; prove
 		// the resolver answers before serving (fail closed).
-		dnsHosts := slices.Concat(cfg.allow, grantHostNames(cfg.grants))
+		dnsHosts := slices.Concat(cfg.allow, egressgrant.Hosts(cfg.grants))
 		if err := worker.VerifyUpstreamDNS(ctx, dnsHosts); err != nil {
 			return fmt.Errorf("egress proxy refusing to start: %w", err)
 		}
@@ -183,13 +184,5 @@ func runProxy(args []string) error {
 		Log:             log,
 	}
 	log.Info("egress proxy listening", "addr", cfg.listen, "allow", len(cfg.allow), "grants", len(cfg.grants))
-	return worker.ServeEgressProxyWithGrants(p, cfg.listen, cfg.grants)
-}
-
-func grantHostNames(grants []worker.EgressGrant) []string {
-	hosts := make([]string, 0, len(grants))
-	for _, g := range grants {
-		hosts = append(hosts, g.Host)
-	}
-	return hosts
+	return worker.ServeEgressProxy(p, cfg.listen, cfg.grants...)
 }

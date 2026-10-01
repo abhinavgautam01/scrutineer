@@ -25,6 +25,8 @@ import (
 
 	"github.com/alpha-omega-security/harness"
 	"github.com/alpha-omega-security/harness/container"
+
+	"scrutineer/internal/egressgrant"
 )
 
 const plainCurlImage = "curlimages/curl:8.11.1"
@@ -75,8 +77,8 @@ func TestIntegration_EgressPolicyPerSkill(t *testing.T) {
 	if gatewayIP == "" {
 		t.Fatal("host-gateway did not resolve on Docker Desktop")
 	}
-	alpha, _ := ParseEgressGrants([]string{"example.com:443"})
-	beta, _ := ParseEgressGrants([]string{"example.org:443"})
+	alpha, _ := egressgrant.Parse([]string{"example.com:443"})
+	beta, _ := egressgrant.Parse([]string{"example.org:443"})
 	runner := ContainerRunner{
 		Image:    image,
 		Harness:  policyProbeHarness{},
@@ -154,7 +156,7 @@ func TestIntegration_EgressPolicyInstallFailureRefusesScan(t *testing.T) {
 	if gatewayIP == "" {
 		t.Fatal("host-gateway did not resolve on Docker Desktop")
 	}
-	grants, _ := ParseEgressGrants([]string{"example.com:443"})
+	grants, _ := egressgrant.Parse([]string{"example.com:443"})
 	runner := ContainerRunner{
 		Image:          plainCurlImage,
 		Harness:        policyProbeHarness{},

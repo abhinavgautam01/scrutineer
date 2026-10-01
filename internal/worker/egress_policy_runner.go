@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"scrutineer/internal/egressgrant"
 )
 
 // applyEgressPolicy applies the operator's egress grants for sj's skill to a
@@ -26,7 +28,7 @@ func (d ContainerRunner) applyEgressPolicy(sj SkillJob, emit func(Event)) (Conta
 	if !d.Hardened {
 		return d, noop, fmt.Errorf("egress policy for skill %q requires --hardened; refusing to run with unenforced grants", sj.Name)
 	}
-	emit(Event{Kind: KindEgress, Text: fmt.Sprintf("egress-policy: skill=%s grants=%s", sj.Name, FormatEgressGrants(grants))})
+	emit(Event{Kind: KindEgress, Text: fmt.Sprintf("egress-policy: skill=%s grants=%s", sj.Name, egressgrant.Format(grants))})
 	if d.usesEgressSidecar() {
 		d.Egress.Grants = slices.Clone(grants)
 		return d, noop, nil
@@ -36,14 +38,14 @@ func (d ContainerRunner) applyEgressPolicy(sj SkillJob, emit func(Event)) (Conta
 	}
 	rec := &lineBuffer{}
 	token := NewProxyToken()
-	port, closeProxy, err := StartScopedEgressProxyWithGrants(&EgressProxy{
+	port, closeProxy, err := StartScopedEgressProxy(&EgressProxy{
 		Allow:     d.ProviderProxy.Allow,
 		Token:     token,
 		APIPort:   d.ProviderProxy.APIPort,
 		APIHosts:  d.ProviderProxy.APIHosts,
 		HostPorts: d.Egress.HostPorts,
 		Log:       slog.New(&recordingHandler{inner: forwardHandler(d.ProviderProxy.Log), rec: newWarnHandler(rec)}),
-	}, grants)
+	}, grants...)
 	if err != nil {
 		return d, noop, fmt.Errorf("start egress policy proxy for skill %q: %w", sj.Name, err)
 	}

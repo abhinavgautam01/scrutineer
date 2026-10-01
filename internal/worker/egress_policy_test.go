@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"slices"
 	"strconv"
@@ -15,63 +16,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"scrutineer/internal/egressgrant"
 )
-
-func TestParseEgressGrants_valid(t *testing.T) {
-	got, err := ParseEgressGrants([]string{
-		"API.Ecosyste.ms:443", "*.example.com:8443", "*.example.com:443", "api.ecosyste.ms:443", "a.example.net:9000", "a.example.net:80",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []EgressGrant{
-		{Host: "*.example.com", Ports: []string{"443", "8443"}},
-		{Host: "a.example.net", Ports: []string{"80", "9000"}},
-		{Host: "api.ecosyste.ms", Ports: []string{"443"}},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("ParseEgressGrants = %+v, want %+v", got, want)
-	}
-}
-
-func TestParseEgressGrants_invalid(t *testing.T) {
-	for _, entry := range []string{
-		"", "api.ecosyste.ms", "https://api.ecosyste.ms:443", "api.ecosyste.ms:443/x", "u@api.ecosyste.ms:443",
-		"10.0.0.1:443", "127.1:443", "[::1]:443", "::1:443", "localhost:443", "x.localhost:443",
-		"host.docker.internal:8080", "Host.Docker.Internal:8080", "a.example.com:0", "a.example.com:65536",
-		"a.example.com:http", "a.example.com:0443", "bad_host.example.com:443", " a.example.com:443",
-	} {
-		if _, err := ParseEgressGrants([]string{entry}); err == nil {
-			t.Errorf("ParseEgressGrants(%q) accepted an invalid entry", entry)
-		}
-	}
-}
-
-func TestEgressGrantsEnvRoundTrip(t *testing.T) {
-	grants, err := ParseEgressGrants([]string{"api.ecosyste.ms:443", "*.example.com:443", "*.example.com:8443"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := FormatEgressGrants(grants)
-	if want := "*.example.com:443|8443,api.ecosyste.ms:443"; s != want {
-		t.Errorf("FormatEgressGrants = %q, want %q", s, want)
-	}
-	back, err := ParseEgressGrantsEnv(s)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(back, grants) {
-		t.Errorf("round trip = %+v, want %+v", back, grants)
-	}
-	if got, err := ParseEgressGrantsEnv(""); err != nil || got != nil {
-		t.Errorf("empty env = %v, %v, want nil", got, err)
-	}
-	for _, bad := range []string{"api.ecosyste.ms", "api.ecosyste.ms:", "10.0.0.1:443", "a.example.com:99999"} {
-		if _, err := ParseEgressGrantsEnv(bad); err == nil {
-			t.Errorf("ParseEgressGrantsEnv(%q) accepted bad input", bad)
-		}
-	}
-}
 
 func proxyAuth(token string) string {
 	return "Basic " + base64.StdEncoding.EncodeToString([]byte("scrutineer:"+token))
@@ -79,7 +26,7 @@ func proxyAuth(token string) string {
 
 func TestEgressPortGuard(t *testing.T) {
 	const token = "tok"
-	grants, err := ParseEgressGrants([]string{"api.ecosyste.ms:443", "*.example.com:443", "*.example.com:8443", "plain.test:80"})
+	grants, err := egressgrant.Parse([]string{"api.ecosyste.ms:443", "*.example.com:443", "*.example.com:8443", "plain.test:80"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,13 +121,13 @@ func connectStatus(t *testing.T, proxyAddr, target, token string) int {
 	return resp.StatusCode
 }
 
-func TestStartScopedEgressProxyWithGrants_listener(t *testing.T) {
-	grants, err := ParseEgressGrants([]string{"granted.example.com:443"})
+func TestStartScopedEgressProxy_grants_listener(t *testing.T) {
+	grants, err := egressgrant.Parse([]string{"granted.example.com:443"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	p := &EgressProxy{Allow: []string{"base.example.com"}, Token: "tok", APIPort: "1", Log: slog.New(slog.DiscardHandler)}
-	port, closeProxy, err := StartScopedEgressProxyWithGrants(p, grants)
+	port, closeProxy, err := StartScopedEgressProxy(p, grants...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,26 +144,26 @@ func TestStartScopedEgressProxyWithGrants_listener(t *testing.T) {
 	}
 }
 
-func TestStartScopedEgressProxyWithGrants_refusesAPIHosts(t *testing.T) {
+func TestStartScopedEgressProxy_grants_refusesAPIHosts(t *testing.T) {
 	for _, tc := range []struct {
 		grant    string
 		apiHosts []string
 	}{
-		{"*.internal:443", nil},
+		{"*.example.com:443", []string{"gw.example.com"}},
 		{"gw.example.com:443", []string{"gw.example.com"}},
 	} {
-		grants, err := ParseEgressGrants([]string{tc.grant})
+		grants, err := egressgrant.Parse([]string{tc.grant})
 		if err != nil {
 			t.Fatalf("%s: %v", tc.grant, err)
 		}
-		_, closeProxy, err := StartScopedEgressProxyWithGrants(&EgressProxy{Token: "tok", APIHosts: tc.apiHosts, Allow: []string{"x.test"}}, grants)
+		_, closeProxy, err := StartScopedEgressProxy(&EgressProxy{Token: "tok", APIHosts: tc.apiHosts, Allow: []string{"x.test"}}, grants...)
 		if err == nil {
 			closeProxy()
 			t.Errorf("grant %s covering an API host was accepted", tc.grant)
 		}
 	}
-	// The parser already refuses the literal alias.
-	if _, err := ParseEgressGrants([]string{HostGatewayAlias + ":8080"}); err == nil {
+	// The parser refuses the alias and any wildcard covering it, so config cannot know only the runtime API hosts.
+	if _, err := egressgrant.Parse([]string{HostGatewayAlias + ":8080"}); err == nil {
 		t.Error("parser accepted the host gateway alias")
 	}
 }
@@ -291,7 +238,7 @@ func TestApplyEgressPolicy_sidecarPath(t *testing.T) {
 }
 
 func TestApplyEgressPolicy_hostProxyPath(t *testing.T) {
-	grants, _ := ParseEgressGrants([]string{"a.example.com:443"})
+	grants, _ := egressgrant.Parse([]string{"a.example.com:443"})
 	d := policyTestRunner(true, map[string][]EgressGrant{"meta": grants})
 	d.ProxyURL = "http://stable"
 	emit, events := collectEvents()
@@ -331,8 +278,8 @@ func TestApplyEgressPolicy_hostProxyNeedsContainerHost(t *testing.T) {
 }
 
 func TestApplyEgressPolicy_concurrentSkillsStayIsolated(t *testing.T) {
-	ga, _ := ParseEgressGrants([]string{"a.example.com:443"})
-	gb, _ := ParseEgressGrants([]string{"b.example.com:8443"})
+	ga, _ := egressgrant.Parse([]string{"a.example.com:443"})
+	gb, _ := egressgrant.Parse([]string{"b.example.com:8443"})
 	d := policyTestRunner(true, map[string][]EgressGrant{"alpha": ga, "beta": gb})
 	emit, _ := collectEvents()
 	var wg sync.WaitGroup
@@ -357,5 +304,55 @@ func TestApplyEgressPolicy_concurrentSkillsStayIsolated(t *testing.T) {
 	}
 	if d.ProxyURL != "" {
 		t.Error("shared runner ProxyURL was mutated")
+	}
+}
+
+func TestPrepareScanExecution_providerAndPolicyShareOneProxy(t *testing.T) {
+	d := policyTestRunner(true, map[string][]EgressGrant{"meta": {{Host: "granted.example.com", Ports: []string{"443"}}}})
+	d.Harness = OpencodeHarness{}
+	d.Egress = EgressSidecarConfig{Allow: []string{"models.dev"}}
+	d.OpencodeProviders = map[string]OpencodeProviderConfig{"groq": {EgressHosts: []string{"provider.invalid"}}}
+	d.ProviderProxy.Allow = []string{"models.dev"}
+	d.ProviderProxy.APIHosts = []string{HostGatewayAlias}
+	d.ProxyURL = "http://original"
+
+	provider, err := d.resolveOpencodeProvider("groq/model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mid, cleanupProvider, err := d.configureOpencodeProviderEgress(provider, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupProvider()
+	if mid.ProxyURL != d.ProxyURL {
+		t.Errorf("provider configuration started its own proxy: %q", mid.ProxyURL)
+	}
+	for _, allow := range [][]string{mid.Egress.Allow, mid.ProviderProxy.Allow} {
+		if !slices.Contains(allow, "provider.invalid") {
+			t.Errorf("provider host missing from %v", allow)
+		}
+	}
+
+	emit, _ := collectEvents()
+	got, _, _, cleanup, err := d.prepareScanExecution(t.Context(), SkillJob{Name: "meta", Model: "groq/model"}, emit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	pu, err := url.Parse(got.ProxyURL)
+	if err != nil || got.ProxyURL == d.ProxyURL {
+		t.Fatalf("scan proxy URL = %q, %v, want a new scoped proxy", got.ProxyURL, err)
+	}
+	token, _ := pu.User.Password()
+	addr := "127.0.0.1:" + pu.Port()
+	if code := connectStatus(t, addr, "provider.invalid:443", token); code == http.StatusForbidden {
+		t.Errorf("provider host refused by the single scoped proxy: %d", code)
+	}
+	if code := connectStatus(t, addr, "granted.example.com:22", token); code != http.StatusForbidden {
+		t.Errorf("granted host on an undeclared port = %d, want 403", code)
+	}
+	if code := connectStatus(t, addr, "other.invalid:443", token); code != http.StatusForbidden {
+		t.Errorf("unlisted host = %d, want 403", code)
 	}
 }

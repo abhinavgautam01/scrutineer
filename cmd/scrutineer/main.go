@@ -34,6 +34,7 @@ import (
 	"scrutineer/internal/bundledassets"
 	"scrutineer/internal/config"
 	"scrutineer/internal/db"
+	"scrutineer/internal/egressgrant"
 	"scrutineer/internal/interchange"
 	"scrutineer/internal/queue"
 	"scrutineer/internal/skills"
@@ -1101,7 +1102,7 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 	// the egress proxy as a per-scan sidecar. Resolve it before the in-process
 	// host proxy so the latter can be skipped when the sidecar is in charge.
 	if f.hardened {
-		egress, err = resolveEgressSidecar(rt, f, allow, token, log, policyCapabilities(policies)...)
+		egress, err = resolveEgressSidecar(rt, f, allow, token, log, policies)
 		if err != nil {
 			return nil, "", err
 		}
@@ -1268,28 +1269,19 @@ func validateEgressPolicies(f *flags, cfg *config.Config) error {
 
 // egressPolicyGrants converts the validated config policies into the worker's
 // per-skill grants.
-func egressPolicyGrants(cfg *config.Config) (map[string][]worker.EgressGrant, error) {
+func egressPolicyGrants(cfg *config.Config) (map[string][]egressgrant.Grant, error) {
 	if cfg == nil || len(cfg.EgressPolicies) == 0 {
 		return nil, nil
 	}
-	out := make(map[string][]worker.EgressGrant, len(cfg.EgressPolicies))
+	out := make(map[string][]egressgrant.Grant, len(cfg.EgressPolicies))
 	for skill, policy := range cfg.EgressPolicies {
-		grants, err := worker.ParseEgressGrants(policy.Allow)
+		grants, err := egressgrant.Parse(policy.Allow)
 		if err != nil {
 			return nil, fmt.Errorf("egress_policies.%s.allow: %w", skill, err)
 		}
 		out[skill] = grants
 	}
 	return out, nil
-}
-
-// policyCapabilities lists the extra sidecar capabilities the configured
-// policies need from the runner image.
-func policyCapabilities(policies map[string][]worker.EgressGrant) []string {
-	if len(policies) == 0 {
-		return nil
-	}
-	return []string{worker.ProxyCapabilityEgressPortGrants}
 }
 
 // warnEgressPolicySkills flags egress_policies entries that can never apply: a
@@ -1433,7 +1425,7 @@ func resolveScanNetworking(rt worker.ContainerRuntime, f *flags, log *slog.Logge
 // default-network host gateway the sidecar dials to reach the loopback-bound
 // host skill API. Docker Engine, rootful podman, and Apple keep the in-process
 // proxy and return the zero value.
-func resolveEgressSidecar(rt worker.ContainerRuntime, f *flags, allow []string, token string, log *slog.Logger, extraCaps ...string) (worker.EgressSidecarConfig, error) {
+func resolveEgressSidecar(rt worker.ContainerRuntime, f *flags, allow []string, token string, log *slog.Logger, policies map[string][]egressgrant.Grant) (worker.EgressSidecarConfig, error) {
 	if !rt.NeedsEgressSidecar() {
 		return worker.EgressSidecarConfig{}, nil
 	}
@@ -1441,7 +1433,11 @@ func resolveEgressSidecar(rt worker.ContainerRuntime, f *flags, allow []string, 
 	// requires, rather than letting every hardened scan fail with a cryptic error.
 	smokeCtx, cancel := context.WithTimeout(context.Background(), f.smokeTimeout)
 	defer cancel()
-	if err := worker.VerifyProxyBinaryCapabilities(smokeCtx, rt, f.runnerImage, extraCaps...); err != nil {
+	var extraCaps []string
+	if len(policies) > 0 {
+		extraCaps = []string{worker.ProxyCapabilityEgressPortGrants}
+	}
+	if err := worker.VerifyProxyBinary(smokeCtx, rt, f.runnerImage, extraCaps...); err != nil {
 		return worker.EgressSidecarConfig{}, err
 	}
 	// The sidecar reaches the host skill API over its egress leg through the
