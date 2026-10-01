@@ -112,6 +112,9 @@ func runWebModeCase(t *testing.T, tc webModeCase) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		if serveTriageValidateReport(t, w, r) {
+			return
+		}
 		if r.Method == http.MethodPost {
 			var scope struct {
 				SubPath string `json:"sub_path"`

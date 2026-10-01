@@ -81,9 +81,18 @@ The `package-manager` mode selects `audit-package-manager` for client,
 registry, and package proxy implementations. Its bundled threat model covers
 weakness patterns and design properties, with source-and-sink evidence,
 negative results, and unresolved assumptions retained beside the findings.
-The `web-api` mode selects `audit-web` for implemented web applications and APIs, including browser applications with first-party API workflows. It also selects `audit-authz` for implemented access boundaries and `audit-injection` for request-to-interpreter paths. Framework dependencies, outbound clients and static documentation alone do not activate it. Multiple modes share one deduplicated scan set; subproject scans classify only their scope. The audit distinguishes source-proven vulnerabilities from intended behavior, evidenced negative results and unresolved browser, server or deployment assumptions. Its ASVS reference does not imply compliance certification.
+The `web-api` mode selects `audit-web` for implemented web applications and
+APIs, including browser applications with first-party API workflows. It also
+selects `audit-authz` for implemented access boundaries and `audit-injection`
+for request-to-interpreter paths. Framework dependencies, outbound clients and
+static documentation alone do not activate it. Multiple modes share one
+deduplicated scan set; subproject scans classify only their scope. The audit
+distinguishes source-proven vulnerabilities from intended behavior, evidenced
+negative results and unresolved browser, server or deployment assumptions. Its
+ASVS reference does not imply compliance certification.
 
-Add another mode by defining its detection criteria in the triage reference and bundling its audit skill and threat model.
+Add another mode by defining its detection criteria in the triage reference
+and bundling its audit skill and threat model.
 
 ## Frontmatter
 

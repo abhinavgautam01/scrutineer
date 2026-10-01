@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"scrutineer/internal/skills"
 	"scrutineer/internal/worker"
 )
 
@@ -61,10 +63,22 @@ func (r triageModeRunner) RunSkill(ctx context.Context, job worker.SkillJob, emi
 		if err := json.Unmarshal(raw, &document); err != nil {
 			return worker.SkillResult{}, err
 		}
-		document["scrutineer"] = map[string]any{
-			"api_base": r.apiBase, "token": "fixture-token", "repository_id": 1,
-			"scan_subpath": r.subPath, "scan_ref": r.ref,
+		// Override only what points the skill at the fake API; keep the rest of
+		// the worker-staged block, such as scan_id, which the skill needs to
+		// validate its report.
+		scrutineer, _ := document["scrutineer"].(map[string]any)
+		if scrutineer == nil {
+			scrutineer = map[string]any{}
 		}
+		scrutineer["api_base"], scrutineer["token"], scrutineer["repository_id"] = r.apiBase, "fixture-token", 1
+		if _, ok := scrutineer["scan_id"]; !ok {
+			scrutineer["scan_id"] = 1
+		}
+		// Mirror the worker, which omits both keys on a default-branch root
+		// scan (omitempty), so the common case sees the shape production emits.
+		setOrDelete(scrutineer, "scan_subpath", r.subPath)
+		setOrDelete(scrutineer, "scan_ref", r.ref)
+		document["scrutineer"] = scrutineer
 		raw, err = json.Marshal(document)
 		if err != nil {
 			return worker.SkillResult{}, err
@@ -74,6 +88,41 @@ func (r triageModeRunner) RunSkill(ctx context.Context, job worker.SkillJob, emi
 		}
 	}
 	return r.LocalClaude.RunSkill(ctx, job, emit)
+}
+
+func setOrDelete(m map[string]any, key, value string) {
+	if value == "" {
+		delete(m, key)
+		return
+	}
+	m[key] = value
+}
+
+// serveTriageValidateReport answers the report-validation call the triage
+// skill makes before finishing, as the production API does, so the fake API
+// never mistakes it for an enqueue. It reports whether it handled r.
+func serveTriageValidateReport(t *testing.T, w http.ResponseWriter, r *http.Request) bool {
+	t.Helper()
+	if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/validate-report") {
+		return false
+	}
+	skill, err := skills.ParseFile("../../skills/triage/SKILL.md")
+	if err != nil {
+		t.Errorf("load triage schema: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return true
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return true
+	}
+	if detail := worker.ValidateSkillReport(skill.Name, skill.SchemaJSON, string(body)); detail != "" {
+		_ = json.NewEncoder(w).Encode(map[string]any{"valid": false, "errors": detail})
+		return true
+	}
+	_, _ = fmt.Fprint(w, `{"valid":true}`)
+	return true
 }
 
 func TestPackageManagerTriageLive(t *testing.T) {
@@ -93,6 +142,9 @@ func TestPackageManagerTriageLive(t *testing.T) {
 				w.Header().Set("Content-Type", "application/json")
 				if req.Header.Get("Authorization") != "Bearer fixture-token" {
 					http.Error(w, "unauthorized", http.StatusUnauthorized)
+					return
+				}
+				if serveTriageValidateReport(t, w, req) {
 					return
 				}
 				if req.Method == http.MethodPost {
