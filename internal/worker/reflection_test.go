@@ -140,6 +140,33 @@ func TestPrepareReflectionScopeAndMissing(t *testing.T) {
 	}
 }
 
+// A cohort whose threat-model scan failed leaves the repository without a
+// model. Reflection must blame that failed scan rather than tell the operator
+// to run a step the cohort already ran.
+func TestPrepareReflectionNamesFailedThreatModel(t *testing.T) {
+	w, scan, _ := reflectionFixture(t)
+	if err := w.DB.Model(&db.Repository{}).Where("id = ?", scan.RepositoryID).Update("threat_model", "").Error; err != nil {
+		t.Fatal(err)
+	}
+	tm := db.Scan{RepositoryID: scan.RepositoryID, SkillName: "threat-model", Status: db.ScanFailed, TriageScanID: scan.TriageScanID}
+	if err := w.DB.Create(&tm).Error; err != nil {
+		t.Fatal(err)
+	}
+	pending, err := w.prepareReflection(scan)
+	if pending || err == nil {
+		t.Fatalf("pending=%v err=%v, want an immediate error", pending, err)
+	}
+	if !strings.Contains(err.Error(), "threat-model scan produced none") {
+		t.Errorf("err = %q, want it to name the failed threat-model scan", err)
+	}
+	if strings.Contains(err.Error(), "run threat-model first") {
+		t.Errorf("err = %q still tells the operator to run a step the cohort already ran", err)
+	}
+	if len(scan.ImportPayload) != 0 {
+		t.Error("snapshot staged despite the missing threat model")
+	}
+}
+
 func TestPreflightReflectionDefersAndPinsRecipe(t *testing.T) {
 	w, scan, child := reflectionFixture(t)
 	if err := w.DB.Model(child).Update("status", db.ScanPaused).Error; err != nil {

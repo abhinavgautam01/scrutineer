@@ -94,7 +94,7 @@ func (w *Worker) validateReflectionModel(repoID uint) error {
 	}
 	var model map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(repo.ThreatModel), &model); err != nil || model == nil {
-		return fmt.Errorf("reflect requires an existing threat-model object; run threat-model first")
+		return fmt.Errorf("reflect requires a threat model, but this triage's threat-model scan produced none; fix and rerun threat-model, then retry reflect")
 	}
 	return nil
 }
