@@ -112,6 +112,7 @@ type flags struct {
 	backend               string
 	codexAuthFile         string
 	noContainer           bool
+	modelProxy            bool
 	hostSkills            []string
 	runtime               string
 	selinux               string
@@ -280,6 +281,7 @@ func registerFlags(fs *flag.FlagSet, f *flags) {
 	fs.IntVar(&f.maxTurns, "max-turns", 0, "claude --max-turns limit (0 = unlimited)")
 	fs.StringVar(&f.modelBaseURL, "model-base-url", "", "custom HTTPS model API base URL for the active backend (HTTP allowed for local development; env fallback: ANTHROPIC_BASE_URL for claude)")
 	fs.StringVar(&f.modelBaseURL, "anthropic-base-url", "", "deprecated alias for -model-base-url")
+	fs.BoolVar(&f.modelProxy, "model-proxy", false, "keep ANTHROPIC_API_KEY on the host: container scans get a per-scan token for a host-side Anthropic API proxy (claude backend with API-key auth only)")
 	fs.StringVar(&f.forkOrg, "fork-org", "", "GitHub org the fork skill forks into and files draft advisories against")
 	fs.StringVar(&f.subprojectScope, "subproject-scope", "hard", "how a subproject-scoped scan stages its workspace: \"hard\" (copy only the sub-folder so build+findings are confined to the sub-package) or \"soft\" (stage the whole clone, sub-path is an advisory hint)")
 	fs.BoolVar(&f.monorepoAttribution, "monorepo-attribution", true, "link packages, advisories, maintainers and disclosure channel to the sub-package they belong to (matched by manifest name) instead of rolling up flat under the repository")
@@ -337,6 +339,9 @@ func (f *flags) merge(cfg *config.Config) {
 	}
 	if cfg.Hardened != nil && !f.set["hardened"] {
 		f.hardened = *cfg.Hardened
+	}
+	if cfg.ModelProxy != nil && !f.set["model-proxy"] {
+		f.modelProxy = *cfg.ModelProxy
 	}
 	// hardened_runtime_only, with the deprecated hardened_rootless_runtime alias.
 	cfgRuntimeOnly := cfg.HardenedRuntimeOnly
@@ -550,7 +555,35 @@ func validateFlags(f *flags) error {
 	if err := validateFederation(f); err != nil {
 		return err
 	}
+	if err := validateModelProxyFlags(f); err != nil {
+		return err
+	}
 	return validateModelBaseURL(f.modelBaseURL)
+}
+
+// validateModelProxyFlags refuses a -model-proxy configuration this narrow
+// scope does not support. Only the claude backend with a plain
+// ANTHROPIC_API_KEY is covered: account/OAuth login is out of scope. The
+// containerised runner is also required, since a bare-metal scan has no
+// container to keep the key out of.
+func validateModelProxyFlags(f *flags) error {
+	if !f.modelProxy {
+		return nil
+	}
+	h, err := worker.HarnessByName(f.backend)
+	if err != nil {
+		return err
+	}
+	if _, ok := h.(worker.ClaudeHarness); !ok {
+		return fmt.Errorf("-model-proxy requires the claude backend, got %q", worker.HarnessName(h))
+	}
+	if f.noContainer {
+		return errors.New("-model-proxy requires the containerised runner; remove -no-container")
+	}
+	if os.Getenv("ANTHROPIC_API_KEY") == "" {
+		return errors.New("-model-proxy requires ANTHROPIC_API_KEY; account login via CLAUDE_CODE_OAUTH_TOKEN is not supported by -model-proxy")
+	}
+	return nil
 }
 
 func isLoopbackListenAddr(addr string) bool {
@@ -748,6 +781,7 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	srv.SkillsRepoSHA = skillsRepoSHA
+	srv.ModelProxy = worker.ModelProxyOf(runner)
 	srv.Version = version
 	wireEcosystems(f.ecosystemsEnrichment, w, srv, gdb, log)
 	if h, err := worker.HarnessByName(f.backend); err == nil {
@@ -985,6 +1019,24 @@ func hashPath(s string) string {
 // -runtime-smoke-timeout.
 const defaultRuntimeSmokeTimeout = 5 * time.Minute
 
+// warnRuntimeCaveats logs the runtime limitations an operator should know
+// about before the first scan. It only logs; nothing here refuses a runtime.
+func warnRuntimeCaveats(rt worker.ContainerRuntime, f *flags, log *slog.Logger) {
+	if rt.Bin == "apple" {
+		log.Warn("Apple container runtime support is experimental", "version", rt.Version)
+		if f.hardened {
+			log.Info("Apple hardened mode: per-container VM boundary substitutes for " +
+				"--security-opt no-new-privileges (not exposed by Apple's CLI); the " +
+				"per-scan --internal network is verified fail-closed before each scan")
+		}
+	}
+	// Older podman lacks the host-gateway alias the egress path needs; warn
+	// rather than fail since the hardened path verifies reachability per-scan.
+	if !rt.HostGatewaySupported() {
+		log.Warn("podman may be too old for host-gateway egress; upgrade to >= 4.7", "version", rt.Version)
+	}
+}
+
 // setupRunner picks the SkillRunner implementation for the run loop:
 // ContainerRunner (docker, podman, or Apple's container) when a container runtime is in use,
 // LocalClaude otherwise, and a HostSplitRunner over both when host_skills sends
@@ -1027,19 +1079,7 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 	if err := worker.HardeningSupportError(rt, f.hardenedRuntimeOnly); err != nil {
 		return nil, "", err
 	}
-	if rt.Bin == "apple" {
-		log.Warn("Apple container runtime support is experimental", "version", rt.Version)
-		if f.hardened {
-			log.Info("Apple hardened mode: per-container VM boundary substitutes for " +
-				"--security-opt no-new-privileges (not exposed by Apple's CLI); the " +
-				"per-scan --internal network is verified fail-closed before each scan")
-		}
-	}
-	// Older podman lacks the host-gateway alias the egress path needs; warn
-	// rather than fail since the hardened path verifies reachability per-scan.
-	if !rt.HostGatewaySupported() {
-		log.Warn("podman may be too old for host-gateway egress; upgrade to >= 4.7", "version", rt.Version)
-	}
+	warnRuntimeCaveats(rt, f, log)
 	// Rootless podman needs an adequate /etc/subuid range for --userns=keep-id;
 	// smoke-test it once so a misconfiguration is one clear error here rather
 	// than a cryptic bind-mount failure on every scan. The first such run also
@@ -1161,7 +1201,45 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 		OpencodeReadiness: worker.NewOpencodeReadinessCache(),
 		CodexAccountAuth:  worker.NewCodexAccountAuth(f.codexAuthFile),
 	}
+	if err := applyModelProxy(f, log, apiHost, &runner); err != nil {
+		return nil, "", err
+	}
 	return splitHostSkills(f, runner, local, hostBase, log), apiBase, nil
+}
+
+// setupModelProxy builds the host-side Anthropic API proxy for -model-proxy:
+// each scan gets a short-lived token instead of the real ANTHROPIC_API_KEY, so
+// a hostile scan container never sees it. See docs/model-proxy.md.
+// validateModelProxyFlags has already confirmed ANTHROPIC_API_KEY is set and
+// the backend is claude; this only builds the proxy itself.
+func setupModelProxy(f *flags, log *slog.Logger) (*worker.ModelProxy, error) {
+	mp, err := worker.NewModelProxy(f.modelBaseURL, os.Getenv("ANTHROPIC_API_KEY"), log)
+	if err != nil {
+		return nil, fmt.Errorf("model proxy: %w", err)
+	}
+	upstream := baseURLHost(f.modelBaseURL)
+	if upstream == "" {
+		upstream = "api.anthropic.com"
+	}
+	log.Info("model proxy enabled, keeping ANTHROPIC_API_KEY off scan containers", "upstream_host", upstream)
+	return mp, nil
+}
+
+// applyModelProxy sets ModelProxy and ModelProxyURL on runner when
+// -model-proxy is set, isolating setupRunner's model-proxy branch (and its
+// nested error check) from setupRunner's own cognitive complexity budget.
+// A no-op when the flag is unset.
+func applyModelProxy(f *flags, log *slog.Logger, apiHost string, runner *worker.ContainerRunner) error {
+	if !f.modelProxy {
+		return nil
+	}
+	mp, err := setupModelProxy(f, log)
+	if err != nil {
+		return err
+	}
+	runner.ModelProxy = mp
+	runner.ModelProxyURL = "http://" + net.JoinHostPort(apiHost, addrPort(f.addr)) + worker.ModelProxyPathPrefix
+	return nil
 }
 
 // enforceCodexAccountAuthConcurrency starts the queue at the same one-slot

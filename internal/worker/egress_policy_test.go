@@ -307,7 +307,7 @@ func TestApplyEgressPolicy_concurrentSkillsStayIsolated(t *testing.T) {
 	}
 }
 
-func TestPrepareScanExecution_providerAndPolicyShareOneProxy(t *testing.T) {
+func TestPrepareExecution_providerAndPolicyShareOneProxy(t *testing.T) {
 	d := policyTestRunner(true, map[string][]EgressGrant{"meta": {{Host: "granted.example.com", Ports: []string{"443"}}}})
 	d.Harness = OpencodeHarness{}
 	d.Egress = EgressSidecarConfig{Allow: []string{"models.dev"}}
@@ -335,7 +335,7 @@ func TestPrepareScanExecution_providerAndPolicyShareOneProxy(t *testing.T) {
 	}
 
 	emit, _ := collectEvents()
-	got, _, _, cleanup, err := d.prepareScanExecution(t.Context(), SkillJob{Name: "meta", Model: "groq/model"}, emit)
+	got, _, _, cleanup, err := d.prepareExecution(t.Context(), SkillJob{Name: "meta", Model: "groq/model"}, emit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,5 +354,48 @@ func TestPrepareScanExecution_providerAndPolicyShareOneProxy(t *testing.T) {
 	}
 	if code := connectStatus(t, addr, "other.invalid:443", token); code != http.StatusForbidden {
 		t.Errorf("unlisted host = %d, want 403", code)
+	}
+}
+
+// A scan can carry both an egress policy and a model proxy token. The single
+// setup step must provide both. Its one cleanup must revoke the token then
+// close the policy's scoped proxy.
+func TestPrepareExecution_modelProxyAndPolicyTogether(t *testing.T) {
+	grants, _ := egressgrant.Parse([]string{"a.example.com:443"})
+	d := policyTestRunner(true, map[string][]EgressGrant{"meta": grants})
+	d.ProxyURL = "http://stable"
+	mp, err := NewModelProxy("", "real-key", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.ModelProxy = mp
+	d.ModelProxyURL = "http://" + HostGatewayAlias + ":8080" + ModelProxyPathPrefix
+	emit, _ := collectEvents()
+
+	got, _, _, cleanup, err := d.prepareExecution(t.Context(), SkillJob{Name: "meta"}, emit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ProxyURL == d.ProxyURL || !strings.Contains(got.ProxyURL, HostGatewayAlias+":") {
+		t.Fatalf("ProxyURL = %q, want the policy's scoped proxy", got.ProxyURL)
+	}
+	if got.modelProxyToken == "" {
+		t.Fatal("no model proxy token issued alongside the egress policy")
+	}
+	req := httptest.NewRequest(http.MethodPost, ModelProxyPathPrefix+"/v1/messages", nil)
+	req.Header.Set("X-Api-Key", got.modelProxyToken)
+	if !mp.authorized(req) {
+		t.Fatal("issued token is not accepted by the model proxy")
+	}
+	_, hostport, _ := strings.Cut(strings.TrimPrefix(got.ProxyURL, "http://"), "@")
+	_, port, _ := strings.Cut(hostport, ":")
+
+	cleanup()
+	if mp.authorized(req) {
+		t.Error("model proxy token still valid after cleanup")
+	}
+	if conn, err := net.DialTimeout("tcp", "127.0.0.1:"+port, time.Second); err == nil {
+		_ = conn.Close()
+		t.Error("policy's scoped proxy still listening after cleanup")
 	}
 }
