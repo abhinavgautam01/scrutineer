@@ -79,7 +79,7 @@ func TestIntegration_ModelProxyRealContainer(t *testing.T) {
 	}
 
 	// The "web listener" the container reaches through the egress proxy,
-	// mirroring withModelProxy's routing in cmd/scrutineer.
+	// standing in for the web server's root mux that serves the proxy route.
 	mux := http.NewServeMux()
 	mux.Handle(ModelProxyPathPrefix+"/", mp)
 	webListener := httptest.NewServer(mux)

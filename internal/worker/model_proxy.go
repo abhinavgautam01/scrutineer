@@ -24,7 +24,7 @@ import (
 )
 
 // ModelProxyPathPrefix is the path the web server routes to a ModelProxy when
-// one is configured (see withModelProxy in cmd/scrutineer). Containers reach
+// one is configured (Server.ModelProxy in internal/web). Containers reach
 // it through the egress proxy at ModelProxyURL, never directly.
 const ModelProxyPathPrefix = "/model-proxy/anthropic"
 
@@ -94,14 +94,10 @@ func NewModelProxy(upstreamBaseURL, apiKey string, log *slog.Logger) (*ModelProx
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	p := &ModelProxy{upstream: u, apiKey: apiKey, log: log, grants: make(map[[sha256.Size]byte]time.Time)}
-	transport := http.DefaultTransport
-	if t, ok := transport.(*http.Transport); ok {
-		transport = t.Clone()
-	}
 	p.proxy = &httputil.ReverseProxy{
 		Rewrite:        p.rewrite,
 		FlushInterval:  -1, // stream SSE turns to the CLI as they arrive
-		Transport:      transport,
+		Transport:      http.DefaultTransport,
 		ModifyResponse: p.modifyResponse,
 		ErrorHandler:   p.errorHandler,
 	}
@@ -146,10 +142,6 @@ func (p *ModelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.RawPath != "" || path.Clean(sub) != sub || !modelProxyRouteAllowed(r.Method, sub) {
 		p.log.Warn("model proxy denied", "method", r.Method, "path", r.URL.Path, "reason", "route not permitted")
 		writeAnthropicError(w, http.StatusForbidden, "permission_error", "route not permitted")
-		return
-	}
-	if p.apiKey == "" {
-		writeAnthropicError(w, http.StatusServiceUnavailable, "api_error", "model proxy is not configured")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, modelProxyMaxBody)

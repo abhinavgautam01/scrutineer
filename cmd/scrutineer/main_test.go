@@ -8,8 +8,6 @@ import (
 	"flag"
 	"io"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -46,6 +44,7 @@ func fullConfig() *config.Config {
 		Codex:           config.Codex{AuthFile: "/var/lib/scrutineer/codex-rubygems/auth.json"},
 		NoContainer:     new(true),
 		Hardened:        new(true),
+		ModelProxy:      new(true),
 		RunnerImage:     "custom:v1",
 		SkillsRepo:      "https://example.com/skills.git",
 		SkillsRepoToken: "private-skills-token",
@@ -84,6 +83,9 @@ func TestFlagsMerge_configFillsUnset(t *testing.T) {
 	}
 	if !f.hardened {
 		t.Errorf("hardened not applied")
+	}
+	if !f.modelProxy {
+		t.Errorf("modelProxy not applied")
 	}
 	if !slices.Equal(f.hostSkills, []string{"verify"}) {
 		t.Errorf("hostSkills = %v, want [verify]", f.hostSkills)
@@ -129,9 +131,13 @@ func TestFlagsMerge_cliFlagWins(t *testing.T) {
 		set: map[string]bool{
 			"addr": true, "clone": true, "concurrency": true,
 			"model-base-url": true, "federation-contact": true,
+			"model-proxy": true,
 		},
 	}
 	f.merge(cfg)
+	if f.modelProxy {
+		t.Errorf("model_proxy config overrode an explicit -model-proxy=false")
+	}
 	if f.addr != "127.0.0.1:8080" {
 		t.Errorf("addr overridden despite explicit flag: %q", f.addr)
 	}
@@ -666,39 +672,6 @@ func TestValidateModelProxyFlags(t *testing.T) {
 		t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
 		if err := validateModelProxyFlags(&flags{modelProxy: true}); err != nil {
 			t.Errorf("err = %v, want nil for a default-backend containerised scan with a key set", err)
-		}
-	})
-}
-
-func TestWithModelProxy(t *testing.T) {
-	app := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
-
-	t.Run("nil proxy passes through unchanged", func(t *testing.T) {
-		h := withModelProxy(app, nil)
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/anything", nil))
-		if w.Code != http.StatusTeapot {
-			t.Errorf("status = %d, want the app handler's status", w.Code)
-		}
-	})
-
-	t.Run("prefix routes to the proxy, everything else to the app", func(t *testing.T) {
-		mp, err := worker.NewModelProxy("", "key", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		h := withModelProxy(app, mp)
-
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, worker.ModelProxyPathPrefix+"/v1/models", nil))
-		if w.Code == http.StatusTeapot {
-			t.Error("model proxy path reached the app handler instead of the proxy")
-		}
-
-		w = httptest.NewRecorder()
-		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/scans", nil))
-		if w.Code != http.StatusTeapot {
-			t.Errorf("status = %d, want the app handler's status for a non-proxy path", w.Code)
 		}
 	})
 }

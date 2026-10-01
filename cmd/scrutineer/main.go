@@ -338,6 +338,9 @@ func (f *flags) merge(cfg *config.Config) {
 	if cfg.Hardened != nil && !f.set["hardened"] {
 		f.hardened = *cfg.Hardened
 	}
+	if cfg.ModelProxy != nil && !f.set["model-proxy"] {
+		f.modelProxy = *cfg.ModelProxy
+	}
 	// hardened_runtime_only, with the deprecated hardened_rootless_runtime alias.
 	cfgRuntimeOnly := cfg.HardenedRuntimeOnly
 	if cfgRuntimeOnly == nil {
@@ -772,6 +775,7 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	srv.SkillsRepoSHA = skillsRepoSHA
+	srv.ModelProxy = worker.ModelProxyOf(runner)
 	srv.Version = version
 	wireEcosystems(f.ecosystemsEnrichment, w, srv, gdb, log)
 	if h, err := worker.HarnessByName(f.backend); err == nil {
@@ -799,7 +803,7 @@ func run(log *slog.Logger) error {
 	go srv.StartRepositoryHealthScorer(ctx)
 	go srv.StartFederation(ctx)
 
-	httpSrv := &http.Server{Addr: f.addr, Handler: withModelProxy(srv.Handler(), worker.ModelProxyOf(runner)), ReadHeaderTimeout: shutdownTimeout}
+	httpSrv := &http.Server{Addr: f.addr, Handler: srv.Handler(), ReadHeaderTimeout: shutdownTimeout}
 	go func() {
 		<-ctx.Done()
 		sctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
@@ -1219,21 +1223,6 @@ func applyModelProxy(f *flags, log *slog.Logger, apiHost string, runner *worker.
 	runner.ModelProxy = mp
 	runner.ModelProxyURL = "http://" + net.JoinHostPort(apiHost, addrPort(f.addr)) + worker.ModelProxyPathPrefix
 	return nil
-}
-
-// withModelProxy routes ModelProxyPathPrefix to mp, the -model-proxy host
-// listener a scan container reaches through the egress proxy, ahead of the
-// ordinary app handler h. A nil mp (the flag was not set) returns h unchanged.
-//
-//nolint:ireturn // returns http.Handler: a passthrough or a *http.ServeMux depending on mp
-func withModelProxy(h http.Handler, mp *worker.ModelProxy) http.Handler {
-	if mp == nil {
-		return h
-	}
-	mux := http.NewServeMux()
-	mux.Handle(worker.ModelProxyPathPrefix+"/", mp)
-	mux.Handle("/", h)
-	return mux
 }
 
 // enforceCodexAccountAuthConcurrency starts the queue at the same one-slot

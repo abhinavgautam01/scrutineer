@@ -75,9 +75,21 @@ only; never the token or the key) and never reaches Anthropic.
   still spend tokens against the real account while the scan runs, the same as
   today. What `-model-proxy` removes is the ability to exfiltrate the key
   itself and use it outside the scan.
-- The proxy is a plain HTTP reverse proxy on the host: it does not add TLS
-  termination or a certificate authority, nor does it inspect or rewrite
-  message content. It streams responses (including SSE) without buffering.
+- Model traffic is cleartext between the container and the host. The
+  container reaches the proxy over plain `http://`, so the egress proxy (the
+  per-scan sidecar on Docker Desktop and rootless podman, scrutineer's own
+  process elsewhere) and the model proxy both see prompt and response bodies
+  unencrypted. Without `-model-proxy` that traffic is a CONNECT tunnel they
+  cannot read. The hop never leaves the host and the per-scan network, and
+  the proxy still uses TLS to the upstream API, but anything that can read
+  that host traffic can read the conversation.
+- The proxy does not add TLS termination or a certificate authority, nor does
+  it inspect or rewrite message content. It streams responses (including SSE)
+  without buffering. The egress proxy flushes each chunk on the hop from
+  the host to the container. On Docker Desktop and rootless podman that hop
+  runs in the egress sidecar, which uses the `scrutineer` binary inside the
+  runner image: an older runner image still works but delivers a streamed
+  turn in larger buffered chunks until the image is updated.
 - A base URL with embedded userinfo (`https://user:pass@host/...`) is refused
   at startup: credentials belong in `ANTHROPIC_API_KEY`, not in the URL.
 - `host_skills` skills run directly on the host and already have the real
