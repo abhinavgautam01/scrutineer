@@ -9,4 +9,6 @@ should_find:
       - sha256
     required: true
 should_not_find:
-  - finding: rollback or forged configuration in the signed, version-checked apply_config_bundle path
+  - path: firmware/config_bundle.py
+    evidence_contains:
+      - apply_config_bundle

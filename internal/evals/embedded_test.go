@@ -35,7 +35,7 @@ def bundle(version):
     return raw, hmac.new(key, raw, hashlib.sha256).digest()
 
 state = {'config_version': 3}
-apply = ota['apply_config_bundle']
+apply = runpy.run_path('../../evals/fixtures/embedded-device/firmware/config_bundle.py')['apply_config_bundle']
 raw, sig = bundle(4)
 assert apply(raw, b'\0' * 32, state, key) is False
 assert apply(raw, sig, state, b'wrong-key') is False
@@ -123,5 +123,60 @@ func runEmbeddedModeCase(t *testing.T, tc embeddedModeCase) {
 	}
 	if modes["embedded-iot"] != tc.embedded || modes["web-api"] != tc.web {
 		t.Fatalf("modes=%v want embedded=%t web=%t", modes, tc.embedded, tc.web)
+	}
+}
+
+// The default judge must count a false positive on the guarded configuration
+// path as unexpected however the model titles it, while a correct CWE-494
+// finding that only contrasts itself with the guarded path still passes.
+func TestEmbeddedOTAScenarioRejectsGuardedPathFalsePositive(t *testing.T) {
+	scenario, err := LoadScenario("../../evals/embedded-ota.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	truePositive := Finding{
+		Title:      "Firmware update accepts images verified only by a server-supplied digest",
+		CWE:        "CWE-494",
+		Location:   "firmware/ota.py:8",
+		Trace:      "apply_update compares the image sha256 with manifest['sha256'] from the same unauthenticated update server response.",
+		Validation: "Unlike apply_config_bundle, which checks an HMAC under the device key, apply_update trusts the manifest digest.",
+	}
+	falsePositive := Finding{
+		Title:    "Configuration rollback permits replay of old signed settings",
+		CWE:      "CWE-294",
+		Location: "firmware/config_bundle.py:6",
+		Trace:    "apply_config_bundle applies a signed bundle received from the update server.",
+	}
+	for _, tc := range []struct {
+		name                     string
+		findings                 []Finding
+		failedRequired, unexpect int
+	}{
+		{"true positive only", []Finding{truePositive}, 0, 0},
+		{"false positive on guarded path", []Finding{truePositive, falsePositive}, 0, 1},
+		{"false positive alone", []Finding{falsePositive}, 1, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := json.Marshal(map[string]any{"findings": tc.findings})
+			if err != nil {
+				t.Fatal(err)
+			}
+			matches, err := HeuristicJudge{}.Judge(scenario, string(raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			failedRequired, unexpected := 0, 0
+			for _, m := range matches {
+				switch {
+				case !m.Matched && m.Kind == assertionShouldFind && m.Required:
+					failedRequired++
+				case !m.Matched && m.Kind == assertionShouldNotFind:
+					unexpected++
+				}
+			}
+			if failedRequired != tc.failedRequired || unexpected != tc.unexpect {
+				t.Fatalf("failed required=%d unexpected=%d, want %d and %d; matches=%+v", failedRequired, unexpected, tc.failedRequired, tc.unexpect, matches)
+			}
+		})
 	}
 }

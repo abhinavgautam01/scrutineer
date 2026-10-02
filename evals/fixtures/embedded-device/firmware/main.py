@@ -2,6 +2,7 @@ import json
 import machine
 import urequests
 
+import config_bundle
 import ota
 import settings
 
@@ -27,7 +28,7 @@ def check_config():
     with open("/device.key", "rb") as handle:
         device_key = handle.read()
     reply = urequests.get(settings.UPDATE_URL + "/config.json").json()
-    ota.apply_config_bundle(reply["bundle"].encode(), bytes.fromhex(reply["signature"]), STATE, device_key)
+    config_bundle.apply_config_bundle(reply["bundle"].encode(), bytes.fromhex(reply["signature"]), STATE, device_key)
 
 
 check_updates()
