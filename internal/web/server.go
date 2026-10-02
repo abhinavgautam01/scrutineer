@@ -104,7 +104,9 @@ type Server struct {
 
 	// Version is the Scrutineer release version shown on the settings page.
 	// Release builds inject CalVer at link time; development builds use "dev".
-	Version string
+	Version    string
+	Commit     string
+	CommitDate string
 
 	// MonorepoAttribution mirrors worker.Worker.MonorepoAttribution on the
 	// web side so handlers can gate per-subproject attribution (packages,
@@ -3331,6 +3333,8 @@ func (s *Server) repoScheduleUpdate(w http.ResponseWriter, r *http.Request) {
 // enqueue signature from drifting into an unreadable positional list as
 // new options (SubPath, FindingID, Model) accumulate.
 type ScanOpts struct {
+	// AuditRetry marks operator retries only, not automatic child scans or reruns.
+	AuditRetry  bool
 	Model       string
 	Effort      string
 	FindingID   *uint
@@ -3378,9 +3382,8 @@ type ScanOpts struct {
 	// rerun chain stays walkable hop by hop. Nil on a first-time enqueue.
 	ParentScanID         *uint
 	VerificationFeedback string
-	// ImportPayload is the raw uploaded report for an ingest-skill run
-	// created by the /v1/import fallback; the worker stages it into the
-	// workspace at import/report. Empty for every other enqueue.
+	// ImportPayload is an ingest report or a retained reflection snapshot;
+	// the worker stages it at import/report. Empty for other enqueues.
 	ImportPayload []byte
 }
 
@@ -3545,6 +3548,9 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 		if live.FederationOptedOut() {
 			return ErrRepoFederationOptOut
 		}
+		if opts.AuditRetry {
+			return logScanControl(tx, db.AuditEventScanRetryRequested, scan, retryLineage(scan), "", db.ScanQueued, db.SourceAnalyst)
+		}
 		return nil
 	}); err != nil {
 		return 0, err
@@ -3554,17 +3560,7 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 		prio = worker.PrioFinding
 	}
 	if err := s.Queue.Enqueue(ctx, kind, scan.ID, prio); err != nil {
-		enqueueErr := fmt.Errorf("enqueue scan %d: %w", scan.ID, err)
-		now := time.Now()
-		if markErr := s.DB.Model(&db.Scan{}).Where("id = ?", scan.ID).Updates(map[string]any{
-			"status":          db.ScanFailed,
-			"status_priority": db.StatusPriorityFor(db.ScanFailed),
-			"error":           enqueueErr.Error(),
-			"finished_at":     &now,
-		}).Error; markErr != nil {
-			return 0, errors.Join(enqueueErr, fmt.Errorf("mark scan failed: %w", markErr))
-		}
-		return 0, enqueueErr
+		return 0, s.scanEnqueueFailure(scan, err, opts.AuditRetry)
 	}
 	s.DB.Model(&db.Repository{}).Where("id = ?", repoID).Update("updated_at", time.Now())
 	// Published without the scan ID on purpose: no open page holds a row for a
