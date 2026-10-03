@@ -21,6 +21,10 @@ const (
 // ErrNotObject is returned when the contract is not a JSON object.
 var ErrNotObject = errors.New("threat model is not a JSON object")
 
+// ErrMalformedProvenance is returned when known_non_findings is not an array
+// but carries promoted_from, so host provenance cannot be verified or stripped.
+var ErrMalformedProvenance = errors.New("known_non_findings is not an array but carries promoted_from")
+
 // Confirmation is one independent re-check that relied on the decision.
 type Confirmation struct {
 	ScanID uint   `json:"scan_id"`
@@ -180,7 +184,12 @@ func Preserve(previous, next string) (string, error) {
 	}
 	items, err := decodeItems(fresh)
 	if err != nil {
-		// A malformed list is the model's own business. Leave it alone.
+		// A malformed list without provenance is the model's own business. One
+		// that carries promoted_from cannot be stripped, so reject the refresh
+		// and keep the previous contract rather than save forged provenance.
+		if HasPromoted(string(fresh[listKey])) {
+			return "", ErrMalformedProvenance
+		}
 		return next, nil //nolint:nilerr
 	}
 	kept := make([]json.RawMessage, 0, len(items))
@@ -227,7 +236,8 @@ func hostItems(previous string) []json.RawMessage {
 }
 
 // Filter drops promoted items whose review is no longer eligible. Input that is
-// not a parsable object is returned unchanged.
+// not a parsable object is returned unchanged. A malformed list that carries
+// promoted_from is dropped whole, since its provenance cannot be checked.
 func Filter(model string, eligible func(reviewID uint) bool) string {
 	object, err := decodeObject(model)
 	if err != nil {
@@ -235,7 +245,15 @@ func Filter(model string, eligible func(reviewID uint) bool) string {
 	}
 	items, err := decodeItems(object)
 	if err != nil {
-		return model
+		if !HasPromoted(string(object[listKey])) {
+			return model
+		}
+		delete(object, listKey)
+		out, err := json.MarshalIndent(object, "", "  ")
+		if err != nil {
+			return model
+		}
+		return string(out)
 	}
 	kept := make([]json.RawMessage, 0, len(items))
 	for _, item := range items {
@@ -252,6 +270,13 @@ func Filter(model string, eligible func(reviewID uint) bool) string {
 		return model
 	}
 	return out
+}
+
+// StripPromoted drops every promoted item. Promotions belong only to the
+// repository contract, so any promoted_from in a raw threat-model scan report
+// was copied or forged by the model and must not reach a skill.
+func StripPromoted(model string) string {
+	return Filter(model, func(uint) bool { return false })
 }
 
 // HasPromoted reports whether the contract text may contain promoted items.

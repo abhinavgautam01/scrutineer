@@ -290,3 +290,53 @@ func TestStagedThreatModelDropsRetiredPromotion(t *testing.T) {
 		t.Fatalf("staged = %s", staged)
 	}
 }
+
+// The analyst can reopen a decision after confirmFeedback selected it. The
+// compare-and-swap re-reads eligibility, so the entry is not merged and a
+// retired entry already in the contract is tidied away.
+func TestPromotionSkippedWhenReviewRetiredBeforeMerge(t *testing.T) {
+	p := newPromotionFixture(t, promotionModel)
+	stale := fmt.Sprintf(`{"known_non_findings":[{"reported_as":"model","why_safe":"m"},{"reported_as":"old","why_safe":"w","promoted_from":{"review_id":%d}}]}`, p.reviewID)
+	review := db.FindingFeedback{ReviewID: p.reviewID, FindingID: p.source.ID, SourceCommit: "src", Path: "parse.go", Reason: "bounded"}
+	if err := db.WriteFindingField(p.w.DB, p.source.ID, "status", string(db.FindingNew), db.SourceAnalyst, "analyst"); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.w.DB.Model(&db.Repository{}).Where("id = ?", p.repo.ID).Update("threat_model", stale).Error; err != nil {
+		t.Fatal(err)
+	}
+	var events []Event
+	if err := p.w.promoteFeedback(p.repo.ID, review, nil, func(e Event) { events = append(events, e) }); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.model(); strings.Contains(got, "promoted_from") || !strings.Contains(got, `"model"`) {
+		t.Fatalf("retired review merged or model item lost: %s", got)
+	}
+	if len(events) != 1 || !strings.Contains(events[0].Text, "no longer eligible") {
+		t.Fatalf("events = %+v, want a skipped promotion", events)
+	}
+}
+
+// old_threat_model.json comes from a raw report, so it must carry no promotion.
+func TestStageOldThreatModelStripsPromotions(t *testing.T) {
+	p := newPromotionFixture(t, promotionModel)
+	report := fmt.Sprintf(`{"known_non_findings":[{"reported_as":"model","why_safe":"m"},{"reported_as":"p","why_safe":"w","promoted_from":{"review_id":%d}}]}`, p.reviewID)
+	tm := db.Scan{RepositoryID: p.repo.ID, Kind: JobSkill, SkillName: "threat-model", Status: db.ScanDone, Report: report}
+	if err := p.w.DB.Create(&tm).Error; err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	diff := db.Scan{RepositoryID: p.repo.ID, Kind: JobSkill, SkillName: "threat-model"}
+	if err := p.w.DB.Create(&diff).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.w.stageOldThreatModel(work, &diff); err != nil {
+		t.Fatal(err)
+	}
+	staged, err := os.ReadFile(filepath.Join(work, oldThreatModelFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(staged), "promoted_from") || !strings.Contains(string(staged), `"model"`) {
+		t.Fatalf("staged old model = %s", staged)
+	}
+}

@@ -89,23 +89,33 @@ func (w *Worker) promoteFeedback(repoID uint, review db.FindingFeedback, confirm
 		CWE: review.CWE, Path: review.Path, Title: finding.Title, Reason: review.Reason,
 		Confirmations: promotionConfirmations(confirmations),
 	})
-	skipped := false
+	// Eligibility is re-read inside the compare-and-swap on every attempt: the
+	// analyst may reopen or supersede the decision after it was selected.
+	noModel, retired := false, false
 	err := db.UpdateThreatModel(w.DB, repoID, func(previous string) (string, error) {
-		skipped = !feedbackpromotion.IsObject(previous)
-		if skipped {
+		noModel, retired = !feedbackpromotion.IsObject(previous), false
+		if noModel {
 			return previous, nil
 		}
 		eligible, err := db.EligibleFeedbackReviewIDs(w.DB, repoID)
 		if err != nil {
 			return "", err
 		}
-		return feedbackpromotion.Merge(feedbackpromotion.Filter(previous, func(id uint) bool { return eligible[id] }), entry)
+		tidied := feedbackpromotion.Filter(previous, func(id uint) bool { return eligible[id] })
+		if retired = !eligible[review.ReviewID]; retired {
+			return tidied, nil
+		}
+		return feedbackpromotion.Merge(tidied, entry)
 	})
 	if err != nil {
 		return fmt.Errorf("promote review %d: %w", review.ReviewID, err)
 	}
-	if skipped {
+	switch {
+	case noModel:
 		emit(Event{Kind: KindText, Text: fmt.Sprintf("analyst feedback %d ready but the repository has no threat-model object; promotion deferred", review.ReviewID)})
+		return nil
+	case retired:
+		emit(Event{Kind: KindText, Text: fmt.Sprintf("analyst feedback %d is no longer eligible; promotion skipped", review.ReviewID)})
 		return nil
 	}
 	emit(Event{Kind: KindText, Text: fmt.Sprintf("analyst feedback %d promoted into known_non_findings", review.ReviewID)})

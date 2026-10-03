@@ -2,6 +2,7 @@ package feedbackpromotion
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -147,5 +148,37 @@ func TestFilterDropsIneligible(t *testing.T) {
 	zero := `{"known_non_findings":[{"promoted_from":{"review_id":0}}]}`
 	if len(items(t, Filter(zero, func(uint) bool { return true }))) != 0 {
 		t.Fatal("malformed provenance kept")
+	}
+}
+
+// A model cannot smuggle provenance past stripping by making the list an object.
+func TestPreserveRejectsMalformedListCarryingProvenance(t *testing.T) {
+	forged := `{"known_non_findings":{"x":{"reported_as":"r","why_safe":"w","promoted_from":{"review_id":1}}}}`
+	if _, err := Preserve("", forged); !errors.Is(err, ErrMalformedProvenance) {
+		t.Fatalf("err = %v, want ErrMalformedProvenance", err)
+	}
+	plain := `{"known_non_findings":{"x":1}}`
+	if got, err := Preserve("", plain); err != nil || got != plain {
+		t.Fatalf("malformed list without provenance changed: %q, %v", got, err)
+	}
+}
+
+func TestFilterDropsMalformedListCarryingProvenance(t *testing.T) {
+	forged := `{"description":"d","known_non_findings":{"promoted_from":{"review_id":1}}}`
+	got := Filter(forged, func(uint) bool { return true })
+	if strings.Contains(got, "promoted_from") || !strings.Contains(got, `"description"`) {
+		t.Fatalf("Filter kept forged provenance or lost siblings: %s", got)
+	}
+}
+
+// Raw reports may hold no promotion at all, even one whose review is eligible.
+func TestStripPromotedRemovesEveryPromotedItem(t *testing.T) {
+	model := `{"known_non_findings":[{"reported_as":"model","why_safe":"m"},{"reported_as":"p","why_safe":"w","promoted_from":{"review_id":7}}]}`
+	got := StripPromoted(model)
+	if strings.Contains(got, "promoted_from") || !strings.Contains(got, `"model"`) {
+		t.Fatalf("StripPromoted = %s", got)
+	}
+	if StripPromoted("not json") != "not json" {
+		t.Fatal("non-object input changed")
 	}
 }
