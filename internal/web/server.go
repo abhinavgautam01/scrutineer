@@ -3231,7 +3231,7 @@ func deleteFindingChildren(tx *gorm.DB, repoID uint) error {
 func findingChildModels() []any {
 	return []any{
 		&db.FindingNote{}, &db.FindingCommunication{}, &db.FindingReference{},
-		&db.FindingHistory{}, &db.FindingDependent{}, &db.FindingReview{},
+		&db.FindingHistory{}, &db.FindingDependent{}, &db.FindingReview{}, &db.FeedbackConfirmation{},
 		&db.FindingVerification{}, &db.FindingAttackPath{},
 		&db.RemediationValidation{}, &db.RemediationAttempt{},
 	}
