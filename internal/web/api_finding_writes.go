@@ -119,7 +119,7 @@ func (s *Server) apiAddFindingCommunication(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	c, err := db.AddFindingCommunication(s.DB, id, body.Channel, body.Direction, body.Actor, body.Body, body.OfferedHelp, body.At)
+	c, err := db.AddFindingCommunication(s.DB.WithContext(r.Context()), id, body.Channel, body.Direction, body.Actor, body.Body, body.OfferedHelp, body.At, sourceFromRequest(r))
 	if err != nil {
 		writeAPIError(w, http.StatusUnprocessableEntity, err.Error())
 		return

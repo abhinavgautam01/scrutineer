@@ -60,12 +60,12 @@ The central entity. One row per git URL.
 
 ## audit_events
 
-Append-only audit trail for scan lifecycle, scan-control actions, finding mutations and operator-initiated repository creation/deletion. It coexists with `finding_histories`, which remains the specialised per-field change history for findings. `payload` is JSON stored portably as text.
+Append-only audit trail for scan lifecycle, scan-control actions, finding mutations, disclosure actions and operator-initiated repository creation/deletion. It coexists with `finding_histories`, which remains the specialised per-field change history for findings. `payload` is JSON stored portably as text.
 
 | Column | Type | Notes |
 |--------|------|-------|
 | id | integer PK | |
-| kind | text | Event name: `scan.started`, `scan.finished`, `scan.failed`, `scan.cancelled`, `scan.paused`, `scan.retry_requested`, `scan.retry_enqueue_failed`, `scan.resume_requested`, `scan.resume_enqueue_failed`, `scan.cancel_requested`, `finding.status_changed`, `finding.severity_changed`, `finding.labels_changed`, `repo.created`, or `repo.deleted`. Indexed with `created_at` for chronological dashboards. |
+| kind | text | Event name: `scan.started`, `scan.finished`, `scan.failed`, `scan.cancelled`, `scan.paused`, `scan.retry_requested`, `scan.retry_enqueue_failed`, `scan.resume_requested`, `scan.resume_enqueue_failed`, `scan.cancel_requested`, `finding.status_changed`, `finding.severity_changed`, `finding.labels_changed`, `disclosure.requested`, `disclosure.vince_submitted`, `disclosure.draft_updated`, `disclosure.communication_recorded`, `disclosure.channel_changed`, `repo.created`, or `repo.deleted`. Indexed with `created_at` for chronological dashboards. |
 | subject_type | text | Polymorphic subject type: `scan`, `finding`, or `repository`. Part of the timeline index with `subject_id`. |
 | subject_id | integer | ID of the subject row, for example `scans.id`, `findings.id`, or `repositories.id`. Not a foreign key: events survive subject deletion. |
 | actor | text | Scan lifecycle events use the skill name or scan kind. Finding mutations use the helper's `by` value; browser edits leave it empty because there is no session user. Authenticated skill API mutations instead identify the scan and its skill from the bearer-token lookup, not client-supplied text. Repository events leave it empty rather than inventing an operator identity. |
@@ -82,6 +82,16 @@ Scan-control events cover single/bulk operator retries, resumes, queued pauses a
 `scan.retry_requested` commits with the new retry row and `scan.resume_requested` with the paused-to-queued transition. Neither certifies delivery to the queue or execution. Queue writes remain outside these database transactions. If enqueueing fails, `scan.retry_enqueue_failed` commits with marking the new row failed, or `scan.resume_enqueue_failed` with restoring the existing row to paused. A failed recovery transaction leaves both the state and its event unchanged and returns an error; request events remain append-only. `scan.started` is still emitted only by the worker when it claims a scan. Automatic enqueues do not create operator retry events.
 
 Queued pauses and direct cancellations write `scan.paused` or `scan.cancelled` in the same transaction as the guarded state update, only for affected rows. An in-flight cancellation instead records `scan.cancel_requested` before signalling the runner; it does not claim a terminal outcome. Repeated requests with the same reason for that in-flight attempt do not add another request event. The worker continues to record the eventual lifecycle outcome separately. Audit-write failures prevent the state change or cancellation signal. Bulk database updates and their events commit or roll back together; later per-scan queue operations and running-scan cancellation requests may succeed or fail independently.
+
+Disclosure events cover the actions around reporting a finding. All carry `repository_id` and none copy draft text, message bodies, contact names, attachment names or tokens.
+
+- `disclosure.requested` (subject `finding`, source `analyst`) records an analyst launching the `disclose` or `public-issue` skill. It commits with the new scan row and carries `scan_id` and `skill_name`. Launches rejected before a scan exists (such as a pending federation claim) write nothing. Like retry events it does not certify queue delivery or that a draft was produced.
+- `disclosure.vince_submitted` (subject `finding`, source `analyst`) commits with the VINCE reference, communication and `reported` status write. The payload holds `vrf_id` and a boolean `attachment`, not the attachment name.
+- `disclosure.draft_updated` (subject `finding`) is written by `WriteFindingField` for the `disclosure_draft` field, so analyst edits and skill-written drafts are both covered, with skill API writes attributed to the scan like other finding events. The payload holds `field` plus `old_length` and `new_length` in characters, never the draft. A save that leaves the draft unchanged writes nothing.
+- `disclosure.communication_recorded` (subject `finding`) is written by `AddFindingCommunication` in the same transaction as the communication row. The source is `analyst` for the form, `model_suggested` or `analyst` for the skill API (matching finding field writes) and `system` for the VINCE submission. The payload holds `communication_id`, `channel`, `direction` and a boolean `offered_help`, not the body or the free-text actor. Skill API calls identify the scan and skill from the bearer token.
+- `disclosure.channel_changed` (subject `repository`) records a changed disclosure channel, only when the trimmed value differs from the stored one. The payload holds `scope` (`repository` or `subproject`), `old_value` and `new_value`, plus `subproject_id` and `subproject_path` for a subproject. Channels are published security contacts rather than secrets, so both values are kept. Analyst edits use source `analyst` with an empty actor. The maintainers skill uses `model_suggested` with the skill name as actor.
+
+Each disclosure event commits or rolls back with the write it describes. Direct SQL that bypasses these helpers is not covered and existing rows are not backfilled.
 
 ## package_alternatives
 

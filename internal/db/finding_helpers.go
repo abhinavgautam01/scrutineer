@@ -639,8 +639,11 @@ func FindingDisclosureBlocked(f Finding) bool {
 	return f.ProductionViability == ProductionViabilityNonViable
 }
 
-// AddFindingCommunication records one external interaction.
-func AddFindingCommunication(gdb *gorm.DB, findingID uint, channel, direction, actor, body, offeredHelp string, at time.Time) (*FindingCommunication, error) {
+// AddFindingCommunication records one external interaction and appends a
+// disclosure.communication_recorded event in the same transaction. The event
+// keeps the channel and direction but never the body or actor text. When ctx
+// carries WithAuditScan the event is attributed to that scan.
+func AddFindingCommunication(gdb *gorm.DB, findingID uint, channel, direction, actor, body, offeredHelp string, at time.Time, source FindingSource) (*FindingCommunication, error) {
 	if at.IsZero() {
 		at = time.Now()
 	}
@@ -654,7 +657,28 @@ func AddFindingCommunication(gdb *gorm.DB, findingID uint, channel, direction, a
 		At:          at,
 		CreatedAt:   time.Now(),
 	}
-	if err := gdb.Create(c).Error; err != nil {
+	err := gdb.Transaction(func(tx *gorm.DB) error {
+		var f Finding
+		if err := tx.Select("id", "repository_id").First(&f, findingID).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(c).Error; err != nil {
+			return err
+		}
+		payload := map[string]any{
+			"repository_id":    f.RepositoryID,
+			"communication_id": c.ID,
+			"channel":          channel,
+			"direction":        direction,
+			"offered_help":     offeredHelp != "",
+		}
+		by := auditScanAttribution(tx.Statement.Context, "", payload)
+		return LogEvent(tx, AuditEventInput{
+			Kind: AuditEventDisclosureCommunicationRecorded, SubjectType: AuditSubjectFinding, SubjectID: findingID,
+			Source: source, Actor: by, Payload: payload,
+		})
+	})
+	if err != nil {
 		return nil, err
 	}
 	return c, nil

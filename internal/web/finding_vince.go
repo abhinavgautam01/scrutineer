@@ -197,7 +197,7 @@ func (s *Server) findingVINCESubmit(w http.ResponseWriter, r *http.Request) {
 	if attachment != nil {
 		attachmentName = attachment.Name
 	}
-	if err := s.persistVINCESubmission(ctx.Finding.ID, vrfID, reportsURL, attachmentName); err != nil {
+	if err := s.persistVINCESubmission(ctx.Finding, vrfID, reportsURL, attachmentName, attachment != nil); err != nil {
 		page := s.vincePage(ctx, report, packageID, selectedRefs, attachmentChoice,
 			time.Now().UTC(), nil, confirmations)
 		page.Error = "VINCE returned " + vrfID + " but Scrutineer could not save the result. Record the ID and reconcile it manually. Do not submit the report again."
@@ -656,7 +656,11 @@ func attachmentHash(attachment *vince.Attachment) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func (s *Server) persistVINCESubmission(findingID uint, vrfID, reportsURL, attachmentName string) error {
+// persistVINCESubmission records the submission in one transaction with the
+// disclosure.vince_submitted event. The event keeps whether a file was attached
+// but never its name.
+func (s *Server) persistVINCESubmission(finding db.Finding, vrfID, reportsURL, attachmentName string, attached bool) error {
+	findingID := finding.ID
 	return db.FindingWriteTransaction(s.DB, findingID, func(tx *gorm.DB) error {
 		var refs []db.FindingReference
 		if err := tx.Where("finding_id = ?", findingID).Find(&refs).Error; err != nil {
@@ -673,9 +677,20 @@ func (s *Server) persistVINCESubmission(findingID uint, vrfID, reportsURL, attac
 		}
 		body := "Submitted vulnerability report " + vrfID + " to CERT/CC VINCE.\nAttachment: " + attachmentName
 		if _, err := db.AddFindingCommunication(tx, findingID, "vince", "outbound",
-			"CERT/CC", body, "", time.Now()); err != nil {
+			"CERT/CC", body, "", time.Now(), db.SourceSystem); err != nil {
 			return err
 		}
-		return db.WriteFindingField(tx, findingID, "status", string(db.FindingReported), db.SourceSystem, "vince")
+		if err := db.WriteFindingField(tx, findingID, "status", string(db.FindingReported), db.SourceSystem, "vince"); err != nil {
+			return err
+		}
+		return db.LogEvent(tx, db.AuditEventInput{
+			Kind: db.AuditEventDisclosureVINCESubmitted, SubjectType: db.AuditSubjectFinding, SubjectID: findingID,
+			Source: db.SourceAnalyst,
+			Payload: map[string]any{
+				"repository_id": finding.RepositoryID,
+				"vrf_id":        vrfID,
+				"attachment":    attached,
+			},
+		})
 	})
 }

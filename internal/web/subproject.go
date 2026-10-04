@@ -69,8 +69,7 @@ func (s *Server) subprojectDisclosureChannel(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	value := strings.TrimSpace(r.FormValue("disclosure_channel"))
-	if err := s.DB.Model(&db.Subproject{}).Where("id = ?", sub.ID).
-		Update("disclosure_channel", value).Error; err != nil {
+	if err := db.SetSubprojectDisclosureChannel(s.DB, sub.ID, value, db.SourceAnalyst, ""); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

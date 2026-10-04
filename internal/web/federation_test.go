@@ -1015,7 +1015,7 @@ func TestSetDisclosureChannel_stampsOnlyOnChange(t *testing.T) {
 	defer done()
 	repo := seedFeedRepo(t, s, "https://github.com/acme/lib", "")
 
-	if err := db.SetDisclosureChannel(s.DB, repo.ID, "security@acme.example"); err != nil {
+	if err := db.SetDisclosureChannel(s.DB, repo.ID, "security@acme.example", db.SourceAnalyst, ""); err != nil {
 		t.Fatal(err)
 	}
 	var got db.Repository
@@ -1025,7 +1025,7 @@ func TestSetDisclosureChannel_stampsOnlyOnChange(t *testing.T) {
 	}
 	stamped := *got.DisclosureChannelAt
 
-	if err := db.SetDisclosureChannel(s.DB, repo.ID, "security@acme.example"); err != nil {
+	if err := db.SetDisclosureChannel(s.DB, repo.ID, "security@acme.example", db.SourceAnalyst, ""); err != nil {
 		t.Fatal(err)
 	}
 	s.DB.First(&got, repo.ID)
@@ -1037,7 +1037,7 @@ func TestSetDisclosureChannel_stampsOnlyOnChange(t *testing.T) {
 	// loaded earlier: a scan that started an hour ago holds a stale snapshot,
 	// and a stamp skipped there would publish the new channel under the old
 	// verified_at.
-	if err := db.SetDisclosureChannel(s.DB, repo.ID, "moved@acme.example"); err != nil {
+	if err := db.SetDisclosureChannel(s.DB, repo.ID, "moved@acme.example", db.SourceAnalyst, ""); err != nil {
 		t.Fatal(err)
 	}
 	s.DB.First(&got, repo.ID)

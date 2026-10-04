@@ -1744,6 +1744,7 @@ func (s *Server) runFindingSkill(w http.ResponseWriter, r *http.Request, name st
 		}
 	}
 	opts.FindingID = new(f.ID)
+	opts.AuditDisclosure = name == discloseSkillName || name == publicIssueSkillName
 	if name == verifySkillName {
 		opts.VerificationFeedback = r.PostForm.Get("feedback")
 	}
@@ -3277,7 +3278,7 @@ func (s *Server) repoDisclosureChannel(w http.ResponseWriter, r *http.Request) {
 	// Not trimmed here: SetDisclosureChannel trims, and it has to, since the
 	// comparison that decides whether to re-stamp the route record's
 	// verified_at is made against the trimmed value.
-	if err := db.SetDisclosureChannel(s.DB, repo.ID, r.FormValue("disclosure_channel")); err != nil {
+	if err := db.SetDisclosureChannel(s.DB, repo.ID, r.FormValue("disclosure_channel"), db.SourceAnalyst, ""); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -3334,11 +3335,13 @@ func (s *Server) repoScheduleUpdate(w http.ResponseWriter, r *http.Request) {
 // new options (SubPath, FindingID, Model) accumulate.
 type ScanOpts struct {
 	// AuditRetry marks operator retries only, not automatic child scans or reruns.
-	AuditRetry  bool
-	Model       string
-	Effort      string
-	FindingID   *uint
-	DependentID *uint
+	AuditRetry bool
+	// AuditDisclosure marks analyst-launched disclose and public-issue runs.
+	AuditDisclosure bool
+	Model           string
+	Effort          string
+	FindingID       *uint
+	DependentID     *uint
 	// BaselineScanID marks a fix-validation anchor scan and pins the baseline
 	// scan it diffs against. See validate_fix.go.
 	BaselineScanID *uint
@@ -3548,10 +3551,7 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 		if live.FederationOptedOut() {
 			return ErrRepoFederationOptOut
 		}
-		if opts.AuditRetry {
-			return logScanControl(tx, db.AuditEventScanRetryRequested, scan, retryLineage(scan), "", db.ScanQueued, db.SourceAnalyst)
-		}
-		return nil
+		return logScanCreated(tx, scan, opts)
 	}); err != nil {
 		return 0, err
 	}
