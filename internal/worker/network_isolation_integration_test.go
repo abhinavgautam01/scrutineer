@@ -16,8 +16,11 @@ package worker
 // Only Docker Desktop is exercised. Docker Engine (host-proxy path) and podman
 // are not covered here; podman isolation is covered by podman_integration_test.go.
 // Cloud metadata has no positive control on Docker Desktop because there is no
-// metadata service, so the egress proxy refusing non-public addresses is the
-// affirmative check for it.
+// metadata service, so only the egress proxy refusing non-public addresses is
+// checked. Gateway-addressed probes are likewise omitted: on Docker Desktop a
+// packet sent to a network's gateway never reaches a host service even without
+// isolation, so such a probe could not fail. They belong with runtimes where a
+// gateway control can succeed.
 
 import (
 	"bytes"
@@ -43,7 +46,6 @@ import (
 const (
 	isolationImageEnv    = "SCRUTINEER_TEST_NETWORK_ISOLATION_IMAGE"
 	controlFailedMessage = "control failed: the destination is unreachable even without isolation, so isolation cannot be judged"
-	hostAlias            = "host.docker.internal"
 	listenerBindAttempts = 20
 	listenerConnDeadline = 2 * time.Second
 	listenerReadBuf      = 4096
@@ -56,7 +58,6 @@ const (
 	siblingPort          = "9000"
 	siblingIPWait        = 60 * time.Second
 	siblingControlTries  = 3
-	workDirMode          = 0o777
 )
 
 type isolationHarness struct {
@@ -224,19 +225,6 @@ func (e isolationEnv) runner(script string) ContainerRunner {
 	}
 }
 
-func isolationWorkDir(t *testing.T) string {
-	t.Helper()
-	work := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(work, "src"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	// The scan may run as a different uid; let it write results.
-	if err := os.Chmod(work, workDirMode); err != nil { //nolint:gosec // test workspace only
-		t.Fatal(err)
-	}
-	return work
-}
-
 func isolationKey(label string) string {
 	return fmt.Sprintf("iso-%s-%d-%d", label, os.Getpid(), time.Now().UnixNano())
 }
@@ -249,20 +237,6 @@ func (e isolationEnv) runScan(ctx context.Context, key, work, script string) err
 		Name:         "netprobe",
 	}, func(Event) {})
 	return err
-}
-
-func readWorkFiles(dir string) map[string]string {
-	files := map[string]string{}
-	entries, _ := os.ReadDir(dir)
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		if b, err := os.ReadFile(filepath.Join(dir, e.Name())); err == nil {
-			files[e.Name()] = strings.TrimSpace(string(b))
-		}
-	}
-	return files
 }
 
 // defaultNetworkRun runs a script in a container on the default network.
@@ -280,9 +254,6 @@ func (e isolationEnv) defaultNetworkRun(t *testing.T, script string, extra ...st
 }
 
 const directProbeScript = `cd /work
-# The internal network has no default route; Docker puts the gateway at .1 of the subnet.
-GW=$(ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | head -n 1 | awk -F. '{print $1"."$2"."$3".1"}')
-echo "$GW" > gw
 NP="env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy -u ALL_PROXY -u all_proxy"
 rec() {
   name=$1; shift
@@ -292,13 +263,9 @@ rec() {
 tcp() { echo "$2" | $NP nc -w 3 "$1" @PORT@; }
 dnsq() { $NP dig +tries=1 +time=2 $3 @"$1" -p @PORT@ "$2.probe.test"; }
 rec tcp_alias tcp host.docker.internal @tcp_alias@
-rec tcp_gw tcp "$GW" @tcp_gw@
 rec udp_alias dnsq host.docker.internal @udp_alias@
-rec udp_gw dnsq "$GW" @udp_gw@
 rec dtcp_alias dnsq host.docker.internal @dtcp_alias@ +tcp
-rec dtcp_gw dnsq "$GW" @dtcp_gw@ +tcp
 rec resolver $NP nslookup -timeout=3 -retry=1 example.com
-rec meta_direct $NP curl -sS --noproxy '*' --max-time 5 -o /dev/null -w '%{http_code}' http://169.254.169.254/latest/meta-data/
 ip -6 addr show scope global | grep -c inet6 > v6count
 if [ "$(cat v6count)" != 0 ]; then
   rec v6 $NP curl -6 -sS --noproxy '*' --max-time 5 -o /dev/null -w '%{http_code}' https://[2606:4700:4700::1111]/
@@ -309,7 +276,7 @@ rec connect_proxied curl -sS -p --max-time 10 -o /dev/null -w '%{http_connect}' 
 `
 
 // directProbeNames are the probes whose markers must never reach the listener.
-var directProbeNames = []string{"tcp_alias", "tcp_gw", "udp_alias", "udp_gw", "dtcp_alias", "dtcp_gw", "host_proxied", "connect_proxied"}
+var directProbeNames = []string{"tcp_alias", "udp_alias", "dtcp_alias", "host_proxied", "connect_proxied"}
 
 func directScript(port string, markers map[string]string) string {
 	pairs := []string{"@PORT@", port}
@@ -325,7 +292,7 @@ type controls map[string]bool
 func runControls(t *testing.T, e isolationEnv, l *controlledListener) controls {
 	t.Helper()
 	ok := controls{}
-	target := hostAlias
+	target := HostGatewayAlias
 	for _, c := range []struct{ name, script, marker string }{
 		{"tcp", "echo %s | nc -w 3 " + target + " " + l.port, "ctltcp"},
 		{"dns_udp", "dig +tries=1 +time=2 @" + target + " -p " + l.port + " %s.probe.test", "ctludp"},
@@ -356,7 +323,7 @@ func TestIntegration_NetworkIsolationDirectEgress(t *testing.T) {
 	for _, n := range directProbeNames {
 		markers[n] = newMarker(t, n)
 	}
-	work := isolationWorkDir(t)
+	work := newScanWorkspace(t)
 	key := isolationKey("direct")
 	ctx, cancel := context.WithTimeout(t.Context(), scanTimeout)
 	defer cancel()
@@ -364,12 +331,9 @@ func TestIntegration_NetworkIsolationDirectEgress(t *testing.T) {
 		t.Fatalf("RunSkill: %v", err)
 	}
 	time.Sleep(grace)
-	files := readWorkFiles(work)
-	t.Logf("hardened gateway=%s v6count=%s", files["gw"], files["v6count"])
-	if net.ParseIP(files["gw"]) == nil {
-		t.Fatalf("could not determine the scan network gateway: %q", files["gw"])
-	}
-	for _, n := range []string{"tcp_alias", "tcp_gw", "udp_alias", "udp_gw", "dtcp_alias", "dtcp_gw", "resolver", "meta_direct", "v6", "meta_proxied", "host_proxied", "connect_proxied"} {
+	files := readWorkspaceFiles(work)
+	t.Logf("v6count=%s", files["v6count"])
+	for _, n := range []string{"tcp_alias", "udp_alias", "dtcp_alias", "resolver", "v6", "meta_proxied", "host_proxied", "connect_proxied"} {
 		t.Logf("%s: exit=%q out=%q err=%q", n, files[n+".exit"], files[n+".out"], files[n+".err"])
 	}
 
@@ -389,9 +353,9 @@ func TestIntegration_NetworkIsolationDirectEgress(t *testing.T) {
 func assertDirectBlocked(t *testing.T, ctl controls, l *controlledListener, files, markers map[string]string) {
 	t.Helper()
 	for _, p := range []struct{ name, control string }{
-		{"tcp_alias", "tcp"}, {"tcp_gw", "tcp"},
-		{"udp_alias", "dns_udp"}, {"udp_gw", "dns_udp"},
-		{"dtcp_alias", "dns_tcp"}, {"dtcp_gw", "dns_tcp"},
+		{"tcp_alias", "tcp"},
+		{"udp_alias", "dns_udp"},
+		{"dtcp_alias", "dns_tcp"},
 		{"resolver", "resolver"},
 	} {
 		t.Run("direct_"+p.name, func(t *testing.T) {
@@ -405,13 +369,6 @@ func assertDirectBlocked(t *testing.T, ctl controls, l *controlledListener, file
 			}
 		})
 	}
-	t.Run("direct_metadata", func(t *testing.T) {
-		// No positive control exists on Docker Desktop; the proxied 403 below is the affirmative check.
-		exit := files["meta_direct.exit"]
-		if exit == "" || exit == "0" || files["meta_direct.out"] != "000" {
-			t.Errorf("direct metadata request did not fail: exit=%q code=%q", exit, files["meta_direct.out"])
-		}
-	})
 }
 
 func assertProxyRefusals(t *testing.T, l *controlledListener, files, markers map[string]string) {
@@ -430,12 +387,10 @@ func assertProxyRefusals(t *testing.T, l *controlledListener, files, markers map
 		}
 	})
 	t.Run("proxied_connect", func(t *testing.T) {
-		exit := files["connect_proxied.exit"]
-		if exit == "" || exit == "0" {
-			t.Errorf("CONNECT to a host service succeeded: exit=%q", exit)
-		}
-		if got := files["connect_proxied.out"]; got == "200" {
-			t.Errorf("proxy accepted CONNECT to a host service: %q", got)
+		// 403 is the proxy refusing the tunnel. 000 would mean the proxy was
+		// unreachable, which proves nothing about isolation.
+		if got := files["connect_proxied.out"]; got != "403" {
+			t.Errorf("CONNECT to a host service via proxy: code=%q exit=%q, want 403", got, files["connect_proxied.exit"])
 		}
 		if l.saw(markers["connect_proxied"]) {
 			t.Error("CONNECT marker reached the listener")
@@ -484,7 +439,7 @@ func TestIntegration_NetworkIsolationSiblingScans(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), scanTimeout)
 	defer cancel()
 
-	workA := isolationWorkDir(t)
+	workA := newScanWorkspace(t)
 	keyA := isolationKey("siblinga")
 	// Always release scan A so a failure cannot hang the test.
 	t.Cleanup(func() { _ = os.WriteFile(filepath.Join(workA, "done"), nil, 0o600) })
@@ -499,7 +454,7 @@ func TestIntegration_NetworkIsolationSiblingScans(t *testing.T) {
 
 	directMarker := newMarker(t, "bdirect")
 	proxiedMarker := newMarker(t, "bproxied")
-	workB := isolationWorkDir(t)
+	workB := newScanWorkspace(t)
 	script := strings.NewReplacer("@IP@", ipA, "@DIRECT@", directMarker, "@PROXIED@", proxiedMarker).Replace(siblingBScript)
 	if err := env.runScan(ctx, isolationKey("siblingb"), workB, script); err != nil {
 		t.Fatalf("scan B RunSkill: %v", err)
@@ -512,8 +467,8 @@ func TestIntegration_NetworkIsolationSiblingScans(t *testing.T) {
 	if err := <-errA; err != nil {
 		t.Fatalf("scan A RunSkill: %v", err)
 	}
-	conns := readWorkFiles(workA)["conns"]
-	filesB := readWorkFiles(workB)
+	conns := readWorkspaceFiles(workA)["conns"]
+	filesB := readWorkspaceFiles(workB)
 	t.Logf("scan B: direct exit=%q out=%q proxied exit=%q code=%q", filesB["direct.exit"], filesB["direct.out"], filesB["proxied.exit"], filesB["proxied.out"])
 
 	if !delivered || !strings.Contains(conns, control) {
