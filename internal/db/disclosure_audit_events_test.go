@@ -212,3 +212,48 @@ func TestDisclosureChannelAuditFailureRollsBack(t *testing.T) {
 		t.Fatalf("timestamp survived rollback: %v", gotRepo.DisclosureChannelAt)
 	}
 }
+
+// A feed import replaces the channel only while it still holds the value the
+// importer read. It audits only a replacement that changes the channel.
+func TestImportDisclosureChannelAudit(t *testing.T) {
+	gdb := newTestDB(t)
+	repo := Repository{URL: "https://example.com/feed", Name: "feed"}
+	if err := gdb.Create(&repo).Error; err != nil {
+		t.Fatal(err)
+	}
+	const feed, hint = "https://peer.example/feed.git", "peer@example.org (via https://peer.example/feed.git)"
+
+	if applied, err := ImportDisclosureChannel(gdb, repo.ID, "", hint, SourceSystem, feed); err != nil || !applied {
+		t.Fatalf("applied=%v err=%v, want the empty channel replaced", applied, err)
+	}
+	// Re-importing the same hint applies but changes nothing, so no event.
+	if applied, err := ImportDisclosureChannel(gdb, repo.ID, hint, hint, SourceSystem, feed); err != nil || !applied {
+		t.Fatalf("applied=%v err=%v on an unchanged re-import", applied, err)
+	}
+	// An analyst saved an address after the importer read the channel: the
+	// stale expected value no longer matches, so the analyst's address stays.
+	if err := SetDisclosureChannel(gdb, repo.ID, "analyst@example.org", SourceAnalyst, ""); err != nil {
+		t.Fatal(err)
+	}
+	if applied, err := ImportDisclosureChannel(gdb, repo.ID, hint, "other@example.org", SourceSystem, feed); err != nil || applied {
+		t.Fatalf("applied=%v err=%v, want the analyst's address kept", applied, err)
+	}
+	var stored Repository
+	gdb.First(&stored, repo.ID)
+	if stored.DisclosureChannel != "analyst@example.org" {
+		t.Fatalf("channel = %q, want the analyst's address", stored.DisclosureChannel)
+	}
+
+	var imported []AuditEvent
+	for _, e := range eventsOfKind(t, gdb, AuditEventDisclosureChannelChanged) {
+		if e.Source == SourceSystem {
+			imported = append(imported, e)
+		}
+	}
+	if len(imported) != 1 || imported[0].Actor != feed {
+		t.Fatalf("feed events = %+v, want exactly one attributed to the feed", imported)
+	}
+	if p := decodePayload(t, imported[0]); p["old_value"] != "" || p["new_value"] != hint {
+		t.Fatalf("payload = %s", imported[0].Payload)
+	}
+}

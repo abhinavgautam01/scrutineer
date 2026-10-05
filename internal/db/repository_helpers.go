@@ -66,6 +66,30 @@ func SetDisclosureChannel(gdb *gorm.DB, repoID uint, value string, source Findin
 	})
 }
 
+// ImportDisclosureChannel replaces the repository channel with one imported
+// from a federation feed, but only while the stored channel still equals
+// expected: an analyst or the maintainers skill may have written it since the
+// caller read it. Their address must win. The timestamp is cleared because
+// a peer's hint is not a route this instance verified. A replacement that
+// changes the channel appends a disclosure.channel_changed event in the same
+// transaction. It reports whether the stored channel was replaced.
+func ImportDisclosureChannel(gdb *gorm.DB, repoID uint, expected, value string, source FindingSource, actor string) (bool, error) {
+	applied := false
+	err := gdb.Transaction(func(tx *gorm.DB) error {
+		res := tx.Model(&Repository{}).Where("id = ? AND disclosure_channel = ?", repoID, expected).
+			Updates(map[string]any{"disclosure_channel": value, "disclosure_channel_at": nil})
+		if res.Error != nil {
+			return res.Error
+		}
+		applied = res.RowsAffected > 0
+		if !applied || expected == value {
+			return nil
+		}
+		return logDisclosureChannelChange(tx, repoID, map[string]any{"scope": "repository"}, expected, value, source, actor)
+	})
+	return applied, err
+}
+
 // SetSubprojectDisclosureChannel writes a sub-package's own disclosure channel
 // and appends a disclosure.channel_changed event, on the repository, only when
 // the trimmed value differs from the stored one.
@@ -88,7 +112,7 @@ func SetSubprojectDisclosureChannel(gdb *gorm.DB, subprojectID uint, value strin
 }
 
 func logDisclosureChannelChange(tx *gorm.DB, repoID uint, payload map[string]any, oldValue, newValue string, source FindingSource, actor string) error {
-	payload["repository_id"] = repoID
+	payload[AuditKeyRepositoryID] = repoID
 	payload["old_value"] = oldValue
 	payload["new_value"] = newValue
 	return LogEvent(tx, AuditEventInput{

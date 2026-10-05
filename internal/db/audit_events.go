@@ -41,6 +41,10 @@ const (
 	AuditEventDisclosureChannelChanged        = "disclosure.channel_changed"
 )
 
+// AuditKeyRepositoryID is the payload key every disclosure event uses for the
+// repository it belongs to.
+const AuditKeyRepositoryID = "repository_id"
+
 type auditScanKey struct{}
 
 type auditScanActor struct {
@@ -54,10 +58,10 @@ func WithAuditScan(ctx context.Context, scanID uint, skillName string) context.C
 	return context.WithValue(ctx, auditScanKey{}, auditScanActor{ID: scanID, SkillName: skillName})
 }
 
-// auditScanAttribution attributes an event to the authenticated scan carried
+// AuditScanAttribution attributes an event to the authenticated scan carried
 // by ctx. It adds scan_id and skill_name to payload and returns the actor text
 // that replaces by. Without a scan in ctx it returns by unchanged.
-func auditScanAttribution(ctx context.Context, by string, payload map[string]any) string {
+func AuditScanAttribution(ctx context.Context, by string, payload map[string]any) string {
 	scan, ok := ctx.Value(auditScanKey{}).(auditScanActor)
 	if !ok {
 		return by
@@ -73,7 +77,7 @@ func auditScanAttribution(ctx context.Context, by string, payload map[string]any
 // findingMutationPayload builds the event for a finding field write. The
 // disclosure draft is free text, so only its length before and after is kept.
 func findingMutationPayload(finding *Finding, field string, oldValue, newValue any) (string, map[string]any, bool) {
-	payload := map[string]any{"repository_id": finding.RepositoryID, "field": field}
+	payload := map[string]any{AuditKeyRepositoryID: finding.RepositoryID, "field": field}
 	switch field {
 	case "status":
 		payload["old_value"], payload["new_value"] = oldValue, newValue
@@ -102,7 +106,7 @@ func logFindingMutation(tx *gorm.DB, finding *Finding, field string, oldValue, n
 	if !ok {
 		return nil
 	}
-	by = auditScanAttribution(tx.Statement.Context, by, payload)
+	by = AuditScanAttribution(tx.Statement.Context, by, payload)
 	return LogEvent(tx, AuditEventInput{
 		Kind: kind, SubjectType: AuditSubjectFinding, SubjectID: finding.ID,
 		Source: source, Actor: by, Payload: payload,

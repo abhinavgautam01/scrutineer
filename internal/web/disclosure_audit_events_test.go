@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -60,6 +61,8 @@ func TestDisclosureRequestedAudit(t *testing.T) {
 		}
 	}
 	events := disclosureEvents(t, s, db.AuditEventDisclosureRequested)
+	// report-upstream has no browser route; its skill API launch is covered by
+	// TestDisclosureRequestedAuditSkillAPI.
 	if len(events) != 2 {
 		t.Fatalf("events = %+v, want disclose and public-issue only", events)
 	}
@@ -362,4 +365,64 @@ func failAuditKind(t *testing.T, s *Server, kind string) {
 			t.Error(err)
 		}
 	})
+}
+
+// A skill chaining a disclosure through the skill API is audited too, with its
+// own source and the calling scan recorded beside the launched scan rather
+// than overwriting it.
+func TestDisclosureRequestedAuditSkillAPI(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	f := seedDisclosureSkillFinding(t, s, reportUpstreamSkillName)
+	callerSkill := db.Skill{Name: "triage-caller", Description: "d", Body: "b", OutputFile: "report.json", OutputKind: "freeform", Version: 1, Active: true, Source: "ui"}
+	s.DB.Create(&callerSkill)
+	caller := db.Scan{RepositoryID: f.RepositoryID, Kind: "skill", Status: db.ScanRunning, SkillID: &callerSkill.ID,
+		SkillName: callerSkill.Name, APIToken: "caller-token", StartedAt: new(time.Now())}
+	s.DB.Create(&caller)
+
+	w := apiReq(t, s, "POST", fmt.Sprintf("/api/findings/%d/skills/%s/run", f.ID, reportUpstreamSkillName), caller.APIToken, "{}")
+	if w.Code >= http.StatusMultipleChoices {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	events := disclosureEvents(t, s, db.AuditEventDisclosureRequested)
+	if len(events) != 1 {
+		t.Fatalf("events = %+v, want one", events)
+	}
+	var launched db.Scan
+	if err := s.DB.Where("finding_id = ? AND skill_name = ?", f.ID, reportUpstreamSkillName).First(&launched).Error; err != nil {
+		t.Fatal(err)
+	}
+	event := events[0]
+	if event.Source != db.SourceModel || !strings.Contains(event.Actor, fmt.Sprintf("scan %d", caller.ID)) {
+		t.Fatalf("event source=%q actor=%q, want the calling scan", event.Source, event.Actor)
+	}
+	payload := disclosurePayload(t, event)
+	if payload["scan_id"] != float64(launched.ID) || payload["skill_name"] != reportUpstreamSkillName {
+		t.Fatalf("launched scan overwritten by the caller: %s", event.Payload)
+	}
+	if payload["caller_scan_id"] != float64(caller.ID) || payload["caller_skill_name"] != callerSkill.Name {
+		t.Fatalf("caller not recorded: %s", event.Payload)
+	}
+}
+
+// assertFeedChannelEvent checks a feed import wrote one system event for the
+// channel it filled and none for the channel it was not allowed to replace.
+func assertFeedChannelEvent(t *testing.T, s *Server, filledID, ownedID uint, feed, channel string) {
+	t.Helper()
+	var filled, owned []db.AuditEvent
+	s.DB.Where("kind = ? AND subject_id = ?", db.AuditEventDisclosureChannelChanged, filledID).Find(&filled)
+	s.DB.Where("kind = ? AND subject_id = ?", db.AuditEventDisclosureChannelChanged, ownedID).Find(&owned)
+	if len(owned) != 0 {
+		t.Errorf("events for a channel the feed may not replace = %+v", owned)
+	}
+	if len(filled) != 1 {
+		t.Fatalf("events for the filled channel = %+v, want one", filled)
+	}
+	if filled[0].Source != db.SourceSystem || filled[0].Actor != feed {
+		t.Errorf("event source=%q actor=%q, want system and the feed", filled[0].Source, filled[0].Actor)
+	}
+	payload := disclosurePayload(t, filled[0])
+	if payload["old_value"] != "" || payload["new_value"] != channel {
+		t.Errorf("payload = %s", filled[0].Payload)
+	}
 }

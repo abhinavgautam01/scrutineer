@@ -599,6 +599,7 @@ func TestImportFeed_routeOnlyFillsAnEmptyChannel(t *testing.T) {
 	if !strings.Contains(filled.DisclosureChannel, "(via "+remote+")") {
 		t.Errorf("an imported channel must name the feed it came from, got %q", filled.DisclosureChannel)
 	}
+	assertFeedChannelEvent(t, s, empty.ID, owned.ID, remote, filled.DisclosureChannel)
 	// An imported hint is not a route this instance validated, and the peer
 	// feed remote it is annotated with may name an internal host or a path on
 	// this operator's disk. Leaving disclosure_channel_at unset is what keeps

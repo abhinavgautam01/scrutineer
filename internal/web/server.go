@@ -1744,7 +1744,7 @@ func (s *Server) runFindingSkill(w http.ResponseWriter, r *http.Request, name st
 		}
 	}
 	opts.FindingID = new(f.ID)
-	opts.AuditDisclosure = name == discloseSkillName || name == publicIssueSkillName
+	opts.AuditDisclosure = externalReportingSkill(name)
 	if name == verifySkillName {
 		opts.VerificationFeedback = r.PostForm.Get("feedback")
 	}
@@ -3336,12 +3336,15 @@ func (s *Server) repoScheduleUpdate(w http.ResponseWriter, r *http.Request) {
 type ScanOpts struct {
 	// AuditRetry marks operator retries only, not automatic child scans or reruns.
 	AuditRetry bool
-	// AuditDisclosure marks analyst-launched disclose and public-issue runs.
+	// AuditDisclosure marks launches of the external-reporting skills (disclose,
+	// report-upstream and public-issue) from the browser or the skill API.
 	AuditDisclosure bool
-	Model           string
-	Effort          string
-	FindingID       *uint
-	DependentID     *uint
+	// AuditSource is who launched an audited run; empty means the analyst.
+	AuditSource db.FindingSource
+	Model       string
+	Effort      string
+	FindingID   *uint
+	DependentID *uint
 	// BaselineScanID marks a fix-validation anchor scan and pins the baseline
 	// scan it diffs against. See validate_fix.go.
 	BaselineScanID *uint
@@ -3551,7 +3554,7 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 		if live.FederationOptedOut() {
 			return ErrRepoFederationOptOut
 		}
-		return logScanCreated(tx, scan, opts)
+		return logScanCreated(ctx, tx, scan, opts)
 	}); err != nil {
 		return 0, err
 	}

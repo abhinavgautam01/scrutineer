@@ -666,13 +666,13 @@ func AddFindingCommunication(gdb *gorm.DB, findingID uint, channel, direction, a
 			return err
 		}
 		payload := map[string]any{
-			"repository_id":    f.RepositoryID,
-			"communication_id": c.ID,
-			"channel":          channel,
-			"direction":        direction,
-			"offered_help":     offeredHelp != "",
+			AuditKeyRepositoryID: f.RepositoryID,
+			"communication_id":   c.ID,
+			"channel":            channel,
+			"direction":          direction,
+			"offered_help":       offeredHelp != "",
 		}
-		by := auditScanAttribution(tx.Statement.Context, "", payload)
+		by := AuditScanAttribution(tx.Statement.Context, "", payload)
 		return LogEvent(tx, AuditEventInput{
 			Kind: AuditEventDisclosureCommunicationRecorded, SubjectType: AuditSubjectFinding, SubjectID: findingID,
 			Source: source, Actor: by, Payload: payload,
