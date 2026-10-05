@@ -42,14 +42,14 @@ The equivalent CLI option is repeatable:
 
 Export a repo's findings as an encrypted bundle:
 
-    curl -o findings.bundle.age \
+    curl -H "Authorization: Bearer $(cat data/operator-token)" -o findings.bundle.age \
       'http://127.0.0.1:8080/api/v1/repositories/1/findings?format=bundle&encrypt=1'
 
 Send `findings.bundle.age` over Slack, email, shared drive — it's encrypted to every key in `recipients.txt`.
 
 Import on the receiving end (decryption is automatic):
 
-    curl --data-binary @findings.bundle.age http://127.0.0.1:8080/api/v1/import
+    curl -H "Authorization: Bearer $(cat data/operator-token)" --data-binary @findings.bundle.age http://127.0.0.1:8080/api/v1/import
 
 Plaintext bundles work too — drop `&encrypt=1` on export and import accepts them as-is regardless of whether an identity is configured.
 
@@ -89,7 +89,7 @@ Several things stay out of the default share bundle. Instance-local lifecycle th
 
 A bundle has a second audience: yourself. The same `format=bundle` export, with `&include=all`, produces an archival superset that round-trips a repository's findings losslessly back into your own instance — the natural unit for an encrypted, per-repo backup.
 
-    curl -o findings.archive.age \
+    curl -H "Authorization: Bearer $(cat data/operator-token)" -o findings.archive.age \
       'http://127.0.0.1:8080/api/v1/repositories/1/findings?format=bundle&include=all&encrypt=1'
 
 On top of the default share-safe set it carries the enrichment and disclosure work product — `snippet`, `affected`, `fix_version`, `cve_id`, `ghsa_id`, the `cvss_vector`/`cvss_v4_vector` (scores are recomputed from the vectors on import, never trusted), `mitigation`/`mitigation_semgrep`, the `breaking_change` verdict, `dup_check`, `disclosure_draft`, `exploited_in_wild` — the real `upstream_fix_commit` (kept on its own key because the legacy `fix_commit` already carries the patch's base), and the finding's `notes`, `communications`, and `references` child records with their timestamps.

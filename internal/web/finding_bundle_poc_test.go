@@ -272,7 +272,7 @@ func TestFindingBundle_includesPoCWhenValidationHasFence(t *testing.T) {
 
 	r := httptest.NewRequest(http.MethodGet,
 		"/findings/"+strconv.Itoa(int(f.ID))+"/bundle.tar.gz", nil)
-	r.Host = "127.0.0.1:8080"
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
@@ -302,7 +302,7 @@ func TestFindingBundle_omitsPoCWhenValidationHasNoFence(t *testing.T) {
 
 	r := httptest.NewRequest(http.MethodGet,
 		"/findings/"+strconv.Itoa(int(f.ID))+"/bundle.tar.gz", nil)
-	r.Host = "127.0.0.1:8080"
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 	files := readArchive(t, w.Body.Bytes())

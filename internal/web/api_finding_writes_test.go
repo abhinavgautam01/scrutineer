@@ -35,7 +35,7 @@ func seedFindingForAPI(t *testing.T, s *Server) (db.Finding, string, string) {
 func apiReq(t *testing.T, s *Server, method, path, token, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest(method, path, strings.NewReader(body))
-	r.Host = testHost
+	asOperator(r)
 	r.Header.Set("Authorization", "Bearer "+token)
 	if body != "" {
 		r.Header.Set("Content-Type", "application/json")
@@ -544,7 +544,7 @@ func TestSourceFromRequest(t *testing.T) {
 
 	mk := func(tok string) *http.Request {
 		r := httptest.NewRequest("GET", "/api/findings/1", nil)
-		r.Host = testHost
+		asOperator(r)
 		r.Header.Set("Authorization", "Bearer "+tok)
 		return r
 	}

@@ -39,7 +39,7 @@ The existing source-checkout command remains supported:
 
     go run -buildvcs=true ./cmd/scrutineer -skills ./skills
 
-Then open http://127.0.0.1:8080. The explicit `-skills ./skills` directory makes the checkout command useful while developing skills because it overrides the copies embedded in the binary. It is optional for ordinary use because Scrutineer ships its built-in skills and per-ecosystem runner profiles inside the executable.
+Then open the `http://127.0.0.1:8080/login?token=...` link Scrutineer logs on first run, which signs the browser in. The link is printed once, and the token stays in `data/operator-token` for later sign-ins and for scripts calling `/api/v1` (see [docs/api.md](docs/api.md#operator-api-apiv1)). The explicit `-skills ./skills` directory makes the checkout command useful while developing skills because it overrides the copies embedded in the binary. It is optional for ordinary use because Scrutineer ships its built-in skills and per-ecosystem runner profiles inside the executable.
 
 The `-buildvcs=true` flag includes the source commit in `go run` builds. Settings > About shows that commit, with a `-dirty` suffix for local changes, and its commit date. Ordinary `go build` commands include this metadata automatically in a Git checkout.
 
@@ -201,7 +201,7 @@ Before each scan, lockfiles, minified bundles, and generated trees are stripped 
 
 Scrutineer can ingest findings produced elsewhere so they enter the same triage and disclosure workflow:
 
-    curl --data-binary @report.sarif http://127.0.0.1:8080/api/v1/import
+    curl -H "Authorization: Bearer $(cat data/operator-token)" --data-binary @report.sarif http://127.0.0.1:8080/api/v1/import
 
 SARIF 2.1.0, CSV, markdown, and a minimal JSON shape are all accepted; the format is sniffed from the body. See [docs/import.md](docs/import.md) for the full request and response shape, the per-format field mapping, and how to add support for a new format.
 
@@ -266,7 +266,7 @@ Or with a Claude Code OAuth token instead of an API key:
 
 For codex or opencode, pass `-e CODEX_API_KEY=...` / `-e OPENAI_API_KEY=...` (or `ANTHROPIC_API_KEY` for opencode with an Anthropic model) and add `-backend codex` / `-backend opencode` to the command. For copilot, pass `-e GH_TOKEN=...` (a fine-grained PAT or `gh auth token` value; classic `ghp_` PATs are rejected by Copilot CLI) and add `-backend copilot`.
 
-Always bind to `127.0.0.1`: the UI has no authentication, so binding to `0.0.0.0` exposes your findings database to anyone on the network.
+Always bind to `127.0.0.1`: the operator token is the only credential on the UI, so binding to `0.0.0.0` leaves your findings database one leaked token away from anyone on the network. The first-run login link is in `docker logs`, and `docker exec <container> cat /data/operator-token` prints the token later.
 
 If a container runtime (docker, rootless podman, or Apple's `container`) is available on the host, scrutineer runs each scan in an ephemeral container for isolation. The runner image is published to GHCR as a multi-arch manifest (`linux/amd64` and `linux/arm64`) and pulled automatically on first use:
 

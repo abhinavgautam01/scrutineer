@@ -2,11 +2,11 @@
 
 Scrutineer can ingest vulnerability reports produced by external scanners or written by hand and turn them into the same `Repository`, `Scan`, and `Finding` rows a native scan produces. Imported findings carry through the rest of the workflow unchanged: `verify`, `reachability`, `patch`, `disclose`, and the dedup-on-rescan machinery all treat them as first-class.
 
-The endpoint is `POST /api/v1/import` on the localhost-only `/api/v1` surface, so no bearer token is required and the host-header check applies. The body is sniffed; the format is not in the URL.
+The endpoint is `POST /api/v1/import` on the operator `/api/v1` surface, so the request needs the operator token as a bearer and a loopback `Host` (see [the API overview](api.md#operator-api-apiv1)). The body is sniffed; the format is not in the URL.
 
 ## Using it
 
-    curl --data-binary @report.sarif http://127.0.0.1:8080/api/v1/import
+    curl -H "Authorization: Bearer $(cat data/operator-token)" --data-binary @report.sarif http://127.0.0.1:8080/api/v1/import
 
 The request body is the report itself, up to 16 MiB. The response is JSON:
 
@@ -35,7 +35,7 @@ The request body is the report itself, up to 16 MiB. The response is JSON:
 
 When the report carries no repository (most pentest writeups, the minimal-JSON shape with `repository: ""`), pass `?repo=<https-url>`:
 
-    curl --data-binary @pentest.md "http://127.0.0.1:8080/api/v1/import?repo=https://github.com/example/widget"
+    curl -H "Authorization: Bearer $(cat data/operator-token)" --data-binary @pentest.md "http://127.0.0.1:8080/api/v1/import?repo=https://github.com/example/widget"
 
 `?repo=` always wins over any provenance in the body, so it doubles as an override when a CodeQL run reports the wrong URL.
 
@@ -74,7 +74,7 @@ An imported `file://` repository is usable only when that exact local directory 
 
 To import without priming this funnel, pass `?revalidate=false`:
 
-    curl --data-binary @bundle.json "http://127.0.0.1:8080/api/v1/import?revalidate=false"
+    curl -H "Authorization: Bearer $(cat data/operator-token)" --data-binary @bundle.json "http://127.0.0.1:8080/api/v1/import?revalidate=false"
 
 The findings still land and no finding-level work is enqueued. A remote repository may still receive the single metadata onboarding run described above. The natural use is ingesting findings that have already been through an audit elsewhere — a trusted [sharing bundle](encrypted-sharing.md) arrives carrying the producer's full audit narrative (`boundary`, `validation`, `prior_art`, `reach`, `rating`), so re-running even the cheap classifier on it is redundant spend. The default is `revalidate=true`; a value that is neither `true`/`false` nor `1`/`0` is rejected with `400` rather than silently treated as on, so a caller that meant to disable the funnel is never billed for it by a typo. (The toggle has no effect on the unrecognised-format fallback below: those findings come from the `ingest` skill asynchronously and are not put through the import-time enqueue.)
 

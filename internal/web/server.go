@@ -95,6 +95,10 @@ type Server struct {
 	// every container request carries.
 	ModelProxy *worker.ModelProxy
 
+	// OperatorToken is the credential the browser UI and /api/v1 require on
+	// top of the loopback Host check. Empty refuses every such request.
+	OperatorToken string
+
 	// SkillsRepoSHA pins the commit of -skills-repo loaded at startup. Set
 	// once by main after loadSkills resolves it; stamped onto every Scan
 	// row enqueueSkillWith creates so two runs a week apart can be told
@@ -507,7 +511,6 @@ func (s *Server) ecosystemsPrefetch(repoID uint) {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("GET /static/", http.FileServerFS(staticFS))
 	mux.HandleFunc("GET /events", s.events)
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("GET /repositories", s.repoList)
@@ -592,10 +595,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /packages/{id}", s.packageShow)
 	mux.HandleFunc("GET /advisories", s.advisoriesList)
 	mux.HandleFunc("GET /advisories/{id}/certificate.json", s.advisoryCertificateDownload)
-	// No method in the pattern: the handler 404s non-POST itself so a
-	// federation-capable build cannot be fingerprinted by the 405 the
-	// mux would otherwise answer.
-	mux.HandleFunc("/claim-check", s.claimCheck)
 	mux.HandleFunc("GET /scans/{id}", s.scanShow)
 	mux.HandleFunc("GET /scans/{id}/report.md", s.scanReport)
 	mux.HandleFunc("POST /scans/{id}/retry", s.scanRetry)
@@ -630,10 +629,19 @@ func (s *Server) Handler() http.Handler {
 
 	// API routes get bearer-auth middleware and skip the browser CSRF checks;
 	// skills call these from inside a scan workspace, not from a browser.
-	// /api/v1/* are unauthenticated JSONL export endpoints sharing the
-	// browser's host-only boundary; see threatmodel.md.
+	// /api/v1/* are the operator's export, import and delete endpoints and
+	// share the browser's boundary: loopback Host plus the operator token;
+	// see threatmodel.md.
 	root := http.NewServeMux()
-	root.Handle("/api/v1/", securityHeaders(http.StripPrefix(exportPrefix, s.exportHandler())))
+	root.Handle("/api/v1/", securityHeaders(s.requireOperator(http.StripPrefix(exportPrefix, s.exportHandler()))))
+	// Reachable without the operator token: the login page has to be, and
+	// claim-check is called by federation peers through a reverse proxy.
+	root.Handle("GET /static/", securityHeaders(http.FileServerFS(staticFS)))
+	root.Handle("GET /login", securityHeaders(http.HandlerFunc(s.login)))
+	// No method in the pattern: the handler 404s non-POST itself so a
+	// federation-capable build cannot be fingerprinted by the 405 the
+	// mux would otherwise answer.
+	root.Handle("/claim-check", securityHeaders(http.HandlerFunc(s.claimCheck)))
 	// More specific than "/api/", so it wins the mux match and gets its own
 	// access rule rather than the scan-token auth apiHandler applies; see
 	// openAPISpecHandler.
@@ -642,7 +650,7 @@ func (s *Server) Handler() http.Handler {
 	if s.ModelProxy != nil {
 		root.Handle(worker.ModelProxyPathPrefix+"/", s.ModelProxy)
 	}
-	root.Handle("/", securityHeaders(mux))
+	root.Handle("/", securityHeaders(s.requireOperator(mux)))
 	return logRequests(s.Log, root)
 }
 

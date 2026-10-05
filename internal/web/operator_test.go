@@ -1,0 +1,143 @@
+package web
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+func serve(s *Server, r *http.Request) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	return w
+}
+
+func TestRequireOperatorGatesUI(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	for _, tc := range []struct {
+		name   string
+		cookie string
+		auth   string
+		want   int
+	}{
+		{"no credential", "", "", http.StatusUnauthorized},
+		{"wrong cookie", "wrong", "", http.StatusUnauthorized},
+		{"wrong bearer", "", "Bearer wrong", http.StatusUnauthorized},
+		{"wrong bearer beside a valid cookie", testOperatorToken, "Bearer wrong", http.StatusUnauthorized},
+		{"cookie", testOperatorToken, "", http.StatusOK},
+		{"bearer", "", "Bearer " + testOperatorToken, http.StatusOK},
+	} {
+		r := httptest.NewRequest("GET", "/repositories", nil)
+		r.Host = testHost
+		if tc.cookie != "" {
+			r.AddCookie(&http.Cookie{Name: operatorCookie, Value: tc.cookie})
+		}
+		if tc.auth != "" {
+			r.Header.Set("Authorization", tc.auth)
+		}
+		if w := serve(s, r); w.Code != tc.want {
+			t.Errorf("%s: status %d, want %d", tc.name, w.Code, tc.want)
+		}
+	}
+}
+
+func TestRequireOperatorKeepsHostCheck(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	r := httptest.NewRequest("GET", "/repositories", nil)
+	r.Host = "evil.example:8080"
+	r.Header.Set("Authorization", "Bearer "+testOperatorToken)
+	if w := serve(s, r); w.Code != http.StatusForbidden {
+		t.Errorf("status %d, want 403", w.Code)
+	}
+}
+
+func TestRequireOperatorFailsClosedWithoutToken(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	s.OperatorToken = ""
+
+	r := httptest.NewRequest("GET", "/repositories", nil)
+	r.Host = testHost
+	r.AddCookie(&http.Cookie{Name: operatorCookie, Value: ""})
+	if w := serve(s, r); w.Code != http.StatusUnauthorized {
+		t.Errorf("status %d, want 401", w.Code)
+	}
+	r = httptest.NewRequest("GET", "/login?token=", nil)
+	r.Host = testHost
+	if w := serve(s, r); w.Code != http.StatusUnauthorized {
+		t.Errorf("login: status %d, want 401", w.Code)
+	}
+}
+
+func TestLoginSetsOperatorCookie(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	r := httptest.NewRequest("GET", "/login?token="+testOperatorToken, nil)
+	r.Host = testHost
+	w := serve(s, r)
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/" {
+		t.Fatalf("status %d Location %q, want 303 to /", w.Code, w.Header().Get("Location"))
+	}
+	cookies := w.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("got %d cookies, want 1", len(cookies))
+	}
+	c := cookies[0]
+	if c.Name != operatorCookie || c.Value != testOperatorToken || !c.HttpOnly || c.SameSite != http.SameSiteStrictMode {
+		t.Errorf("cookie = %+v, want HttpOnly SameSite=Strict operator cookie", c)
+	}
+
+	r = httptest.NewRequest("GET", "/repositories", nil)
+	r.Host = testHost
+	r.AddCookie(c)
+	if w := serve(s, r); w.Code != http.StatusOK {
+		t.Errorf("with login cookie: status %d, want 200", w.Code)
+	}
+}
+
+func TestLoginRejectsWrongToken(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	for _, target := range []string{"/login", "/login?token=wrong"} {
+		r := httptest.NewRequest("GET", target, nil)
+		r.Host = testHost
+		w := serve(s, r)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("%s: status %d, want 401", target, w.Code)
+		}
+		if len(w.Result().Cookies()) != 0 {
+			t.Errorf("%s: set a cookie on a rejected login", target)
+		}
+	}
+
+	r := httptest.NewRequest("GET", "/login?token="+testOperatorToken, nil)
+	r.Host = "evil.example:8080"
+	if w := serve(s, r); w.Code != http.StatusForbidden {
+		t.Errorf("non-loopback Host: status %d, want 403", w.Code)
+	}
+}
+
+func TestOperatorExemptRoutes(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	r := httptest.NewRequest("GET", "/static/app.js", nil)
+	r.Host = testHost
+	if w := serve(s, r); w.Code != http.StatusOK {
+		t.Errorf("static: status %d, want 200", w.Code)
+	}
+
+	// Without a federation salt claim-check answers 404, not the 401 the
+	// operator gate would.
+	r = httptest.NewRequest("POST", "/claim-check", nil)
+	r.Host = testHost
+	if w := serve(s, r); w.Code != http.StatusNotFound {
+		t.Errorf("claim-check: status %d, want 404", w.Code)
+	}
+}

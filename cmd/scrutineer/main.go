@@ -577,7 +577,7 @@ func isLoopbackListenAddr(addr string) bool {
 
 func warnIfNonLoopbackListenAddr(log *slog.Logger, addr string) {
 	if !isLoopbackListenAddr(addr) {
-		log.Warn("scrutineer has no authentication; a non-loopback bind exposes the UI and API to the network", "addr", addr)
+		log.Warn("a non-loopback bind exposes the UI and API to the network with the operator token as their only credential", "addr", addr)
 	}
 }
 
@@ -614,6 +614,7 @@ func configureBackendEnvironment(f *flags, log *slog.Logger) {
 	}
 }
 
+//nolint:maintidx // flat: startup wiring, one guarded step per subsystem
 func run(log *slog.Logger) error {
 	f := parseFlags()
 
@@ -754,6 +755,9 @@ func run(log *slog.Logger) error {
 
 	srv, err := web.New(gdb, q, log, broker, w)
 	if err != nil {
+		return err
+	}
+	if err := configureOperatorToken(srv, f, log); err != nil {
 		return err
 	}
 	srv.SkillsRepoSHA = skillsRepoSHA
