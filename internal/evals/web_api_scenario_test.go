@@ -75,6 +75,17 @@ func TestWebAPISessionScenarioRejectsGuardedHandlerFalsePositive(t *testing.T) {
 	if missed, extra := judgeOutcomes(t, scenario, falsePositive); missed != 1 || extra != 1 {
 		t.Errorf("false positive alone: missed=%d unexpected=%d, want 1 and 1", missed, extra)
 	}
+	// The display-name route is registered beside its handler, so a false
+	// positive cited at the route rather than the handler is caught too.
+	routeCitation := Finding{
+		Title:    "Display name route accepts cross-site form posts",
+		CWE:      "CWE-352",
+		Location: fixtureLocation(t, "web-api-app", "services/site/display_name.py", `"/api/display-name"`),
+		Trace:    "The POST /api/display-name route is reachable from any origin.",
+	}
+	if missed, extra := judgeOutcomes(t, scenario, truePositive, routeCitation); missed != 0 || extra != 1 {
+		t.Errorf("false positive cited at the route: missed=%d unexpected=%d, want 0 and 1", missed, extra)
+	}
 }
 
 // judgeOutcomes counts a forbidden report term as unexpected, as Runner does.

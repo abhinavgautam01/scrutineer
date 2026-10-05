@@ -10,5 +10,3 @@ should_find:
     required: true
 should_not_find:
   - path: services/site/display_name.py
-    evidence_contains:
-      - display_name

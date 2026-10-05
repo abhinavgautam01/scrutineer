@@ -9,3 +9,7 @@ def update_display_name(values, headers, session, account, origin):
         return 403, {}, {"error": "token rejected"}
     account["name"] = values.get("name", [account["name"]])[0]
     return 200, {}, {"name": account["name"]}
+
+
+# Routes this module serves, looked up by the site's dispatcher.
+ROUTES = {("POST", "/api/display-name"): update_display_name}

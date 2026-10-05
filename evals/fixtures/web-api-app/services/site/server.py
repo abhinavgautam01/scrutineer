@@ -5,7 +5,7 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlsplit
 
-from display_name import update_display_name
+from display_name import ROUTES as DISPLAY_NAME_ROUTES
 
 
 ACCOUNTS = {"demo": {"password": "demo-password", "email": "demo@example.test", "name": "Demo"}}
@@ -37,8 +37,9 @@ def dispatch(method, target, headers, body=""):
     if method == "GET" and url.path == "/api/email":
         account["email"] = values.get("email", [account["email"]])[0]
         return 200, {}, {"email": account["email"]}
-    if method == "POST" and url.path == "/api/display-name":
-        return update_display_name(values, headers, session, account, ORIGIN)
+    handler = DISPLAY_NAME_ROUTES.get((method, url.path))
+    if handler:
+        return handler(values, headers, session, account, ORIGIN)
     return 404, {}, {"error": "not found"}
 
 
