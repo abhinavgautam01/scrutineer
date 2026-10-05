@@ -14,7 +14,7 @@ type FeedbackConfirmation struct {
 	ID        uint   `gorm:"primarykey"`
 	ReviewID  uint   `gorm:"not null;index;uniqueIndex:idx_feedback_confirmation_scan,priority:1"`
 	ScanID    uint   `gorm:"not null;uniqueIndex:idx_feedback_confirmation_scan,priority:2"`
-	FindingID uint   `gorm:"not null"`
+	FindingID uint   `gorm:"not null;index"`
 	Commit    string `gorm:"not null"`
 	CreatedAt time.Time
 }

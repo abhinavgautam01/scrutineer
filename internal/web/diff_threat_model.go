@@ -53,7 +53,14 @@ func (s *Server) autoUpdateThreatModel(scan *db.Scan) {
 		if err != nil {
 			return "", err
 		}
-		return feedbackpromotion.Preserve(previous, kept)
+		// Carry over only promotions whose decision is still eligible, so a
+		// reopened or superseded one leaves the stored contract here.
+		eligible, err := db.EligibleFeedbackReviewIDs(s.DB, scan.RepositoryID)
+		if err != nil {
+			return "", err
+		}
+		active := feedbackpromotion.Filter(previous, func(id uint) bool { return eligible[id] })
+		return feedbackpromotion.Preserve(active, kept)
 	}); err != nil {
 		s.markThreatModelUpdate(scan, "skipped_update_error", false, err.Error())
 		s.Log.Warn("threat-model update: save repository model", "scan", scan.ID, "repo", scan.RepositoryID, "err", err)

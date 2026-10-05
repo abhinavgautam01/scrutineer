@@ -2,8 +2,6 @@ package worker
 
 import (
 	"fmt"
-	"regexp"
-	"strconv"
 
 	"scrutineer/internal/db"
 	"scrutineer/internal/feedbackpromotion"
@@ -15,41 +13,41 @@ import (
 // promotes it into the repository threat model.
 const FeedbackPromotionCommits = 3
 
-var analystFeedbackCitation = regexp.MustCompile(`analyst_feedback:\s*(\d+)`)
-
-// citedReviewIDs extracts the distinct review IDs a revalidate reason cites.
-func citedReviewIDs(reason string) []uint {
-	var ids []uint
+// reliedReviewIDs returns the distinct positive review IDs a revalidate report
+// lists in analyst_feedback_ids. Only that structured field counts: a mention
+// of a decision in the free-text reason, even one saying it was not reused,
+// records nothing.
+func reliedReviewIDs(ids []uint) []uint {
+	var out []uint
 	seen := map[uint]bool{}
-	for _, m := range analystFeedbackCitation.FindAllStringSubmatch(reason, -1) {
-		n, err := strconv.ParseUint(m[1], 10, 32)
-		if err != nil || n == 0 || seen[uint(n)] {
+	for _, id := range ids {
+		if id == 0 || seen[id] {
 			continue
 		}
-		seen[uint(n)] = true
-		ids = append(ids, uint(n))
+		seen[id] = true
+		out = append(out, id)
 	}
-	return ids
+	return out
 }
 
-// recordFeedbackConfirmations counts a false_positive revalidate that cites
+// recordFeedbackConfirmations counts a false_positive revalidate that relied on
 // eligible analyst feedback and promotes decisions that reach the threshold.
 // Bookkeeping failures are reported as events so they never lose the verdict.
-func (w *Worker) recordFeedbackConfirmations(scan *db.Scan, f *db.Finding, reason string, emit func(Event)) {
-	if err := w.confirmFeedback(scan, f, reason, emit); err != nil {
+func (w *Worker) recordFeedbackConfirmations(scan *db.Scan, f *db.Finding, relied []uint, emit func(Event)) {
+	if err := w.confirmFeedback(scan, f, relied, emit); err != nil {
 		emit(Event{Kind: KindError, Text: "analyst feedback confirmation: " + err.Error()})
 	}
 }
 
-func (w *Worker) confirmFeedback(scan *db.Scan, f *db.Finding, reason string, emit func(Event)) error {
-	ids := citedReviewIDs(reason)
+func (w *Worker) confirmFeedback(scan *db.Scan, f *db.Finding, relied []uint, emit func(Event)) error {
+	ids := reliedReviewIDs(relied)
 	path := findingnorm.FindingPath(f.SubPath, f.Location)
 	if len(ids) == 0 || scan.Commit == "" || path == "" {
 		return nil
 	}
 	eligible, err := db.EligibleFeedbackForReviews(w.DB, f.RepositoryID, path, ids)
 	if err != nil {
-		return fmt.Errorf("load cited feedback: %w", err)
+		return fmt.Errorf("load relied feedback: %w", err)
 	}
 	for _, review := range eligible {
 		if review.FindingID == f.ID {
@@ -133,9 +131,16 @@ func promotionConfirmations(rows []db.FeedbackConfirmation) []feedbackpromotion.
 // activeThreatModel drops promoted entries whose decision is no longer
 // eligible, so a reopened or superseded decision never suppresses anything
 // even before the stored contract is tidied.
-func (w *Worker) activeThreatModel(repoID uint, model string) (string, error) {
+func (w *Worker) activeThreatModel(repoID uint, model, skillName string) (string, error) {
 	if !feedbackpromotion.HasPromoted(model) {
 		return model, nil
+	}
+	// The threat-model skill must not see promotions at all. It could re-emit
+	// one without promoted_from, which Preserve would then keep as a
+	// model-authored item no staging filter retires. Preserve re-adds the
+	// host's own entries from the previous contract on refresh.
+	if skillName == threatModelSkillName {
+		return feedbackpromotion.StripPromoted(model), nil
 	}
 	eligible, err := db.EligibleFeedbackReviewIDs(w.DB, repoID)
 	if err != nil {

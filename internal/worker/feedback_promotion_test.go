@@ -81,7 +81,7 @@ func (p *promotionFixture) parse(scan *db.Scan, report string) {
 func (p *promotionFixture) cite(commit string) {
 	p.t.Helper()
 	f := p.newFinding("parse.go:20")
-	p.parse(p.newScan(commit, f), fmt.Sprintf(`{"verdict":"false_positive","reason":"analyst_feedback: %d bound still at parse.go:5"}`, p.reviewID))
+	p.parse(p.newScan(commit, f), fmt.Sprintf(`{"verdict":"false_positive","reason":"bound still at parse.go:5","analyst_feedback_ids":[%d]}`, p.reviewID))
 }
 
 func (p *promotionFixture) model() string {
@@ -187,15 +187,18 @@ func TestFeedbackSourceCommitDoesNotReachThreshold(t *testing.T) {
 func TestFeedbackRecordsNothingForOtherCitations(t *testing.T) {
 	p := newPromotionFixture(t, promotionModel)
 	f := p.newFinding("parse.go:20")
-	cited := fmt.Sprintf("analyst_feedback: %d", p.reviewID)
+	relied := fmt.Sprintf(`"analyst_feedback_ids":[%d]`, p.reviewID)
 	other := p.newFinding("other.go:1")
-	p.parse(p.newScan("c1", f), `{"verdict":"true_positive","reason":"`+cited+`"}`)
-	p.parse(p.newScan("c2", f), `{"verdict":"false_positive","reason":"no citation"}`)
-	p.parse(p.newScan("c3", f), `{"verdict":"false_positive","reason":"analyst_feedback: 9999"}`)
-	p.parse(p.newScan("c4", other), `{"verdict":"false_positive","reason":"`+cited+`"}`)
-	p.parse(p.newScan("", f), `{"verdict":"false_positive","reason":"`+cited+`"}`)
+	p.parse(p.newScan("c1", f), `{"verdict":"true_positive","reason":"r",`+relied+`}`)
+	p.parse(p.newScan("c2", f), `{"verdict":"false_positive","reason":"no feedback relied on"}`)
+	p.parse(p.newScan("c3", f), `{"verdict":"false_positive","reason":"r","analyst_feedback_ids":[9999]}`)
+	p.parse(p.newScan("c4", other), `{"verdict":"false_positive","reason":"r",`+relied+`}`)
+	p.parse(p.newScan("", f), `{"verdict":"false_positive","reason":"r",`+relied+`}`)
 	srcScan := p.newScan("c5", p.source)
-	p.parse(srcScan, `{"verdict":"false_positive","reason":"`+cited+`"}`)
+	p.parse(srcScan, `{"verdict":"false_positive","reason":"r",`+relied+`}`)
+	// A reason that names the decision while saying it was not reused records
+	// nothing: only the structured field counts.
+	p.parse(p.newScan("c6", f), fmt.Sprintf(`{"verdict":"false_positive","reason":"I did not reuse analyst_feedback: %d, the guard is gone"}`, p.reviewID))
 	if p.confirmations() != 0 {
 		t.Fatalf("confirmations = %d, want 0", p.confirmations())
 	}
@@ -230,7 +233,7 @@ func TestFeedbackRetriedScanDoesNotDoubleCount(t *testing.T) {
 	p := newPromotionFixture(t, promotionModel)
 	f := p.newFinding("parse.go:20")
 	scan := p.newScan("c1", f)
-	report := fmt.Sprintf(`{"verdict":"false_positive","reason":"analyst_feedback: %d analyst_feedback: %d"}`, p.reviewID, p.reviewID)
+	report := fmt.Sprintf(`{"verdict":"false_positive","reason":"r","analyst_feedback_ids":[%d,%d]}`, p.reviewID, p.reviewID)
 	p.parse(scan, report)
 	p.parse(scan, report)
 	if p.confirmations() != 1 {
@@ -244,7 +247,7 @@ func TestFeedbackBookkeepingFailureKeepsVerdict(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := p.newFinding("parse.go:20")
-	p.parse(p.newScan("c1", f), fmt.Sprintf(`{"verdict":"false_positive","reason":"analyst_feedback: %d"}`, p.reviewID))
+	p.parse(p.newScan("c1", f), fmt.Sprintf(`{"verdict":"false_positive","reason":"r","analyst_feedback_ids":[%d]}`, p.reviewID))
 	var errs int
 	for _, e := range p.events {
 		if e.Kind == KindError {
@@ -262,23 +265,7 @@ func TestStagedThreatModelDropsRetiredPromotion(t *testing.T) {
 	p.cite("c1")
 	p.cite("c2")
 	p.cite("c3")
-	stage := func() string {
-		work := t.TempDir()
-		var repo db.Repository
-		if err := p.w.DB.First(&repo, p.repo.ID).Error; err != nil {
-			t.Fatal(err)
-		}
-		scan := db.Scan{RepositoryID: repo.ID, Repository: repo}
-		skill := db.Skill{Name: "threat-model", Body: "# Test", Source: "ui"}
-		if _, err := p.w.stageWorkspace(context.Background(), work, filepath.Join(work, ".claude", "skills", "threat-model"), &scan, &skill); err != nil {
-			t.Fatal(err)
-		}
-		data, err := os.ReadFile(filepath.Join(work, "threat_model.json"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(data)
-	}
+	stage := func() string { return stagePromotionModel(t, p, deepDiveSkillName) }
 	if staged := stage(); len(promotedItems(t, staged)) != 1 {
 		t.Fatalf("active promotion missing: %s", staged)
 	}
@@ -338,5 +325,45 @@ func TestStageOldThreatModelStripsPromotions(t *testing.T) {
 	}
 	if strings.Contains(string(staged), "promoted_from") || !strings.Contains(string(staged), `"model"`) {
 		t.Fatalf("staged old model = %s", staged)
+	}
+}
+
+// stagePromotionModel stages the fixture repository for skillName and returns
+// the threat_model.json the skill would read.
+func stagePromotionModel(t *testing.T, p *promotionFixture, skillName string) string {
+	t.Helper()
+	work := t.TempDir()
+	var repo db.Repository
+	if err := p.w.DB.First(&repo, p.repo.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	scan := db.Scan{RepositoryID: repo.ID, Repository: repo}
+	skill := db.Skill{Name: skillName, Body: "# Test", Source: "ui"}
+	if _, err := p.w.stageWorkspace(context.Background(), work, filepath.Join(work, ".claude", "skills", skillName), &scan, &skill); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(work, "threat_model.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+// The threat-model skill never sees a promotion, even an eligible one, so it
+// cannot re-emit it without promoted_from and launder it into the contract.
+func TestThreatModelSkillStagedWithoutPromotions(t *testing.T) {
+	p := newPromotionFixture(t, promotionModel)
+	p.cite("c1")
+	p.cite("c2")
+	p.cite("c3")
+	if staged := stagePromotionModel(t, p, deepDiveSkillName); len(promotedItems(t, staged)) != 1 {
+		t.Fatalf("consumer skill lost the eligible promotion: %s", staged)
+	}
+	staged := stagePromotionModel(t, p, threatModelSkillName)
+	if strings.Contains(staged, "promoted_from") || len(promotedItems(t, staged)) != 0 {
+		t.Fatalf("threat-model skill saw a promotion: %s", staged)
+	}
+	if !strings.Contains(staged, `"model item"`) {
+		t.Fatalf("threat-model skill lost model-authored items: %s", staged)
 	}
 }

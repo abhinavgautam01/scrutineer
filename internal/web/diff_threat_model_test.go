@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -163,11 +164,18 @@ func TestMarkThreatModelUpdateKeepsCompletenessColumnInStep(t *testing.T) {
 func TestThreatModelRefreshKeepsPromotedFeedbackAndReflection(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
-	previous := `{"reflection_notes":[{"summary":"retained"}],"known_non_findings":[` +
-		`{"reported_as":"old model","why_safe":"w"},` +
-		`{"reported_as":"host","why_safe":"guarded","promoted_from":{"review_id":7,"finding_id":3,"source_commit":"abc","confirmations":[{"scan_id":1,"commit":"d"}]}}]}`
-	repo := db.Repository{URL: "https://example.com/promoted-refresh", Name: "promoted-refresh", ThreatModel: previous}
+	repo := db.Repository{URL: "https://example.com/promoted-refresh", Name: "promoted-refresh"}
 	if err := s.DB.Create(&repo).Error; err != nil {
+		t.Fatal(err)
+	}
+	reviewID := eligibleRejectionReview(t, s, repo.ID)
+	// "host" is backed by a still-rejected decision. "retired" names a decision
+	// that is no longer eligible, so the refresh must not carry it over.
+	previous := fmt.Sprintf(`{"reflection_notes":[{"summary":"retained"}],"known_non_findings":[`+
+		`{"reported_as":"old model","why_safe":"w"},`+
+		`{"reported_as":"host","why_safe":"guarded","promoted_from":{"review_id":%d,"finding_id":3,"source_commit":"abc","confirmations":[{"scan_id":1,"commit":"d"}]}},`+
+		`{"reported_as":"retired","why_safe":"w","promoted_from":{"review_id":%d}}]}`, reviewID, reviewID+1000)
+	if err := s.DB.Model(&repo).Update("threat_model", previous).Error; err != nil {
 		t.Fatal(err)
 	}
 	report := `{"description":"new","reflection_notes":[{"summary":"invented"}],"known_non_findings":[` +
@@ -194,7 +202,29 @@ func TestThreatModelRefreshKeepsPromotedFeedbackAndReflection(t *testing.T) {
 	if len(got.Items) != 2 || got.Items[0]["reported_as"] != "new model" || got.Items[1]["reported_as"] != "host" {
 		t.Fatalf("items = %v", got.Items)
 	}
-	if strings.Contains(repo.ThreatModel, "forged") || strings.Contains(repo.ThreatModel, "old model") {
+	if strings.Contains(repo.ThreatModel, "forged") || strings.Contains(repo.ThreatModel, "old model") || strings.Contains(repo.ThreatModel, "retired") {
 		t.Fatalf("model = %s", repo.ThreatModel)
 	}
+}
+
+// eligibleRejectionReview records a still-rejected false-positive decision with
+// a source snapshot, which is what makes a promotion eligible.
+func eligibleRejectionReview(t *testing.T, s *Server, repoID uint) uint {
+	t.Helper()
+	scan := db.Scan{RepositoryID: repoID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName, Commit: "abc"}
+	if err := s.DB.Create(&scan).Error; err != nil {
+		t.Fatal(err)
+	}
+	f := db.Finding{ScanID: scan.ID, RepositoryID: repoID, Title: "overflow", Severity: sevHigh, Location: "parse.go:10", Commit: "abc"}
+	if err := s.DB.Create(&f).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RejectFinding(s.DB, f.ID, "false_positive", "bounded at parse.go:5", "analyst"); err != nil {
+		t.Fatal(err)
+	}
+	reviews, err := db.ListFindingReviews(s.DB, f.ID)
+	if err != nil || len(reviews) != 1 {
+		t.Fatalf("reviews = %v, %v", reviews, err)
+	}
+	return reviews[0].ID
 }
