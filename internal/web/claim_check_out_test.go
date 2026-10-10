@@ -212,7 +212,7 @@ func TestFindingStatus_peerClaimBlocksReported(t *testing.T) {
 	// The finding page names the contact to coordinate through.
 	page := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/findings/"+strconv.FormatUint(uint64(f.ID), 10), nil)
-	req.Host = testHost
+	asOperator(req)
 	s.Handler().ServeHTTP(page, req)
 	if !strings.Contains(page.Body.String(), "peer@example.com") {
 		t.Error("the finding page must surface the peer contact")

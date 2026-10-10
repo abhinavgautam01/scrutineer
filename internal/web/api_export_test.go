@@ -85,7 +85,7 @@ func TestExportRepoFindings(t *testing.T) {
 	repoA := seedFindings(t, s)
 
 	r := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repoA.ID), 10)+"/findings?format=jsonl", nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 
@@ -244,7 +244,7 @@ func TestExportRepoFindings_severityFilter(t *testing.T) {
 	repoA := seedFindings(t, s)
 
 	r := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repoA.ID), 10)+"/findings?severity=High", nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 
@@ -271,7 +271,7 @@ func TestExportRepoFindings_scopeFindings(t *testing.T) {
 	titles := func(t *testing.T, qs string) []string {
 		t.Helper()
 		r := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10)+"/findings"+qs, nil)
-		r.Host = testHost
+		asOperator(r)
 		w := httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, r)
 		if w.Code != 200 {
@@ -312,7 +312,7 @@ func TestExportRepoFindings_unknownRepo(t *testing.T) {
 	defer done()
 
 	r := httptest.NewRequest("GET", "/api/v1/repositories/9999/findings", nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 
@@ -339,7 +339,7 @@ func TestAPIv1DeleteRepository(t *testing.T) {
 	s.DB.Create(&db.FindingNote{FindingID: finding.ID, Body: "note"})
 
 	r := httptest.NewRequest("DELETE", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10), nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 
@@ -375,7 +375,7 @@ func TestAPIv1DeleteRepositoryRejectsInFlightScans(t *testing.T) {
 			}
 
 			r := httptest.NewRequest("DELETE", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10), nil)
-			r.Host = testHost
+			asOperator(r)
 			w := httptest.NewRecorder()
 			s.Handler().ServeHTTP(w, r)
 
@@ -421,7 +421,7 @@ func TestAPIv1DeleteRepositoryRejectsInFlightFindingScopedScans(t *testing.T) {
 	}
 
 	r := httptest.NewRequest("DELETE", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10), nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 
@@ -488,7 +488,7 @@ func testAPIv1DeleteFinding(t *testing.T, foreignKeys bool) {
 	s.DB.Create(&db.ChatMessage{ConversationID: conv.ID, Role: db.ChatRoleUser, Content: "hello"})
 
 	r := httptest.NewRequest("DELETE", "/api/v1/findings/"+strconv.FormatUint(uint64(finding.ID), 10), nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 
@@ -558,7 +558,7 @@ func TestAPIv1DeleteFindingRejectsInFlightScans(t *testing.T) {
 			}
 
 			r := httptest.NewRequest("DELETE", "/api/v1/findings/"+strconv.FormatUint(uint64(finding.ID), 10), nil)
-			r.Host = testHost
+			asOperator(r)
 			w := httptest.NewRecorder()
 			s.Handler().ServeHTTP(w, r)
 
@@ -597,7 +597,7 @@ func TestExportFindings_acrossRepos(t *testing.T) {
 	seedFindings(t, s)
 
 	r := httptest.NewRequest("GET", "/api/v1/findings?format=jsonl", nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 
@@ -624,7 +624,7 @@ func TestExportFindings_filters(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest("GET", "/api/v1/findings?"+tc.qs, nil)
-			r.Host = testHost
+			asOperator(r)
 			w := httptest.NewRecorder()
 			s.Handler().ServeHTTP(w, r)
 			rows := readJSONL(t, w.Body.String())
@@ -640,7 +640,7 @@ func TestExportFindings_emptyDB(t *testing.T) {
 	defer done()
 
 	r := httptest.NewRequest("GET", "/api/v1/findings", nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 
@@ -675,7 +675,7 @@ func TestExportRepositories(t *testing.T) {
 	s.DB.Create(&db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanRunning, SkillName: "repo-overview", Commit: "def456"})
 
 	r := httptest.NewRequest("GET", "/api/v1/repositories", nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 	if w.Code != 200 {
@@ -725,7 +725,7 @@ func TestExportRepositories_noScans(t *testing.T) {
 	s.DB.Create(&repo)
 
 	r := httptest.NewRequest("GET", "/api/v1/repositories", nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 	if w.Code != 200 {
@@ -750,7 +750,7 @@ func TestExportScans(t *testing.T) {
 	seedFindings(t, s)
 
 	r := httptest.NewRequest("GET", "/api/v1/scans", nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 
@@ -766,7 +766,7 @@ func TestExportScans_skillFilter(t *testing.T) {
 	seedFindings(t, s)
 
 	r := httptest.NewRequest("GET", "/api/v1/scans?skill=metadata-fetch", nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 
@@ -793,18 +793,29 @@ func TestExportRejectsBadHost(t *testing.T) {
 	}
 }
 
-func TestExportNoBearerNeeded(t *testing.T) {
+func TestExportRequiresOperatorToken(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
 	seedFindings(t, s)
 
-	r := httptest.NewRequest("GET", "/api/v1/findings", nil)
-	r.Host = testHost
-	w := httptest.NewRecorder()
-	s.Handler().ServeHTTP(w, r)
-
-	if w.Code != 200 {
-		t.Fatalf("status %d, want 200", w.Code)
+	for _, tc := range []struct {
+		auth string
+		want int
+	}{
+		{"", http.StatusUnauthorized},
+		{"Bearer wrong", http.StatusUnauthorized},
+		{"Bearer " + testOperatorToken, http.StatusOK},
+	} {
+		r := httptest.NewRequest("GET", "/api/v1/findings", nil)
+		r.Host = testHost
+		if tc.auth != "" {
+			r.Header.Set("Authorization", tc.auth)
+		}
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, r)
+		if w.Code != tc.want {
+			t.Errorf("Authorization %q: status %d, want %d", tc.auth, w.Code, tc.want)
+		}
 	}
 }
 
@@ -815,7 +826,7 @@ func TestExportScans_statusFilter(t *testing.T) {
 	s.DB.Create(&db.Scan{RepositoryID: repoA.ID, Kind: "skill", Status: db.ScanQueued, SkillName: "queued-one"})
 
 	r := httptest.NewRequest("GET", "/api/v1/scans?status=done", nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 
@@ -836,7 +847,7 @@ func TestExportRejectsUnknownFormat(t *testing.T) {
 
 	for _, path := range []string{"/api/v1/repositories", "/api/v1/findings", "/api/v1/scans", "/api/v1/repositories/1/findings"} {
 		r := httptest.NewRequest("GET", path+"?format=csv", nil)
-		r.Host = testHost
+		asOperator(r)
 		w := httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, r)
 		if w.Code != 400 {
@@ -851,7 +862,7 @@ func TestExportRepoFindingsBundle(t *testing.T) {
 	repoA := seedFindings(t, s)
 
 	r := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repoA.ID), 10)+"/findings?format=bundle", nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 
@@ -917,7 +928,7 @@ func TestExportRepoFindingsBundle_localCheckoutUsesHTTPSOrigin(t *testing.T) {
 
 	r := httptest.NewRequest("GET", "/api/v1/repositories/"+
 		strconv.FormatUint(uint64(repo.ID), 10)+"/findings?format=bundle", nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
@@ -936,7 +947,7 @@ func TestExportRepoFindingsBundle_localCheckoutUsesHTTPSOrigin(t *testing.T) {
 	// remote-source path will clone it when verify (or any skill) first runs.
 	importReq := httptest.NewRequest("POST", "/api/v1/import?revalidate=false",
 		strings.NewReader(w.Body.String()))
-	importReq.Host = testHost
+	asOperator(importReq)
 	importW := httptest.NewRecorder()
 	s.Handler().ServeHTTP(importW, importReq)
 	if importW.Code != http.StatusCreated {
@@ -975,7 +986,7 @@ func TestExportRepoFindingsBundle_credentialedOriginDoesNotLeak(t *testing.T) {
 
 	r := httptest.NewRequest("GET", "/api/v1/repositories/"+
 		strconv.FormatUint(uint64(repo.ID), 10)+"/findings?format=bundle", nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
@@ -1038,7 +1049,7 @@ func TestExportBundleRoundTrip(t *testing.T) {
 
 	// Export as bundle.
 	exportReq := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10)+"/findings?format=bundle", nil)
-	exportReq.Host = testHost
+	asOperator(exportReq)
 	exportW := httptest.NewRecorder()
 	s.Handler().ServeHTTP(exportW, exportReq)
 	if exportW.Code != 200 {
@@ -1049,7 +1060,7 @@ func TestExportBundleRoundTrip(t *testing.T) {
 	// the import path creates a new repo row because the URL will
 	// match the existing one and deduplicate via FirstOrCreate).
 	importReq := httptest.NewRequest("POST", "/api/v1/import", strings.NewReader(exportW.Body.String()))
-	importReq.Host = testHost
+	asOperator(importReq)
 	importW := httptest.NewRecorder()
 	s.Handler().ServeHTTP(importW, importReq)
 	if importW.Code != 201 {
@@ -1097,7 +1108,7 @@ func TestExportBundleRoundTripPreservesModel(t *testing.T) {
 	})
 
 	exportReq := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10)+"/findings?format=bundle", nil)
-	exportReq.Host = testHost
+	asOperator(exportReq)
 	exportW := httptest.NewRecorder()
 	s.Handler().ServeHTTP(exportW, exportReq)
 	if exportW.Code != 200 {
@@ -1123,7 +1134,7 @@ func TestExportBundleRoundTripPreservesModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	importReq := httptest.NewRequest("POST", "/api/v1/import", strings.NewReader(string(body)))
-	importReq.Host = testHost
+	asOperator(importReq)
 	importW := httptest.NewRecorder()
 	s.Handler().ServeHTTP(importW, importReq)
 	if importW.Code != 201 {
@@ -1178,7 +1189,7 @@ func TestExportBundleWithSeverityFilter(t *testing.T) {
 	repoA := seedFindings(t, s)
 
 	r := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repoA.ID), 10)+"/findings?format=bundle&severity=High", nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 
@@ -1203,7 +1214,7 @@ func TestExportBundleRejectsGlobalEndpoint(t *testing.T) {
 
 	// format=bundle is only valid on the per-repo endpoint.
 	r := httptest.NewRequest("GET", "/api/v1/findings?format=bundle", nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 
@@ -1240,7 +1251,7 @@ func TestExportBundleEncryptedRoundTrip(t *testing.T) {
 
 	// Export encrypted.
 	r := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10)+"/findings?format=bundle&encrypt=1", nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 
@@ -1280,7 +1291,7 @@ func TestExportBundleEncryptedRoundTrip(t *testing.T) {
 
 	// Import the decrypted bundle (decrypt server-side this time).
 	importReq := httptest.NewRequest("POST", "/api/v1/import", bytes.NewReader(body))
-	importReq.Host = testHost
+	asOperator(importReq)
 	importW := httptest.NewRecorder()
 	s.Handler().ServeHTTP(importW, importReq)
 	if importW.Code != 201 {
@@ -1295,7 +1306,7 @@ func TestExportBundleEncryptNoRecipients(t *testing.T) {
 
 	// encrypt=1 with no recipients configured => 400.
 	r := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10)+"/findings?format=bundle&encrypt=1", nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 
@@ -1321,7 +1332,7 @@ func TestImportEncryptedNoIdentity(t *testing.T) {
 	// s.EncIdentities is nil — no identity configured.
 
 	r := httptest.NewRequest("POST", "/api/v1/import", bytes.NewReader(ct))
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 
@@ -1356,7 +1367,7 @@ func TestImportEncryptedMissingIdentityPlugin(t *testing.T) {
 	s.EncIdentities = []age.Identity{pluginID}
 
 	r := httptest.NewRequest("POST", "/api/v1/import", bytes.NewReader(ct))
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 
@@ -1385,7 +1396,7 @@ func TestImportEncryptedIdentityNonMatchIsNotAPluginFailure(t *testing.T) {
 	s.EncIdentities = []age.Identity{&rejectingImportIdentity{}}
 
 	r := httptest.NewRequest("POST", "/api/v1/import", bytes.NewReader(ct))
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 
@@ -1441,7 +1452,7 @@ func TestImportCorruptedCiphertext(t *testing.T) {
 	s.EncIdentities = []age.Identity{id}
 
 	r := httptest.NewRequest("POST", "/api/v1/import", bytes.NewReader(corrupted))
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 
@@ -1459,7 +1470,7 @@ func TestImportPlaintextStillWorksWithIdentityConfigured(t *testing.T) {
 
 	plain := `{"repository":"https://github.com/test/plain","tool":"test","findings":[{"title":"plain finding","severity":"Low"}]}`
 	r := httptest.NewRequest("POST", "/api/v1/import", strings.NewReader(plain))
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 
@@ -1477,7 +1488,7 @@ func TestExportEncryptRejectsWithoutBundle(t *testing.T) {
 	// to the plaintext NDJSON path. A request that asked for encryption and
 	// got cleartext is the worst failure mode for this feature.
 	r := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10)+"/findings?encrypt=1", nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 
@@ -1499,7 +1510,7 @@ func TestExportEncryptRejectedOnGlobalEndpoints(t *testing.T) {
 	// NDJSON when encryption was requested.
 	for _, path := range []string{"/api/v1/findings?encrypt=1", "/api/v1/scans?encrypt=1"} {
 		r := httptest.NewRequest("GET", path, nil)
-		r.Host = testHost
+		asOperator(r)
 		w := httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, r)
 		if w.Code != 400 {
@@ -1529,7 +1540,7 @@ func TestExportFindings_carriesDBFields(t *testing.T) {
 	})
 
 	r := httptest.NewRequest("GET", "/api/v1/findings", nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 
@@ -1575,7 +1586,7 @@ func TestExportScans_carriesDBFieldsAndHidesAPIToken(t *testing.T) {
 	})
 
 	r := httptest.NewRequest("GET", "/api/v1/scans", nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 
@@ -1697,7 +1708,7 @@ func TestExportBundle_carriesEnrichedFields(t *testing.T) {
 	repo := seedRichFinding(t, s, "https://github.com/test/enriched")
 
 	r := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10)+"/findings?format=bundle", nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 	if w.Code != 200 {
@@ -1753,7 +1764,7 @@ func TestExportBundleRoundTrip_carriesAllFields(t *testing.T) {
 
 	// Export.
 	er := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(src.ID), 10)+"/findings?format=bundle", nil)
-	er.Host = testHost
+	asOperator(er)
 	ew := httptest.NewRecorder()
 	s.Handler().ServeHTTP(ew, er)
 	if ew.Code != 200 {
@@ -1763,7 +1774,7 @@ func TestExportBundleRoundTrip_carriesAllFields(t *testing.T) {
 	// Import into a *different* repo (?repo=) so the finding lands fresh
 	// rather than deduping against the source row.
 	ir := httptest.NewRequest("POST", "/api/v1/import?repo=https://github.com/test/dest", strings.NewReader(ew.Body.String()))
-	ir.Host = testHost
+	asOperator(ir)
 	iw := httptest.NewRecorder()
 	s.Handler().ServeHTTP(iw, ir)
 	if iw.Code != 201 {
@@ -1839,7 +1850,7 @@ func TestImportLegacyBundle_minimalFieldsStillWork(t *testing.T) {
 		`"findings":[{"title":"old finding","description":"d","severity":"High","confidence":"high",` +
 		`"cwe":"CWE-79","location":"a.go:1","patch":"--- a\n+++ b\n"}]}`
 	r := httptest.NewRequest("POST", "/api/v1/import", strings.NewReader(legacy))
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 	if w.Code != 201 {
@@ -1874,7 +1885,7 @@ func TestExportBundle_scopeFindingsCuratesScanners(t *testing.T) {
 
 	bundleTitles := func(qs string) []string {
 		r := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10)+"/findings?format=bundle"+qs, nil)
-		r.Host = testHost
+		asOperator(r)
 		w := httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, r)
 		if w.Code != 200 {
@@ -1912,7 +1923,7 @@ func assertExportRejects(t *testing.T, s *Server, keyword string, cases []struct
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest("GET", tc.path, nil)
-			r.Host = testHost
+			asOperator(r)
 			w := httptest.NewRecorder()
 			s.Handler().ServeHTTP(w, r)
 			if w.Code != 400 {
@@ -1959,7 +1970,7 @@ func TestExportBundle_scopeFindingsCuratesEncrypted(t *testing.T) {
 	repo := seedScopedFindings(t, s)
 
 	r := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10)+"/findings?format=bundle&encrypt=1&scope=findings", nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 	if w.Code != 200 {
@@ -2001,7 +2012,7 @@ func TestExportBundle_includeAllCarriesArchival(t *testing.T) {
 	get := func(qs string) sharingFinding {
 		t.Helper()
 		r := httptest.NewRequest("GET", "/api/v1/repositories/"+id+"/findings?format=bundle"+qs, nil)
-		r.Host = testHost
+		asOperator(r)
 		w := httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, r)
 		if w.Code != 200 {
@@ -2086,7 +2097,7 @@ func TestExportBundleRoundTrip_includeAll(t *testing.T) {
 	src := seedRichFinding(t, s, "https://github.com/test/src2")
 
 	er := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(src.ID), 10)+"/findings?format=bundle&include=all", nil)
-	er.Host = testHost
+	asOperator(er)
 	ew := httptest.NewRecorder()
 	s.Handler().ServeHTTP(ew, er)
 	if ew.Code != 200 {
@@ -2095,7 +2106,7 @@ func TestExportBundleRoundTrip_includeAll(t *testing.T) {
 
 	// Import into a *different* repo so the finding lands fresh, not deduped.
 	ir := httptest.NewRequest("POST", "/api/v1/import?repo=https://github.com/test/dest2&revalidate=false", strings.NewReader(ew.Body.String()))
-	ir.Host = testHost
+	asOperator(ir)
 	iw := httptest.NewRecorder()
 	s.Handler().ServeHTTP(iw, ir)
 	if iw.Code != 201 {
@@ -2190,7 +2201,7 @@ func TestImportBundle_includeAllIdempotent(t *testing.T) {
 	src := seedRichFinding(t, s, "https://github.com/test/src3")
 
 	er := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(src.ID), 10)+"/findings?format=bundle&include=all", nil)
-	er.Host = testHost
+	asOperator(er)
 	ew := httptest.NewRecorder()
 	s.Handler().ServeHTTP(ew, er)
 	if ew.Code != 200 {
@@ -2201,7 +2212,7 @@ func TestImportBundle_includeAllIdempotent(t *testing.T) {
 	imp := func() {
 		t.Helper()
 		r := httptest.NewRequest("POST", "/api/v1/import?repo=https://github.com/test/dest3&revalidate=false", strings.NewReader(body))
-		r.Host = testHost
+		asOperator(r)
 		w := httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, r)
 		if w.Code != 201 {
@@ -2272,7 +2283,7 @@ func TestExportBundleEncryptedRoundTrip_includeAll(t *testing.T) {
 	src := seedRichFinding(t, s, "https://github.com/test/enc-archival")
 
 	r := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(src.ID), 10)+"/findings?format=bundle&include=all&encrypt=1", nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 	if w.Code != 200 {
@@ -2289,7 +2300,7 @@ func TestExportBundleEncryptedRoundTrip_includeAll(t *testing.T) {
 
 	// Import (server decrypts in place) into a fresh repo.
 	ir := httptest.NewRequest("POST", "/api/v1/import?repo=https://github.com/test/enc-dest&revalidate=false", bytes.NewReader(body))
-	ir.Host = testHost
+	asOperator(ir)
 	iw := httptest.NewRecorder()
 	s.Handler().ServeHTTP(iw, ir)
 	if iw.Code != 201 {

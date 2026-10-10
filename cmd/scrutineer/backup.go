@@ -203,15 +203,21 @@ func serverRunning(addr string) bool {
 	if err != nil {
 		return false
 	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "127.0.0.1"
-	}
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), serverDialTTL)
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(loopbackIfWildcard(host), port), serverDialTTL)
 	if err != nil {
 		return false
 	}
 	_ = conn.Close()
 	return true
+}
+
+// loopbackIfWildcard maps a wildcard listen host to the loopback address a
+// local client can reach it on.
+func loopbackIfWildcard(host string) string {
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		return "127.0.0.1"
+	}
+	return host
 }
 
 // resolveDataDir mirrors the server's precedence: an explicit flag wins over

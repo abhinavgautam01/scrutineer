@@ -12,9 +12,10 @@ info:
     is only valid while its originating scan is running, and only grants
     access to the repository the scan was issued against.
 
-    The `/v1/*` paths are an unauthenticated, localhost-only export surface
-    intended for external scripts (jq, cron, CI dumps). They emit JSONL and
-    rely on the same host-header check as the browser UI; see threatmodel.md.
+    The `/v1/*` paths are the operator's localhost-only export, import and
+    delete surface, intended for external scripts (jq, cron, CI dumps). They
+    require the operator token from `<data>/operator-token` and the same
+    host-header check as the browser UI; see docs/api.md and threatmodel.md.
 
 servers:
   - url: http://127.0.0.1:8080/api
@@ -33,7 +34,8 @@ paths:
 
         Two ways in. From localhost it is unauthenticated, because a caller
         discovering the API has no running scan to take a bearer token from;
-        the host check is the boundary, as on the browser UI. A skill inside
+        the host check is the boundary, without the operator token the
+        browser UI requires. A skill inside
         the runner container cannot pass that check -- it reaches the server
         through the egress proxy on the host endpoint `api_base` advertises,
         which forwards the original `Host` -- so it authenticates with the
@@ -628,10 +630,11 @@ paths:
         FindingReview row. Spot-check the queue to keep automated triage
         calibrated.
 
-        Instance-wide and unauthenticated; relies on the host-only
-        boundary like the other `/v1/*` exports. Not reachable with a
+        Instance-wide; requires the operator token like the other
+        `/v1/*` exports. Not reachable with a
         per-scan bearer token.
       operationId: getAuditQueue
+      security: [{ operatorToken: [] }]
       parameters:
         - name: limit
           in: query
@@ -657,9 +660,10 @@ paths:
         agreements between human verdict and automation, and the
         agreement rate (0..1). The audit page renders the same numbers.
 
-        Instance-wide and unauthenticated; relies on the host-only
-        boundary like the other `/v1/*` exports.
+        Instance-wide; requires the operator token like the other
+        `/v1/*` exports.
       operationId: getAuditMetrics
+      security: [{ operatorToken: [] }]
       responses:
         '200':
           description: OK
@@ -975,9 +979,9 @@ paths:
         repository columns, the latest scan summary, and the same curated
         findings count shown in the UI. Large metadata and ecosystems cache
         blobs are intentionally omitted to keep the payload suitable for
-        automation. No bearer token; localhost-only.
+        automation. Operator token; localhost-only.
       operationId: exportRepositories
-      security: []
+      security: [{ operatorToken: [] }]
       parameters:
         - name: format
           in: query
@@ -1003,7 +1007,7 @@ paths:
         cleanup path as the browser delete action. Not reachable with a
         per-scan bearer token.
       operationId: deleteRepository
-      security: []
+      security: [{ operatorToken: [] }]
       parameters:
         - $ref: '#/components/parameters/RepositoryID'
       responses:
@@ -1043,9 +1047,9 @@ paths:
         encrypted to every configured recipient. Adding `scope=findings` (either
         format) curates the export to the Findings bucket (deep-dive and
         vuln-scan audits plus operator imports), dropping per-repo scanner
-        noise. No bearer token; localhost-only.
+        noise. Operator token; localhost-only.
       operationId: exportRepositoryFindings
-      security: []
+      security: [{ operatorToken: [] }]
       parameters:
         - $ref: '#/components/parameters/RepositoryID'
         - name: format
@@ -1116,11 +1120,11 @@ paths:
     get:
       summary: Export findings across all repositories as JSONL
       description: |
-        Returns one JSON object per line (`application/x-ndjson`). No bearer
+        Returns one JSON object per line (`application/x-ndjson`). Operator
         token; localhost-only. Each line is a `FindingExport` carrying the
         full set of `db.Finding` columns.
       operationId: exportFindings
-      security: []
+      security: [{ operatorToken: [] }]
       parameters:
         - name: format
           in: query
@@ -1154,7 +1158,7 @@ paths:
         pointed at the finding are preserved with `finding_id` cleared. Not
         reachable with a per-scan bearer token.
       operationId: deleteFinding
-      security: []
+      security: [{ operatorToken: [] }]
       parameters:
         - name: id
           in: path
@@ -1172,12 +1176,12 @@ paths:
     get:
       summary: Export scans across all repositories as JSONL
       description: |
-        Returns one JSON object per line (`application/x-ndjson`). No bearer
+        Returns one JSON object per line (`application/x-ndjson`). Operator
         token; localhost-only. Each line is a `ScanExport` carrying the full
         set of `db.Scan` columns minus `api_token` (the per-scan bearer must
-        not leak through an unauthenticated channel).
+        not leak through an instance-wide export).
       operationId: exportScans
-      security: []
+      security: [{ operatorToken: [] }]
       parameters:
         - name: format
           in: query
@@ -1243,10 +1247,10 @@ paths:
         or binary) are transparently decrypted first when an identity file or
         plugin is configured (`-identity-file` or `-identity-plugin`); plaintext
         bodies pass through untouched.
-        No bearer token; localhost-only. See docs/import.md for the per-format
+        Operator token; localhost-only. See docs/import.md for the per-format
         field mapping.
       operationId: importFindings
-      security: []
+      security: [{ operatorToken: [] }]
       parameters:
         - name: repo
           in: query
@@ -1320,6 +1324,12 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
+    operatorToken:
+      type: http
+      scheme: bearer
+      description: |
+        The operator token from `<data>/operator-token`. The browser UI
+        sends it as the `operator` cookie that `/login` sets instead.
 
   parameters:
     RepositoryID:
@@ -1380,7 +1390,7 @@ components:
 
     RepositoryExport:
       description: |
-        Compact repository row used by the unauthenticated JSONL export. This
+        Compact repository row used by the operator JSONL export. This
         intentionally omits large metadata and ecosystems cache blobs.
       type: object
       required: [id, url, name, findings_count, last_scan]
@@ -1844,7 +1854,7 @@ components:
 
     FindingExport:
       description: |
-        Full db.Finding row used by the unauthenticated JSONL export. Adds
+        Full db.Finding row used by the operator JSONL export. Adds
         the dedup, denormalised, and timestamp columns that the bearer-only
         FindingDetail leaves out.
       allOf:
@@ -2001,7 +2011,7 @@ components:
 
     ScanExport:
       description: |
-        Full db.Scan row used by the unauthenticated JSONL export, minus
+        Full db.Scan row used by the operator JSONL export, minus
         api_token.
       allOf:
         - $ref: '#/components/schemas/ScanDetail'
