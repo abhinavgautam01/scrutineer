@@ -41,8 +41,8 @@ const (
 	AuditEventDisclosureChannelChanged        = "disclosure.channel_changed"
 )
 
-// AuditKeyRepositoryID is the payload key every disclosure event uses for the
-// repository it belongs to.
+// AuditKeyRepositoryID is the payload key audit events use for the repository
+// they belong to.
 const AuditKeyRepositoryID = "repository_id"
 
 type auditScanKey struct{}
