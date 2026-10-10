@@ -2,20 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "revalidate report",
   "type": "object",
-  "required": [
-    "verdict",
-    "reason"
-  ],
+  "required": ["verdict", "reason"],
   "additionalProperties": false,
   "properties": {
     "verdict": {
       "type": "string",
-      "enum": [
-        "true_positive",
-        "false_positive",
-        "already_fixed",
-        "uncertain"
-      ],
+      "enum": ["true_positive", "false_positive", "already_fixed", "uncertain"],
       "description": "Cheap classifier outcome from prose plus git history. Never asserts true_positive from the reproduction running; this skill does not execute."
     },
     "reason": {
@@ -24,23 +16,12 @@
     },
     "privilege_required": {
       "type": "string",
-      "enum": [
-        "none",
-        "authenticated",
-        "admin",
-        "maintainer",
-        "local-root"
-      ],
+      "enum": ["none", "authenticated", "admin", "maintainer", "local-root"],
       "description": "Minimum attacker position needed to reach the sink as the finding describes it. none = unauthenticated network peer or file input. authenticated = any logged-in user. admin = elevated role in the application. maintainer = repository or package publish rights. local-root = already root on the host. Recorded discretely so it is not buried in the severity-adjustment reason."
     },
     "adjusted_severity": {
       "type": "string",
-      "enum": [
-        "Critical",
-        "High",
-        "Medium",
-        "Low"
-      ],
+      "enum": ["Critical", "High", "Medium", "Low"],
       "description": "Optional severity override using the precondition rubric. Omit to leave the original severity in place."
     },
     "adjusted_severity_reason": {
@@ -51,38 +32,18 @@
       "type": "array",
       "maxItems": 20,
       "uniqueItems": true,
-      "items": {
-        "type": "integer",
-        "minimum": 1
-      },
+      "items": { "type": "integer", "minimum": 1 },
       "description": "review_id of each staged analyst_feedback decision whose reason this verdict relied on after current-code evidence confirmed it still holds. Omit or leave empty when no decision was relied on."
     }
   },
   "dependentRequired": {
-    "adjusted_severity": [
-      "adjusted_severity_reason"
-    ],
-    "adjusted_severity_reason": [
-      "adjusted_severity"
-    ]
+    "adjusted_severity": ["adjusted_severity_reason"],
+    "adjusted_severity_reason": ["adjusted_severity"]
   },
   "allOf": [
     {
-      "if": {
-        "properties": {
-          "verdict": {
-            "enum": [
-              "true_positive",
-              "uncertain"
-            ]
-          }
-        }
-      },
-      "then": {
-        "required": [
-          "privilege_required"
-        ]
-      }
+      "if": { "properties": { "verdict": { "enum": ["true_positive", "uncertain"] } } },
+      "then": { "required": ["privilege_required"] }
     }
   ]
 }
