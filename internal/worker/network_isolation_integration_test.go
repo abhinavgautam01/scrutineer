@@ -275,8 +275,8 @@ rec host_proxied curl -sS --max-time 10 -o /dev/null -w '%{http_code}' http://ho
 rec connect_proxied curl -sS -p --max-time 10 -o /dev/null -w '%{http_connect}' https://host.docker.internal:@PORT@/@connect_proxied@
 `
 
-// directProbeNames are the probes whose markers must never reach the listener.
-var directProbeNames = []string{"tcp_alias", "udp_alias", "dtcp_alias", "host_proxied", "connect_proxied"}
+// markerProbeNames are the probes whose markers must never reach the listener.
+var markerProbeNames = []string{"tcp_alias", "udp_alias", "dtcp_alias", "host_proxied", "connect_proxied"}
 
 func directScript(port string, markers map[string]string) string {
 	pairs := []string{"@PORT@", port}
@@ -320,7 +320,7 @@ func TestIntegration_NetworkIsolationDirectEgress(t *testing.T) {
 	ctl := runControls(t, env, l)
 
 	markers := map[string]string{}
-	for _, n := range directProbeNames {
+	for _, n := range markerProbeNames {
 		markers[n] = newMarker(t, n)
 	}
 	work := newScanWorkspace(t)
