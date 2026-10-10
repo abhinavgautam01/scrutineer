@@ -1752,6 +1752,7 @@ func (s *Server) runFindingSkill(w http.ResponseWriter, r *http.Request, name st
 		}
 	}
 	opts.FindingID = new(f.ID)
+	opts.AuditDisclosure = externalReportingSkill(name)
 	if name == verifySkillName {
 		opts.VerificationFeedback = r.PostForm.Get("feedback")
 	}
@@ -3285,7 +3286,7 @@ func (s *Server) repoDisclosureChannel(w http.ResponseWriter, r *http.Request) {
 	// Not trimmed here: SetDisclosureChannel trims, and it has to, since the
 	// comparison that decides whether to re-stamp the route record's
 	// verified_at is made against the trimmed value.
-	if err := db.SetDisclosureChannel(s.DB, repo.ID, r.FormValue("disclosure_channel")); err != nil {
+	if err := db.SetDisclosureChannel(s.DB, repo.ID, r.FormValue("disclosure_channel"), db.SourceAnalyst, ""); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -3342,7 +3343,12 @@ func (s *Server) repoScheduleUpdate(w http.ResponseWriter, r *http.Request) {
 // new options (SubPath, FindingID, Model) accumulate.
 type ScanOpts struct {
 	// AuditRetry marks operator retries only, not automatic child scans or reruns.
-	AuditRetry  bool
+	AuditRetry bool
+	// AuditDisclosure marks launches of the external-reporting skills (disclose,
+	// report-upstream and public-issue) from the browser or the skill API.
+	AuditDisclosure bool
+	// AuditSource is who launched an audited run; empty means the analyst.
+	AuditSource db.FindingSource
 	Model       string
 	Effort      string
 	FindingID   *uint
@@ -3556,10 +3562,7 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 		if live.FederationOptedOut() {
 			return ErrRepoFederationOptOut
 		}
-		if opts.AuditRetry {
-			return logScanControl(tx, db.AuditEventScanRetryRequested, scan, retryLineage(scan), "", db.ScanQueued, db.SourceAnalyst)
-		}
-		return nil
+		return logScanCreated(ctx, tx, scan, opts)
 	}); err != nil {
 		return 0, err
 	}

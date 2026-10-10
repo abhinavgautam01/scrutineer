@@ -487,6 +487,8 @@ func (s *Server) apiRunFindingSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	opts.FindingID = new(uint(id))
+	opts.AuditDisclosure = externalReportingSkill(name)
+	opts.AuditSource = sourceFromRequest(r)
 	if caller := scanFromRequest(r); caller != nil && caller.SkillName == "triage" {
 		opts.TriageScanID = &caller.ID
 	}

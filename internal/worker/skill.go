@@ -984,6 +984,23 @@ func (rm reportedMaintainer) applyTo(m *db.Maintainer) {
 	}
 }
 
+// setSubprojectChannel is best-effort: it only touches an existing subproject
+// row and writes the skill-owned channel field only.
+func (w *Worker) setSubprojectChannel(scan *db.Scan, path, channel string) {
+	var ids []uint
+	if err := w.DB.Model(&db.Subproject{}).
+		Where("repository_id = ? AND path = ?", scan.RepositoryID, path).
+		Pluck("id", &ids).Error; err != nil {
+		w.Log.Warn("update subproject disclosure channel", "scan", scan.ID, "path", path, "err", err)
+		return
+	}
+	for _, id := range ids {
+		if err := db.SetSubprojectDisclosureChannel(w.DB, id, channel, db.SourceModel, scan.SkillName); err != nil {
+			w.Log.Warn("update subproject disclosure channel", "scan", scan.ID, "path", path, "err", err)
+		}
+	}
+}
+
 // parseMaintainersOutput upserts Maintainer rows and links them to the
 // scanned repo. Mirrors the legacy doMaintainerAnalysis logic so the
 // maintainers skill and the old Go handler stay interchangeable.
@@ -1019,7 +1036,7 @@ func (w *Worker) parseMaintainersOutput(scan *db.Scan, report string, emit func(
 	// of running it.
 	repoWide := scan.SubPath == ""
 	if repoWide && strings.TrimSpace(result.DisclosureChannel) != "" {
-		if err := db.SetDisclosureChannel(w.DB, repo.ID, result.DisclosureChannel); err != nil {
+		if err := db.SetDisclosureChannel(w.DB, repo.ID, result.DisclosureChannel, db.SourceModel, scan.SkillName); err != nil {
 			return fmt.Errorf("update disclosure channel: %w", err)
 		}
 	}
@@ -1030,13 +1047,7 @@ func (w *Worker) parseMaintainersOutput(scan *db.Scan, report string, emit func(
 			if path == "" || ch == "" {
 				continue
 			}
-			// Best-effort: only touches an existing subproject row, and only
-			// the reconcile/skill-owned channel field.
-			if err := w.DB.Model(&db.Subproject{}).
-				Where("repository_id = ? AND path = ?", scan.RepositoryID, path).
-				Update("disclosure_channel", ch).Error; err != nil {
-				w.Log.Warn("update subproject disclosure channel", "scan", scan.ID, "path", path, "err", err)
-			}
+			w.setSubprojectChannel(scan, path, ch)
 		}
 	}
 	var linked []db.Maintainer
