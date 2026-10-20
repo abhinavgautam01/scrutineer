@@ -245,7 +245,12 @@ func (s *Server) scanShow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	skill := loadScanReportSkill(s.DB, &scan)
+	label := scan.SkillName
+	if label == "" {
+		label = scan.Kind
+	}
 	s.render(w, r, "scan_show.html", map[string]any{
+		pageTitleKey:         fmt.Sprintf("Scan #%d · %s · %s", scan.ID, label, scan.Repository.Name),
 		"Scan":               scan,
 		"Investigation":      scanInvestigationReport(scan),
 		"Diff":               parseScanDiffView(scan),

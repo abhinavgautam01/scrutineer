@@ -226,6 +226,7 @@ func (s *Server) orgShow(w http.ResponseWriter, r *http.Request) {
 		Distinct().Order("maintainers.name").Find(&maintainers)
 
 	s.render(w, r, "org_show.html", map[string]any{
+		pageTitleKey:    owner,
 		"Owner":         owner,
 		"Repos":         repos,
 		"FindingCounts": findingCounts,

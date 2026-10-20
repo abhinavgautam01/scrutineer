@@ -6,7 +6,7 @@
   </h2>
   <div class="flex items-center gap-2">
     <form method="get" action="/maintainers" class="inline-flex">
-      <input class="input" type="search" name="q" value="{{.Q}}" placeholder="Search maintainers"
+      <input class="input" type="search" name="q" value="{{.Q}}" placeholder="Search maintainers" aria-label="Search maintainers"
              autocomplete="off" spellcheck="false">
       <input type="hidden" name="status" value="{{.Status}}">
       <input type="hidden" name="sort" value="{{.Sort}}">

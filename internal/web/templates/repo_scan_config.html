@@ -40,7 +40,8 @@
 </section>
 
 <form method="post" action="/repositories/{{.Repo.ID}}/scan-config" class="form grid gap-3 max-w-4xl">
-  <textarea name="scan_config" rows="20" spellcheck="false"
+  <label class="label" for="scan-config-yaml">Scan configuration (YAML)</label>
+  <textarea id="scan-config-yaml" name="scan_config" rows="20" spellcheck="false"
             class="input w-full font-mono text-xs"
             placeholder="focus_areas:
   - name: parser

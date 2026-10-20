@@ -120,11 +120,16 @@ func (s *Server) conversationShow(w http.ResponseWriter, r *http.Request) {
 	if conv.FindingID != nil {
 		findingID = *conv.FindingID
 	}
+	title := conv.Title
+	if title == "" {
+		title = "Chat"
+	}
 	s.render(w, r, "conversation_show.html", map[string]any{
-		"Conv":      conv,
-		"Active":    s.chatTurnActive(conv.ID),
-		"BackHref":  conversationBackHref(conv),
-		"FindingID": findingID,
+		pageTitleKey: title,
+		"Conv":       conv,
+		"Active":     s.chatTurnActive(conv.ID),
+		"BackHref":   conversationBackHref(conv),
+		"FindingID":  findingID,
 	})
 }
 

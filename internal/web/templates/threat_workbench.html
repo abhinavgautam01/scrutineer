@@ -10,7 +10,8 @@
 </p>
 
 <form method="post" action="/repositories/{{.Repo.ID}}/threat-model" class="form mb-6">
-  <textarea name="threat_model" rows="24" spellcheck="false"
+  <label class="label mb-2" for="threat-model-json">Threat model (JSON)</label>
+  <textarea id="threat-model-json" name="threat_model" rows="24" spellcheck="false"
             class="input w-full font-mono text-xs"
             placeholder="No threat-model scan has run yet. Run the threat-model skill to seed this editor, or paste a model here.">{{prettyjson $wb.Model}}</textarea>
   <div class="flex items-center gap-2 mt-2">

@@ -39,16 +39,17 @@ func (s *Server) skillShow(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.render(w, r, "skill_show.html", map[string]any{"S": skill})
+	s.render(w, r, "skill_show.html", map[string]any{"S": skill, pageTitleKey: skill.Name})
 }
 
 func (s *Server) skillNew(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "skill_form.html", map[string]any{
-		"S":      db.Skill{Active: true, Source: "ui"},
-		"Action": "/skills",
-		"Verb":   "Create",
-		"Models": Models,
-		"Tiers":  ModelTiers,
+		pageTitleKey: "New skill",
+		"S":          db.Skill{Active: true, Source: "ui"},
+		"Action":     "/skills",
+		"Verb":       "Create",
+		"Models":     Models,
+		"Tiers":      ModelTiers,
 	})
 }
 
@@ -60,11 +61,12 @@ func (s *Server) skillEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, r, "skill_form.html", map[string]any{
-		"S":      skill,
-		"Action": "/skills/" + strconv.Itoa(int(skill.ID)),
-		"Verb":   "Save",
-		"Models": Models,
-		"Tiers":  ModelTiers,
+		pageTitleKey: "Edit " + skill.Name,
+		"S":          skill,
+		"Action":     "/skills/" + strconv.Itoa(int(skill.ID)),
+		"Verb":       "Save",
+		"Models":     Models,
+		"Tiers":      ModelTiers,
 	})
 }
 

@@ -9,14 +9,17 @@
   </a>
 </div>
 
-<dialog id="sbom-upload" class="dialog">
+<dialog id="sbom-upload" class="dialog" aria-labelledby="sbom-upload-title" aria-describedby="sbom-upload-desc">
   <article>
     <header>
-      <h2>Upload SBOM</h2>
-      <p class="text-sm text-muted-foreground">CycloneDX or SPDX, JSON only.</p>
+      <h2 id="sbom-upload-title">Upload SBOM</h2>
+      <p id="sbom-upload-desc" class="text-sm text-muted-foreground">CycloneDX or SPDX, JSON only.</p>
     </header>
     <form method="post" action="/sboms" enctype="multipart/form-data" class="form grid gap-4">
-      <input class="input" type="file" name="file" accept=".json,application/json" required>
+      <div class="grid gap-2">
+        <label class="label" for="sbom-upload-file">SBOM file</label>
+        <input class="input" type="file" id="sbom-upload-file" name="file" accept=".json,application/json" aria-describedby="sbom-upload-desc" required>
+      </div>
       <footer class="flex justify-end gap-2">
         <button type="submit" class="btn-outline" formmethod="dialog" formnovalidate>Cancel</button>
         <button type="submit" class="btn"

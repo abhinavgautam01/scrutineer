@@ -46,9 +46,10 @@ func (s *Server) subprojectShow(w http.ResponseWriter, r *http.Request) {
 	var advisories []db.Advisory
 	s.DB.Where("subproject_id = ?", sub.ID).Order("published_at desc").Find(&advisories)
 	s.render(w, r, "subproject_show.html", map[string]any{
-		"Repo":     repo,
-		"Sub":      sub,
-		"Findings": findings,
+		pageTitleKey: sub.Name + " · " + repo.Name,
+		"Repo":       repo,
+		"Sub":        sub,
+		"Findings":   findings,
 		// Registry attribution (packages/advisories) is a kill-switchable
 		// feature; gate its display so turning monorepo_attribution off hides
 		// per-sub-package links immediately, even before the next reconcile

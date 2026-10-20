@@ -6,7 +6,7 @@
   </h2>
   <div class="flex items-center gap-2">
     <form method="get" action="/advisories" class="inline-flex">
-      <input class="input" type="search" name="q" value="{{.Q}}" placeholder="Search advisories"
+      <input class="input" type="search" name="q" value="{{.Q}}" placeholder="Search advisories" aria-label="Search advisories"
              autocomplete="off" spellcheck="false">
       <input type="hidden" name="severity" value="{{.Severity}}">
       <input type="hidden" name="sort" value="{{.Sort}}">

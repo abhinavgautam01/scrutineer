@@ -23,18 +23,18 @@
 <div class="grid gap-6">
 
 <section class="card">
-  <header><h2>Theme</h2></header>
+  <header><h2 id="settings-theme">Theme</h2></header>
   <section>
-    <div class="flex flex-wrap gap-3">
+    <div class="flex flex-wrap gap-3" role="group" aria-labelledby="settings-theme">
       {{$current := .Theme}}
       {{range .Themes}}
       <form method="post" action="/settings/theme" hx-post="/settings/theme" hx-swap="none">
         <input type="hidden" name="theme" value="{{.}}">
-        <button type="submit" class="rounded-lg border px-4 py-3 text-center hover:bg-muted transition-colors cursor-pointer {{if eq . $current}}border-primary bg-muted/50{{else}}border-transparent{{end}}">
+        <button type="submit" aria-pressed="{{if eq . $current}}true{{else}}false{{end}}" class="rounded-lg border px-4 py-3 text-center hover:bg-muted transition-colors cursor-pointer {{if eq . $current}}border-primary bg-muted/50{{else}}border-transparent{{end}}">
           <div class="flex justify-center gap-1 mb-2">
-            <span class="w-4 h-4 rounded-full theme-swatch-primary" data-swatch="{{.}}"></span>
-            <span class="w-4 h-4 rounded-full theme-swatch-accent" data-swatch="{{.}}"></span>
-            <span class="w-4 h-4 rounded-full theme-swatch-muted" data-swatch="{{.}}"></span>
+            <span class="w-4 h-4 rounded-full theme-swatch-primary" data-swatch="{{.}}" aria-hidden="true"></span>
+            <span class="w-4 h-4 rounded-full theme-swatch-accent" data-swatch="{{.}}" aria-hidden="true"></span>
+            <span class="w-4 h-4 rounded-full theme-swatch-muted" data-swatch="{{.}}" aria-hidden="true"></span>
           </div>
           <span class="text-sm font-medium">{{.}}</span>
         </button>
@@ -45,14 +45,14 @@
 </section>
 
 <section class="card">
-  <header><h2>Color scheme</h2></header>
+  <header><h2 id="settings-color-scheme">Color scheme</h2></header>
   <section>
-    <div class="flex flex-wrap gap-3">
+    <div class="flex flex-wrap gap-3" role="group" aria-labelledby="settings-color-scheme">
       {{$scheme := .ColorScheme}}
       {{range $val := list "system" "light" "dark"}}
       <form method="post" action="/settings/color-scheme" hx-post="/settings/color-scheme" hx-swap="none">
         <input type="hidden" name="color_scheme" value="{{$val}}">
-        <button type="submit" class="rounded-lg border px-4 py-3 text-center hover:bg-muted transition-colors cursor-pointer {{if eq $val $scheme}}border-primary bg-muted/50{{else}}border-transparent{{end}}">
+        <button type="submit" aria-pressed="{{if eq $val $scheme}}true{{else}}false{{end}}" class="rounded-lg border px-4 py-3 text-center hover:bg-muted transition-colors cursor-pointer {{if eq $val $scheme}}border-primary bg-muted/50{{else}}border-transparent{{end}}">
           <span class="text-sm font-medium">{{$val}}</span>
         </button>
       </form>
@@ -71,12 +71,12 @@
       <form method="post" action="/settings/model" hx-post="/settings/model" hx-swap="none" class="grid gap-2">
         <input type="hidden" name="tier" value="{{$tier}}">
         <label for="model_{{$tier}}">{{.Name}}</label>
-        <select id="model_{{$tier}}" class="input" name="model">
+        <select id="model_{{$tier}}" class="input" name="model" aria-describedby="model_{{$tier}}_help">
           {{range $.Models}}
           <option value="{{.ID}}"{{if eq .ID $current}} selected{{end}}>{{.Name}}</option>
           {{end}}
         </select>
-        <p class="text-xs text-muted-foreground">{{.Description}}</p>
+        <p id="model_{{$tier}}_help" class="text-xs text-muted-foreground">{{.Description}}</p>
         <button type="submit" class="btn justify-self-start">Save</button>
       </form>
       {{end}}
@@ -85,14 +85,14 @@
 </section>
 
 <section class="card">
-  <header><h2>Effort</h2></header>
+  <header><h2 id="settings-effort">Effort</h2></header>
   <section>
-    <div class="flex flex-wrap gap-3">
+    <div class="flex flex-wrap gap-3" role="group" aria-labelledby="settings-effort">
       {{$effort := .DefaultEffort}}
       {{range .Efforts}}
       <form method="post" action="/settings/effort" hx-post="/settings/effort" hx-swap="none">
         <input type="hidden" name="effort" value="{{.Value}}">
-        <button type="submit" class="rounded-lg border px-4 py-3 text-center hover:bg-muted transition-colors cursor-pointer {{if eq .Value $effort}}border-primary bg-muted/50{{else}}border-transparent{{end}}">
+        <button type="submit" aria-pressed="{{if eq .Value $effort}}true{{else}}false{{end}}" class="rounded-lg border px-4 py-3 text-center hover:bg-muted transition-colors cursor-pointer {{if eq .Value $effort}}border-primary bg-muted/50{{else}}border-transparent{{end}}">
           <span class="text-sm font-medium">{{.Label}}</span>
         </button>
       </form>
@@ -111,34 +111,35 @@
       <form method="post" action="/settings/concurrency" hx-post="/settings/concurrency" hx-swap="none" class="grid gap-2">
         <label for="concurrency">Concurrency</label>
         <div class="flex gap-2">
-          <input id="concurrency" class="input" type="number" name="concurrency" value="{{.ConcurrencyInput}}" min="1" max="64" required>
+          <input id="concurrency" aria-describedby="concurrency_help" class="input" type="number" name="concurrency" value="{{.ConcurrencyInput}}" min="1" max="64" required>
           <button type="submit" class="btn">Save</button>
         </div>
-        <p class="text-xs text-muted-foreground">Scans run in parallel. Currently running with {{.Concurrency}}.</p>
+        <p id="concurrency_help" class="text-xs text-muted-foreground">Scans run in parallel. Currently running with {{.Concurrency}}.</p>
       </form>
       <form method="post" action="/settings/max-turns" hx-post="/settings/max-turns" hx-swap="none" class="grid gap-2">
         <label for="max_turns">Default turns</label>
         <div class="flex gap-2">
-          <input id="max_turns" class="input" type="number" name="max_turns" {{if .MaxTurns}}value="{{.MaxTurns}}"{{end}} min="1" max="500" placeholder="default: {{.DefaultMaxTurns}}" required>
+          <input id="max_turns" aria-describedby="max_turns_help" class="input" type="number" name="max_turns" {{if .MaxTurns}}value="{{.MaxTurns}}"{{end}} min="1" max="500" placeholder="default: {{.DefaultMaxTurns}}" required>
           <button type="submit" class="btn">Save</button>
         </div>
-        <p class="text-xs text-muted-foreground">Turn cap for skills that set none. Applies to the next scan.</p>
+        <p id="max_turns_help" class="text-xs text-muted-foreground">Turn cap for skills that set none. Applies to the next scan.</p>
       </form>
       {{$sched := .ScanSchedule}}
       {{$isCron := and $sched (ne $sched "daily") (ne $sched "weekly")}}
       <form method="post" action="/settings/scan-schedule" hx-post="/settings/scan-schedule" hx-swap="none" class="grid gap-2">
         <label for="scan_schedule">Default scan schedule</label>
+        <select id="scan_schedule" class="select" name="scan_schedule" aria-describedby="scan_schedule_help">
+          <option value="off" {{if not $sched}}selected{{end}}>Off</option>
+          <option value="daily" {{if eq $sched "daily"}}selected{{end}}>Daily</option>
+          <option value="weekly" {{if eq $sched "weekly"}}selected{{end}}>Weekly</option>
+          <option value="custom" {{if $isCron}}selected{{end}}>Custom cron</option>
+        </select>
+        <label for="scan_schedule_cron">Custom cron expression</label>
         <div class="flex gap-2">
-          <select id="scan_schedule" class="select" name="scan_schedule">
-            <option value="off" {{if not $sched}}selected{{end}}>Off</option>
-            <option value="daily" {{if eq $sched "daily"}}selected{{end}}>Daily</option>
-            <option value="weekly" {{if eq $sched "weekly"}}selected{{end}}>Weekly</option>
-            <option value="custom" {{if $isCron}}selected{{end}}>Custom cron</option>
-          </select>
-          <input class="input" type="text" name="scan_schedule_cron" value="{{if $isCron}}{{$sched}}{{end}}" placeholder="cron, e.g. 0 3 * * 1">
+          <input id="scan_schedule_cron" class="input" type="text" name="scan_schedule_cron" value="{{if $isCron}}{{$sched}}{{end}}" placeholder="cron, e.g. 0 3 * * 1" aria-describedby="scan_schedule_help">
           <button type="submit" class="btn">Save</button>
         </div>
-        <p class="text-xs text-muted-foreground">Recurring scans for every repository without its own schedule. Runs skip when the remote HEAD is unchanged since the last completed scan.</p>
+        <p id="scan_schedule_help" class="text-xs text-muted-foreground">Recurring scans for every repository without its own schedule. Runs skip when the remote HEAD is unchanged since the last completed scan.</p>
       </form>
     </div>
     <div id="concurrency-confirm"></div>
@@ -229,27 +230,27 @@
 </div>
 
 <style>
-  .theme-swatch-primary[data-swatch="claude"]          { background: oklch(0.6171 0.1375 39.0427); }
+  .theme-swatch-primary[data-swatch="claude"]          { background: oklch(0.5600 0.1375 39.0427); }
   .theme-swatch-accent[data-swatch="claude"]           { background: oklch(0.9245 0.0138 92.9892); }
   .theme-swatch-muted[data-swatch="claude"]            { background: oklch(0.9341 0.0153 90.2390); }
 
-  .theme-swatch-primary[data-swatch="ocean-breeze"]    { background: oklch(0.72 0.19 149.58); }
+  .theme-swatch-primary[data-swatch="ocean-breeze"]    { background: oklch(0.52 0.19 149.58); }
   .theme-swatch-accent[data-swatch="ocean-breeze"]     { background: oklch(0.95 0.05 163.05); }
   .theme-swatch-muted[data-swatch="ocean-breeze"]      { background: oklch(0.97 0 264.54); }
 
   .theme-swatch-primary[data-swatch="catppuccin"]      { background: oklch(0.55 0.25 297.02); }
-  .theme-swatch-accent[data-swatch="catppuccin"]       { background: oklch(0.68 0.14 235.38); }
+  .theme-swatch-accent[data-swatch="catppuccin"]       { background: oklch(0.55 0.14 235.38); }
   .theme-swatch-muted[data-swatch="catppuccin"]        { background: oklch(0.91 0.01 264.51); }
 
-  .theme-swatch-primary[data-swatch="sunset-horizon"]  { background: oklch(0.74 0.16 34.71); }
+  .theme-swatch-primary[data-swatch="sunset-horizon"]  { background: oklch(0.57 0.16 34.71); }
   .theme-swatch-accent[data-swatch="sunset-horizon"]   { background: oklch(0.83 0.11 58); }
   .theme-swatch-muted[data-swatch="sunset-horizon"]    { background: oklch(0.97 0.02 39.4); }
 
-  .theme-swatch-primary[data-swatch="midnight-bloom"]  { background: oklch(0.57 0.2 283.08); }
-  .theme-swatch-accent[data-swatch="midnight-bloom"]   { background: oklch(0.65 0.06 117.43); }
+  .theme-swatch-primary[data-swatch="midnight-bloom"]  { background: oklch(0.56 0.2 283.08); }
+  .theme-swatch-accent[data-swatch="midnight-bloom"]   { background: oklch(0.56 0.06 117.43); }
   .theme-swatch-muted[data-swatch="midnight-bloom"]    { background: oklch(0.82 0.02 91.62); }
 
-  .theme-swatch-primary[data-swatch="northern-lights"] { background: oklch(0.65 0.15 150.31); }
+  .theme-swatch-primary[data-swatch="northern-lights"] { background: oklch(0.53 0.15 150.31); }
   .theme-swatch-accent[data-swatch="northern-lights"]  { background: oklch(0.83 0.11 211.96); }
   .theme-swatch-muted[data-swatch="northern-lights"]   { background: oklch(0.88 0.03 98.1); }
 </style>

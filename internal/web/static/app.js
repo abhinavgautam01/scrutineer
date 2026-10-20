@@ -67,12 +67,21 @@
     });
   }
 
+  // Open menus are driven by arrow keys and Enter, so their items should not
+  // also be Tab stops. Items arrive via htmx swaps as well as the first load.
+  function menuTabindex() {
+    document.querySelectorAll('.dropdown-menu [role^="menuitem"]:not([tabindex])').forEach(function (el) {
+      el.setAttribute('tabindex', '-1');
+    });
+  }
+
   function init() {
     icons();
     highlight();
     restoreTab();
     chatToBottom();
     elapsed();
+    menuTabindex();
   }
 
   if (document.readyState === 'loading') {
@@ -84,9 +93,57 @@
 
   setInterval(elapsed, 1000);
 
-  document.addEventListener('htmx:afterSwap', function () { icons(); highlight(); elapsed(); });
+  document.addEventListener('htmx:afterSwap', function () { icons(); highlight(); elapsed(); menuTabindex(); });
   document.addEventListener('htmx:historyRestore', init);
-  document.addEventListener('htmx:oobAfterSwap', function () { icons(); highlight(); elapsed(); });
+  document.addEventListener('htmx:oobAfterSwap', function () { icons(); highlight(); elapsed(); menuTabindex(); });
+
+  // Basecoat highlights a dropdown item by adding the active class and pointing
+  // aria-activedescendant at it on the trigger button. A button cannot own an
+  // active descendant, so assistive tech never hears the highlight move. Real
+  // focus on the item is announced everywhere, and the stray attribute goes.
+  // Set up once: the observer watches the body, which survives history restores.
+  // The popover's visibility transition starts on the frame after it opens, and
+  // a still-hidden item refuses focus, so focusing retries for a few frames.
+  function focusMenuItem(el, frames) {
+    if (!el.classList.contains('active') || el === document.activeElement) return;
+    el.focus();
+    if (el !== document.activeElement && frames > 0) {
+      requestAnimationFrame(function () { focusMenuItem(el, frames - 1); });
+    }
+  }
+  new MutationObserver(function (records) {
+    records.forEach(function (rec) {
+      var el = rec.target;
+      if (rec.attributeName === 'class') {
+        if (el.matches('.dropdown-menu [role^="menuitem"]')) focusMenuItem(el, 10);
+      } else if (el.matches('.dropdown-menu button[aria-haspopup="menu"]')) {
+        el.removeAttribute('aria-activedescendant');
+      }
+    });
+  }).observe(document.body, {
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['class', 'aria-activedescendant']
+  });
+
+  // Basecoat hides the sidebar below 768px but ships no control to bring it
+  // back, so the mobile header button toggles it through its own event. Set up
+  // once rather than in init(), which re-runs on history restores.
+  var sidebar = document.getElementById('sidebar');
+  function sidebarOpen() {
+    return !!sidebar && sidebar.getAttribute('aria-hidden') === 'false';
+  }
+  function syncSidebarToggles() {
+    var expanded = sidebarOpen() ? 'true' : 'false';
+    document.querySelectorAll('[data-sidebar-toggle]').forEach(function (btn) {
+      btn.setAttribute('aria-expanded', expanded);
+    });
+  }
+  if (sidebar) {
+    syncSidebarToggles();
+    new MutationObserver(syncSidebarToggles)
+      .observe(sidebar, { attributes: true, attributeFilter: ['aria-hidden'] });
+  }
 
   document.body.addEventListener('htmx:sseMessage', function (e) {
     var el = e.target.closest('[data-reload-on-sse]');
@@ -114,6 +171,13 @@
   }
 
   document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && sidebarOpen() && window.innerWidth < 768) {
+      document.dispatchEvent(new CustomEvent('basecoat:sidebar', { detail: { id: 'sidebar', action: 'close' } }));
+      var toggle = document.querySelector('[data-sidebar-toggle]');
+      if (toggle) toggle.focus();
+      return;
+    }
+
     var tab = e.target.closest('[data-disclosure-mode][role="tab"]');
     if (!tab || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
     var tabs = Array.from(tab.closest('[role="tablist"]').querySelectorAll('[role="tab"]'));
@@ -127,6 +191,16 @@
   });
 
   document.addEventListener('click', function (e) {
+    if (e.target.closest('[data-sidebar-toggle]')) {
+      var wasClosed = !sidebarOpen();
+      document.dispatchEvent(new CustomEvent('basecoat:sidebar', { detail: { id: 'sidebar' } }));
+      if (wasClosed) {
+        var firstLink = document.querySelector('#sidebar nav a');
+        if (firstLink) firstLink.focus();
+      }
+      return;
+    }
+
     var disclosureMode = e.target.closest('[data-disclosure-mode]');
     if (disclosureMode) {
       e.preventDefault();
