@@ -68,7 +68,6 @@ type vincePageData struct {
 	SentBefore bool
 }
 
-// title is the document title: the page heading plus the finding it concerns.
 func (p vincePageData) title() string {
 	return "Submit to CERT/CC VINCE · " + p.Finding.Title
 }

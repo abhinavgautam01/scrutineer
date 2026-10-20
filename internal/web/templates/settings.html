@@ -230,7 +230,6 @@
 
 </div>
 
-
 {{define "concurrency-confirm-oob"}}<div id="concurrency-confirm" hx-swap-oob="innerHTML">
   <div class="rounded-lg border border-primary/40 bg-muted/50 px-4 py-3 text-sm mt-4 flex flex-wrap items-center justify-between gap-3">
     <p class="flex-1 min-w-[16rem]">Concurrency {{.Concurrency}} saved. Restart the runner to apply it now — this cancels {{.Running}} running scan(s) (queued scans are kept). Otherwise it takes effect on the next restart.</p>

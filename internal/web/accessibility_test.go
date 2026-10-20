@@ -162,8 +162,22 @@ func TestSettings_exposesSelectionAndLabels(t *testing.T) {
 		t.Error("cron input has no id")
 	}
 	// Swatches read each theme's variables from theme.css rather than copies.
+	// <html> carries the active theme too, so only elements inside body count.
+	doc, err := html.Parse(strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	scoped := map[string]bool{}
+	walkHTML(doc, func(n *html.Node) {
+		if n.Type != html.ElementNode || n.Data == "html" {
+			return
+		}
+		if theme, ok := htmlAttr(n, "data-theme"); ok {
+			scoped[theme] = true
+		}
+	})
 	for _, theme := range config.Themes {
-		if !strings.Contains(body, `data-theme="`+theme+`" aria-hidden="true"`) {
+		if !scoped[theme] {
 			t.Errorf("no swatch row scoped to theme %q", theme)
 		}
 	}

@@ -28,7 +28,6 @@ type akritesPage struct {
 	Error    string
 }
 
-// title is the document title: the page heading plus the finding it concerns.
 func (p akritesPage) title() string {
 	return "Akrites submission · " + p.Finding.Title
 }
