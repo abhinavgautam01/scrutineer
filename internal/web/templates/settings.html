@@ -31,10 +31,11 @@
       <form method="post" action="/settings/theme" hx-post="/settings/theme" hx-swap="none">
         <input type="hidden" name="theme" value="{{.}}">
         <button type="submit" aria-pressed="{{if eq . $current}}true{{else}}false{{end}}" class="rounded-lg border px-4 py-3 text-center hover:bg-muted transition-colors cursor-pointer {{if eq . $current}}border-primary bg-muted/50{{else}}border-transparent{{end}}">
-          <div class="flex justify-center gap-1 mb-2">
-            <span class="w-4 h-4 rounded-full theme-swatch-primary" data-swatch="{{.}}" aria-hidden="true"></span>
-            <span class="w-4 h-4 rounded-full theme-swatch-accent" data-swatch="{{.}}" aria-hidden="true"></span>
-            <span class="w-4 h-4 rounded-full theme-swatch-muted" data-swatch="{{.}}" aria-hidden="true"></span>
+          {{/* Tailwind resolves bg-primary at :root, so read the variables on the swatch itself. */}}
+          <div class="flex justify-center gap-1 mb-2" data-theme="{{.}}" aria-hidden="true">
+            <span class="w-4 h-4 rounded-full bg-[var(--primary)]"></span>
+            <span class="w-4 h-4 rounded-full bg-[var(--accent)]"></span>
+            <span class="w-4 h-4 rounded-full bg-[var(--muted)]"></span>
           </div>
           <span class="text-sm font-medium">{{.}}</span>
         </button>
@@ -229,31 +230,6 @@
 
 </div>
 
-<style>
-  .theme-swatch-primary[data-swatch="claude"]          { background: oklch(0.5600 0.1375 39.0427); }
-  .theme-swatch-accent[data-swatch="claude"]           { background: oklch(0.9245 0.0138 92.9892); }
-  .theme-swatch-muted[data-swatch="claude"]            { background: oklch(0.9341 0.0153 90.2390); }
-
-  .theme-swatch-primary[data-swatch="ocean-breeze"]    { background: oklch(0.52 0.19 149.58); }
-  .theme-swatch-accent[data-swatch="ocean-breeze"]     { background: oklch(0.95 0.05 163.05); }
-  .theme-swatch-muted[data-swatch="ocean-breeze"]      { background: oklch(0.97 0 264.54); }
-
-  .theme-swatch-primary[data-swatch="catppuccin"]      { background: oklch(0.55 0.25 297.02); }
-  .theme-swatch-accent[data-swatch="catppuccin"]       { background: oklch(0.55 0.14 235.38); }
-  .theme-swatch-muted[data-swatch="catppuccin"]        { background: oklch(0.91 0.01 264.51); }
-
-  .theme-swatch-primary[data-swatch="sunset-horizon"]  { background: oklch(0.57 0.16 34.71); }
-  .theme-swatch-accent[data-swatch="sunset-horizon"]   { background: oklch(0.83 0.11 58); }
-  .theme-swatch-muted[data-swatch="sunset-horizon"]    { background: oklch(0.97 0.02 39.4); }
-
-  .theme-swatch-primary[data-swatch="midnight-bloom"]  { background: oklch(0.56 0.2 283.08); }
-  .theme-swatch-accent[data-swatch="midnight-bloom"]   { background: oklch(0.56 0.06 117.43); }
-  .theme-swatch-muted[data-swatch="midnight-bloom"]    { background: oklch(0.82 0.02 91.62); }
-
-  .theme-swatch-primary[data-swatch="northern-lights"] { background: oklch(0.53 0.15 150.31); }
-  .theme-swatch-accent[data-swatch="northern-lights"]  { background: oklch(0.83 0.11 211.96); }
-  .theme-swatch-muted[data-swatch="northern-lights"]   { background: oklch(0.88 0.03 98.1); }
-</style>
 
 {{define "concurrency-confirm-oob"}}<div id="concurrency-confirm" hx-swap-oob="innerHTML">
   <div class="rounded-lg border border-primary/40 bg-muted/50 px-4 py-3 text-sm mt-4 flex flex-wrap items-center justify-between gap-3">

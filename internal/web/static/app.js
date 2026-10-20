@@ -67,8 +67,7 @@
     });
   }
 
-  // Open menus are driven by arrow keys and Enter, so their items should not
-  // also be Tab stops. Items arrive via htmx swaps as well as the first load.
+  // Open menus are driven by arrow keys, so their items are not Tab stops.
   function menuTabindex() {
     document.querySelectorAll('.dropdown-menu [role^="menuitem"]:not([tabindex])').forEach(function (el) {
       el.setAttribute('tabindex', '-1');
@@ -97,13 +96,8 @@
   document.addEventListener('htmx:historyRestore', init);
   document.addEventListener('htmx:oobAfterSwap', function () { icons(); highlight(); elapsed(); menuTabindex(); });
 
-  // Basecoat highlights a dropdown item by adding the active class and pointing
-  // aria-activedescendant at it on the trigger button. A button cannot own an
-  // active descendant, so assistive tech never hears the highlight move. Real
-  // focus on the item is announced everywhere, and the stray attribute goes.
-  // Set up once: the observer watches the body, which survives history restores.
-  // The popover's visibility transition starts on the frame after it opens, and
-  // a still-hidden item refuses focus, so focusing retries for a few frames.
+  // A button can't own an active descendant, so focus the highlighted menu item.
+  // Retries cover the frame before the opening popover becomes visible.
   function focusMenuItem(el, frames) {
     if (!el.classList.contains('active') || el === document.activeElement) return;
     el.focus();
@@ -126,9 +120,7 @@
     attributeFilter: ['class', 'aria-activedescendant']
   });
 
-  // Basecoat hides the sidebar below 768px but ships no control to bring it
-  // back, so the mobile header button toggles it through its own event. Set up
-  // once rather than in init(), which re-runs on history restores.
+  // Basecoat hides the sidebar below 768px with no control to reopen it.
   var sidebar = document.getElementById('sidebar');
   function sidebarOpen() {
     return !!sidebar && sidebar.getAttribute('aria-hidden') === 'false';

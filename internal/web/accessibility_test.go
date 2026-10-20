@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/net/html"
 
+	"scrutineer/internal/config"
 	"scrutineer/internal/db"
 )
 
@@ -77,7 +78,7 @@ func TestLayout_rendersSidebarToggle(t *testing.T) {
 	}
 }
 
-func attr(n *html.Node, key string) (string, bool) {
+func htmlAttr(n *html.Node, key string) (string, bool) {
 	for _, a := range n.Attr {
 		if a.Key == key {
 			return a.Val, true
@@ -86,10 +87,10 @@ func attr(n *html.Node, key string) (string, bool) {
 	return "", false
 }
 
-func walk(n *html.Node, visit func(*html.Node)) {
+func walkHTML(n *html.Node, visit func(*html.Node)) {
 	visit(n)
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		walk(c, visit)
+		walkHTML(c, visit)
 	}
 }
 
@@ -103,11 +104,11 @@ func TestLayout_dialogsAreNamed(t *testing.T) {
 	}
 	ids := map[string]bool{}
 	var dialogs []*html.Node
-	walk(doc, func(n *html.Node) {
+	walkHTML(doc, func(n *html.Node) {
 		if n.Type != html.ElementNode {
 			return
 		}
-		if id, ok := attr(n, "id"); ok {
+		if id, ok := htmlAttr(n, "id"); ok {
 			ids[id] = true
 		}
 		if n.Data == "dialog" {
@@ -118,9 +119,9 @@ func TestLayout_dialogsAreNamed(t *testing.T) {
 		t.Fatal("no dialogs rendered")
 	}
 	for _, d := range dialogs {
-		id, _ := attr(d, "id")
+		id, _ := htmlAttr(d, "id")
 		for _, key := range []string{"aria-labelledby", "aria-describedby"} {
-			target, ok := attr(d, key)
+			target, ok := htmlAttr(d, key)
 			if key == "aria-labelledby" && !ok {
 				t.Errorf("dialog #%s has no aria-labelledby", id)
 			}
@@ -159,6 +160,15 @@ func TestSettings_exposesSelectionAndLabels(t *testing.T) {
 	}
 	if !strings.Contains(body, `id="scan_schedule_cron"`) {
 		t.Error("cron input has no id")
+	}
+	// Swatches read each theme's variables from theme.css rather than copies.
+	for _, theme := range config.Themes {
+		if !strings.Contains(body, `data-theme="`+theme+`" aria-hidden="true"`) {
+			t.Errorf("no swatch row scoped to theme %q", theme)
+		}
+	}
+	if strings.Contains(body, "oklch(") {
+		t.Error("settings page hardcodes theme colours")
 	}
 }
 

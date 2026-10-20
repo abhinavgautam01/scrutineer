@@ -681,9 +681,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, dat
 	}
 	nav := navKey(r.URL.Path)
 	data["Nav"] = nav
-	// Browser tabs and screen readers announce the document title first, so
-	// every page gets one. Detail pages set a more specific PageTitle; the rest
-	// fall back to the name of the sidebar section they belong to.
+	// Pages without their own PageTitle take their sidebar section's name.
 	if _, ok := data[pageTitleKey]; !ok {
 		data[pageTitleKey] = navTitles[nav]
 	}
@@ -803,7 +801,6 @@ func navKey(path string) string {
 	return "repos"
 }
 
-// pageTitleKey is the template data key holding the document title.
 const pageTitleKey = "PageTitle"
 
 // navTitles gives each sidebar section its default document title.
