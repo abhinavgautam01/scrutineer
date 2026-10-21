@@ -60,7 +60,7 @@ func (s *Server) sbomList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) sbomNew(w http.ResponseWriter, r *http.Request) {
-	s.render(w, r, "sbom_new.html", nil)
+	s.render(w, r, "sbom_new.html", map[string]any{pageTitleKey: "Upload SBOM"})
 }
 
 func (s *Server) sbomUpload(w http.ResponseWriter, r *http.Request) {
@@ -234,7 +234,7 @@ func (s *Server) sbomShow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.render(w, r, "sbom_show.html", map[string]any{
-		"SBOM": up, "Packages": pkgs,
+		"SBOM": up, "Packages": pkgs, pageTitleKey: up.Name,
 		"Findings": findings, "FindingsTotal": findingsTotal,
 		"Advisories": advisories, "AdvisoriesTotal": advisoriesTotal,
 		"Repos":    reposByID,

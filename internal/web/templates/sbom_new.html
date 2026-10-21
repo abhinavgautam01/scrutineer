@@ -2,9 +2,12 @@
 
 <div class="max-w-md">
   <h2 class="text-2xl font-semibold mb-2">Upload SBOM</h2>
-  <p class="text-sm text-muted-foreground mb-4">CycloneDX or SPDX, JSON only.</p>
+  <p id="sbom-new-help" class="text-sm text-muted-foreground mb-4">CycloneDX or SPDX, JSON only.</p>
   <form method="post" action="/sboms" enctype="multipart/form-data" class="form grid gap-4">
-    <input class="input" type="file" name="file" accept=".json,application/json" required>
+    <div class="grid gap-2">
+      <label class="label" for="sbom-new-file">SBOM file</label>
+      <input class="input" type="file" id="sbom-new-file" name="file" accept=".json,application/json" aria-describedby="sbom-new-help" required>
+    </div>
     <footer class="flex justify-end gap-2">
       <a href="/sboms" class="btn-outline">Cancel</a>
       <button type="submit" class="btn">Upload</button>

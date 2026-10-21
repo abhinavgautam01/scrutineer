@@ -134,7 +134,12 @@ func (s *Server) maintainerShow(w http.ResponseWriter, r *http.Request) {
 			Order("id desc").Find(&findings)
 	}
 	reposByID := loadRepoMap(s.DB, findings, findingRepoID)
+	name := m.Name
+	if name == "" {
+		name = m.Login
+	}
 	s.render(w, r, "maintainer_show.html", map[string]any{
 		"M": m, "Findings": findings, "Repos": reposByID,
+		pageTitleKey: name,
 	})
 }

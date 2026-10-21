@@ -1,7 +1,7 @@
 <div id="repos">
-<div class="flex items-center justify-end gap-2 mb-4">
-  <form method="get" action="/" class="inline-flex">
-    <input class="input" type="search" name="q" value="{{.Q}}" placeholder="Search repositories"
+<div class="flex flex-wrap items-center justify-end gap-2 mb-4">
+  <form method="get" action="/" class="flex basis-full sm:basis-auto">
+    <input class="input w-full" type="search" aria-label="Search repositories" name="q" value="{{.Q}}" placeholder="Search repositories"
            autocomplete="off" spellcheck="false">
     <input type="hidden" name="language" value="{{.Language}}">
     <input type="hidden" name="sort" value="{{.Sort}}">

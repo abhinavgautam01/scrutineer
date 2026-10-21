@@ -13,10 +13,12 @@ import (
 
 const investigateSkillName = "investigate"
 
+const investigationTitle = "Investigate a report"
+
 const maxInvestigationBytes = 64 << 10
 
 func (s *Server) investigationNew(w http.ResponseWriter, r *http.Request) {
-	s.render(w, r, "investigation_new.html", nil)
+	s.render(w, r, "investigation_new.html", map[string]any{pageTitleKey: investigationTitle})
 }
 
 func (s *Server) investigationCreate(w http.ResponseWriter, r *http.Request) {
@@ -25,7 +27,7 @@ func (s *Server) investigationCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Could not read report", http.StatusBadRequest)
 		return
 	}
-	data := map[string]any{"URL": r.PostForm.Get("url"), "Ref": r.PostForm.Get("ref"), "Report": r.PostForm.Get("report")}
+	data := map[string]any{pageTitleKey: investigationTitle, "URL": r.PostForm.Get("url"), "Ref": r.PostForm.Get("ref"), "Report": r.PostForm.Get("report")}
 	fail := func(message string, status int) {
 		data["Error"] = message
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")

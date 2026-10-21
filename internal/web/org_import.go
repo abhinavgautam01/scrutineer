@@ -256,7 +256,7 @@ func (s *Server) repoOrgImport(w http.ResponseWriter, r *http.Request) {
 // confirmation panel; plain form posts fall back to the no-JS confirm page.
 func (s *Server) orgImportConfirm(w http.ResponseWriter, r *http.Request, p OrgImportPreview) {
 	if !isHX(r) {
-		s.render(w, r, "repo_new.html", map[string]any{"OrgConfirm": p})
+		s.render(w, r, "repo_new.html", map[string]any{"OrgConfirm": p, pageTitleKey: "Confirm import"})
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

@@ -68,6 +68,10 @@ type vincePageData struct {
 	SentBefore bool
 }
 
+func (p vincePageData) title() string {
+	return "Submit to CERT/CC VINCE · " + p.Finding.Title
+}
+
 func (s *Server) findingVINCEPreview(w http.ResponseWriter, r *http.Request) {
 	if !s.VINCE.Enabled() {
 		http.NotFound(w, r)
@@ -90,7 +94,7 @@ func (s *Server) findingVINCEPreview(w http.ResponseWriter, r *http.Request) {
 	report := s.mapVINCEReport(ctx, packageID, selectedRefs)
 	page := s.vincePage(ctx, report, packageID, selectedRefs, vinceAttachmentBundle,
 		time.Now().UTC(), nil, nil)
-	s.render(w, r, "finding_vince.html", map[string]any{"VINCE": page})
+	s.render(w, r, "finding_vince.html", map[string]any{"VINCE": page, pageTitleKey: page.title()})
 }
 
 func (s *Server) findingVINCESubmit(w http.ResponseWriter, r *http.Request) {
@@ -152,7 +156,7 @@ func (s *Server) findingVINCESubmit(w http.ResponseWriter, r *http.Request) {
 		page := s.vincePage(ctx, report, packageID, selectedRefs, attachmentChoice,
 			time.Now().UTC(), fieldErrors, confirmations)
 		w.WriteHeader(http.StatusUnprocessableEntity)
-		s.render(w, r, "finding_vince.html", map[string]any{"VINCE": page})
+		s.render(w, r, "finding_vince.html", map[string]any{"VINCE": page, pageTitleKey: page.title()})
 		return
 	}
 
@@ -171,7 +175,7 @@ func (s *Server) findingVINCESubmit(w http.ResponseWriter, r *http.Request) {
 		page.Error = "A federation peer already holds this finding: " + claims +
 			". Coordinate through that contact, then submit again to send it anyway."
 		w.WriteHeader(http.StatusConflict)
-		s.render(w, r, "finding_vince.html", map[string]any{"VINCE": page})
+		s.render(w, r, "finding_vince.html", map[string]any{"VINCE": page, pageTitleKey: page.title()})
 		return
 	}
 
@@ -209,7 +213,7 @@ func (s *Server) findingVINCESubmit(w http.ResponseWriter, r *http.Request) {
 		page.Error = message
 		page.Ambiguous = ambiguous
 		w.WriteHeader(status)
-		s.render(w, r, "finding_vince.html", map[string]any{"VINCE": page})
+		s.render(w, r, "finding_vince.html", map[string]any{"VINCE": page, pageTitleKey: page.title()})
 		return
 	}
 
@@ -224,7 +228,7 @@ func (s *Server) findingVINCESubmit(w http.ResponseWriter, r *http.Request) {
 		page.Error = "VINCE returned " + vrfID + " but Scrutineer could not save the result. Record the ID and reconcile it manually. Do not submit the report again."
 		page.ReconciliationVRFID = vrfID
 		w.WriteHeader(http.StatusInternalServerError)
-		s.render(w, r, "finding_vince.html", map[string]any{"VINCE": page})
+		s.render(w, r, "finding_vince.html", map[string]any{"VINCE": page, pageTitleKey: page.title()})
 		return
 	}
 

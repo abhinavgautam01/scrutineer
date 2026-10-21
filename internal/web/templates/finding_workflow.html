@@ -254,9 +254,9 @@
   </section>
 </div>
 
-<dialog id="reject-{{$id}}" class="dialog">
+<dialog id="reject-{{$id}}" class="dialog" aria-labelledby="reject-{{$id}}-title">
   <article>
-    <header><h2>Reject finding</h2></header>
+    <header><h2 id="reject-{{$id}}-title">Reject finding</h2></header>
     <form method="post" action="/findings/{{$id}}/status" class="form grid gap-4">
       <input type="hidden" name="status" value="rejected">
       <div class="grid gap-2">
@@ -284,11 +284,11 @@
   </article>
 </dialog>
 
-<dialog id="exploitation-{{$id}}" class="dialog">
+<dialog id="exploitation-{{$id}}" class="dialog" aria-labelledby="exploitation-{{$id}}-title" aria-describedby="exploitation-{{$id}}-desc">
   <article>
     <header>
-      <h2>Exploitation status</h2>
-      <p class="text-sm text-muted-foreground">Has this finding been exploited in the wild?</p>
+      <h2 id="exploitation-{{$id}}-title">Exploitation status</h2>
+      <p id="exploitation-{{$id}}-desc" class="text-sm text-muted-foreground">Has this finding been exploited in the wild?</p>
     </header>
     <form method="post" action="/findings/{{$id}}/exploited-in-wild" class="form grid gap-4">
       <div class="grid gap-2">

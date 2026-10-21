@@ -28,6 +28,10 @@ type akritesPage struct {
 	Error    string
 }
 
+func (p akritesPage) title() string {
+	return "Akrites submission · " + p.Finding.Title
+}
+
 func (s *Server) findingAkritesPreview(w http.ResponseWriter, r *http.Request) {
 	ctx, ok := s.loadDisclosureFinding(w, r)
 	if !ok {
@@ -78,7 +82,7 @@ func (s *Server) findingAkritesPreview(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	s.render(w, r, "finding_akrites.html", map[string]any{"Akrites": page})
+	s.render(w, r, "finding_akrites.html", map[string]any{"Akrites": page, pageTitleKey: page.title()})
 }
 
 // akritesSymbol prefills affected_symbol from the finding's location. The
@@ -206,7 +210,7 @@ func (s *Server) findingAkritesSubmit(w http.ResponseWriter, r *http.Request) {
 	renderError := func(status int, message string) {
 		page.Error = message
 		w.WriteHeader(status)
-		s.render(w, r, "finding_akrites.html", map[string]any{"Akrites": page})
+		s.render(w, r, "finding_akrites.html", map[string]any{"Akrites": page, pageTitleKey: page.title()})
 	}
 	if err := disclosureResendError(r, len(page.Submissions) > 0, "Akrites"); err != nil {
 		renderError(http.StatusUnprocessableEntity, err.Error())
@@ -294,7 +298,7 @@ func (s *Server) akritesSubmitError(w http.ResponseWriter, r *http.Request, page
 		}
 		if deleteErr := s.DB.Delete(&submission).Error; deleteErr == nil {
 			w.WriteHeader(status)
-			s.render(w, r, "finding_akrites.html", map[string]any{"Akrites": page})
+			s.render(w, r, "finding_akrites.html", map[string]any{"Akrites": page, pageTitleKey: page.title()})
 			return
 		}
 	}
@@ -303,5 +307,5 @@ func (s *Server) akritesSubmitError(w http.ResponseWriter, r *http.Request, page
 	page.Submissions = append([]db.DisclosureSubmission{submission}, page.Submissions...)
 	page.ShowForm = false
 	w.WriteHeader(status)
-	s.render(w, r, "finding_akrites.html", map[string]any{"Akrites": page})
+	s.render(w, r, "finding_akrites.html", map[string]any{"Akrites": page, pageTitleKey: page.title()})
 }

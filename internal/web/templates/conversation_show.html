@@ -57,7 +57,8 @@
 {{end}}
 
 <form method="post" action="/conversations/{{.ID}}/messages" class="form grid gap-2 mt-4 max-w-3xl">
-  <textarea class="input" name="message" rows="3" required
+  <label class="label" for="chat-message">Message</label>
+  <textarea class="input" id="chat-message" name="message" rows="3" required
             placeholder="Ask about the code or findings..."
             {{if $.Active}}disabled{{end}}></textarea>
   <div class="flex justify-end">
@@ -76,7 +77,8 @@
     Chat with the agent. It answers from a copy of the clone and a snapshot of the repository's findings, and is instructed not to change anything.
   </p>
   <form method="post" action="{{.Action}}" class="form grid gap-2">
-    <textarea class="input" name="message" rows="3" required placeholder="{{.Placeholder}}"></textarea>
+    <label class="label" for="chat-panel-message">Message</label>
+    <textarea class="input" id="chat-panel-message" name="message" rows="3" required placeholder="{{.Placeholder}}"></textarea>
     <div class="flex justify-end">
       <button type="submit" class="btn"><i data-lucide="message-square-plus"></i> Start chat</button>
     </div>

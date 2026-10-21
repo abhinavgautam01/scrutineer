@@ -7,7 +7,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="htmx-config" content='{"historyCacheSize": 0}'>
-  <title>scrutineer</title>
+  <title>{{with .PageTitle}}{{.}} · {{end}}scrutineer</title>
   {{/* Refresh with scripts/vendor-assets.sh if necessary. */}}
   <script src="/static/vendor/tailwindcss-browser-4.3.0.js"></script>
   <link rel="stylesheet" href="/static/vendor/basecoat-0.3.11.min.css">
@@ -23,7 +23,7 @@
 </head>
 <body>
 
-<aside class="sidebar" data-side="left" aria-hidden="false">
+<aside class="sidebar" id="sidebar" data-side="left" aria-hidden="false">
   <nav aria-label="Sidebar">
     <header>
       <div class="flex items-center w-full gap-1">
@@ -82,6 +82,10 @@
 </aside>
 
 <main id="content" class="min-h-screen">
+  <header class="md:hidden sticky top-0 z-10 flex items-center gap-2 h-14 px-4 border-b bg-background">
+    <button type="button" class="btn-icon-ghost" data-sidebar-toggle aria-controls="sidebar" aria-expanded="false" aria-label="Navigation menu"><i data-lucide="menu"></i></button>
+    <a href="/" class="font-medium">scrutineer</a>
+  </header>
   <div class="p-4 md:p-6 xl:p-12">
 {{end}}
 
@@ -89,20 +93,26 @@
   </div>
 </main>
 
-<dialog id="add-repo" class="dialog w-full sm:max-w-md">
+<dialog id="add-repo" class="dialog w-full sm:max-w-md" aria-labelledby="add-repo-title">
   <div>
-    <header><h2>Add repository</h2></header>
+    <header><h2 id="add-repo-title">Add repository</h2></header>
     <section>
       <form method="post" action="/repositories"
             hx-post="/repositories" hx-swap="none"
             class="form grid gap-3">
         <div id="add-repo-alert" hidden></div>
-        <input class="input" type="text" name="url"
-               placeholder="https://github.com/owner/repo or /path/to/project" required
-               hx-get="/repositories/branches" hx-trigger="change delay:300ms"
-               hx-target="#branch-options" hx-swap="innerHTML">
-        <input class="input" type="text" name="ref" list="branch-options" autocomplete="off"
-               placeholder="Branch (optional, default branch if empty)">
+        <div class="grid gap-2">
+          <label class="label" for="add-repo-url">Repository URL</label>
+          <input class="input" type="text" id="add-repo-url" name="url"
+                 placeholder="https://github.com/owner/repo or /path/to/project" required
+                 hx-get="/repositories/branches" hx-trigger="change delay:300ms"
+                 hx-target="#branch-options" hx-swap="innerHTML">
+        </div>
+        <div class="grid gap-2">
+          <label class="label" for="add-repo-ref">Branch (optional)</label>
+          <input class="input" type="text" id="add-repo-ref" name="ref" list="branch-options" autocomplete="off"
+                 placeholder="Default branch if empty">
+        </div>
         <datalist id="branch-options"></datalist>
         <footer class="flex justify-between items-center gap-2">
           <a href="/repositories/new?bulk=1" data-dialog="bulk-add-repo" class="btn-sm-ghost">
@@ -121,11 +131,11 @@
   </div>
 </dialog>
 
-<dialog id="bulk-add-repo" class="dialog w-full sm:max-w-lg">
+<dialog id="bulk-add-repo" class="dialog w-full sm:max-w-lg" aria-labelledby="bulk-add-repo-title" aria-describedby="bulk-add-repo-desc">
   <div>
     <header>
-      <h2>Bulk import repositories</h2>
-      <p class="text-sm text-muted-foreground">
+      <h2 id="bulk-add-repo-title">Bulk import repositories</h2>
+      <p id="bulk-add-repo-desc" class="text-sm text-muted-foreground">
         One URL per line. Only <code>https://</code> URLs are accepted.
         Add <code>/tree/&lt;branch&gt;</code> to a URL to scan a specific branch.
         Duplicates are skipped; each new repo is queued with the default scan set.
@@ -135,8 +145,11 @@
       <form method="post" action="/repositories/bulk"
             hx-post="/repositories/bulk" hx-swap="none"
             class="form grid gap-3">
-        <textarea class="input font-mono text-xs" name="urls" rows="10" required
-                  placeholder="https://github.com/maragudk/goqite.git&#10;https://github.com/spf13/cobra.git&#10;https://github.com/stretchr/testify.git"></textarea>
+        <div class="grid gap-2">
+          <label class="label" for="bulk-add-repo-urls">Repository URLs</label>
+          <textarea class="input font-mono text-xs" id="bulk-add-repo-urls" name="urls" rows="10" required
+                    placeholder="https://github.com/maragudk/goqite.git&#10;https://github.com/spf13/cobra.git&#10;https://github.com/stretchr/testify.git"></textarea>
+        </div>
         <footer class="flex justify-between items-center gap-2">
           <a href="/repositories/new?org=1" data-dialog="org-add-repo" class="btn-sm-ghost">
             <i data-lucide="building-2"></i> Import a whole org
@@ -154,11 +167,11 @@
   </div>
 </dialog>
 
-<dialog id="org-add-repo" class="dialog w-full sm:max-w-md">
+<dialog id="org-add-repo" class="dialog w-full sm:max-w-md" aria-labelledby="org-add-repo-title" aria-describedby="org-add-repo-desc">
   <div>
     <header>
-      <h2>Import a GitHub organization</h2>
-      <p class="text-sm text-muted-foreground">
+      <h2 id="org-add-repo-title">Import a GitHub organization</h2>
+      <p id="org-add-repo-desc" class="text-sm text-muted-foreground">
         Fetches every repository in a GitHub org (or user) and queues each one
         with the default scan set. Duplicates are skipped. Forks and archived
         repos are skipped unless you opt in.
@@ -169,7 +182,10 @@
             hx-post="/repositories/org" hx-swap="none"
             class="form grid gap-3">
         <div id="org-import-alert" hidden></div>
-        <input class="input" type="text" name="org" required placeholder="kubernetes">
+        <div class="grid gap-2">
+          <label class="label" for="org-add-repo-org">Organization or user</label>
+          <input class="input" type="text" id="org-add-repo-org" name="org" required placeholder="kubernetes">
+        </div>
         <label class="flex items-center gap-2 text-sm">
           <input type="checkbox" name="include_forks" value="1"> Include forks
         </label>

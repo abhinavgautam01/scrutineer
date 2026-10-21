@@ -37,7 +37,10 @@
     repos are skipped unless you opt in below.
   </p>
   <form method="post" action="/repositories/org" class="form grid gap-3">
-    <input class="input" type="text" name="org" required placeholder="kubernetes">
+    <div class="grid gap-2">
+      <label class="label" for="repo-new-org">Organization or user</label>
+      <input class="input" type="text" id="repo-new-org" name="org" required placeholder="kubernetes">
+    </div>
     <label class="flex items-center gap-2 text-sm">
       <input type="checkbox" name="include_forks" value="1"> Include forks
     </label>
@@ -57,8 +60,11 @@
     Duplicates are skipped; each new repo is queued with the default scan set.
   </p>
   <form method="post" action="/repositories/bulk" class="form grid gap-3">
-    <textarea class="input font-mono text-xs" name="urls" rows="10" required
-              placeholder="https://github.com/maragudk/goqite.git&#10;https://github.com/spf13/cobra.git"></textarea>
+    <div class="grid gap-2">
+      <label class="label" for="repo-new-urls">Repository URLs</label>
+      <textarea class="input font-mono text-xs" id="repo-new-urls" name="urls" rows="10" required
+                placeholder="https://github.com/maragudk/goqite.git&#10;https://github.com/spf13/cobra.git"></textarea>
+    </div>
     <footer class="flex justify-between items-center gap-2">
       <a href="/repositories/new?org=1" class="btn-sm-ghost">
         <i data-lucide="building-2"></i> Import a whole org
@@ -72,10 +78,16 @@
 {{else}}
   <h2 class="text-2xl font-semibold mb-4">Add repository</h2>
   <form method="post" action="/repositories" class="form grid gap-3">
-    <input class="input" type="text" name="url"
-           placeholder="https://github.com/maragudk/goqite.git" required>
-    <input class="input" type="text" name="ref"
-           placeholder="Branch (optional, default branch if empty)">
+    <div class="grid gap-2">
+      <label class="label" for="repo-new-url">Repository URL</label>
+      <input class="input" type="text" id="repo-new-url" name="url"
+             placeholder="https://github.com/maragudk/goqite.git" required>
+    </div>
+    <div class="grid gap-2">
+      <label class="label" for="repo-new-ref">Branch (optional)</label>
+      <input class="input" type="text" id="repo-new-ref" name="ref"
+             placeholder="Default branch if empty">
+    </div>
     <footer class="flex justify-between items-center gap-2">
       <a href="/repositories/new?bulk=1" class="btn-sm-ghost">
         <i data-lucide="list-plus"></i> Add multiple

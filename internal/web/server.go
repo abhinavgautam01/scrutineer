@@ -679,7 +679,12 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, dat
 	if data == nil {
 		data = map[string]any{}
 	}
-	data["Nav"] = navKey(r.URL.Path)
+	nav := navKey(r.URL.Path)
+	data["Nav"] = nav
+	// Pages without their own PageTitle take their sidebar section's name.
+	if _, ok := data[pageTitleKey]; !ok {
+		data[pageTitleKey] = navTitles[nav]
+	}
 	data["Theme"] = resolveTheme(r)
 	data["ColorScheme"] = resolveColorScheme(r)
 	// The request URI a live page re-requests to refresh its own list fragment,
@@ -794,6 +799,17 @@ func navKey(path string) string {
 		}
 	}
 	return "repos"
+}
+
+const pageTitleKey = "PageTitle"
+
+// navTitles gives each sidebar section its default document title.
+var navTitles = map[string]string{
+	"repos": "Repositories", "orgs": "Organizations", "findings": "Findings",
+	"benchmark": "Benchmark", "packages": "Packages", "sboms": "SBOMs",
+	"advisories": "Advisories", "maintainers": "Maintainers", "scans": "Scans",
+	"audit": "Audit", "skills": "Skills", "usage": "Usage",
+	"reporting": "Reporting", "settings": "Settings",
 }
 
 func isHX(r *http.Request) bool { return r.Header.Get("HX-Request") != "" }
@@ -1958,7 +1974,7 @@ func (s *Server) packageShow(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	data := map[string]any{"Pkg": p}
+	data := map[string]any{"Pkg": p, pageTitleKey: p.Name}
 	if p.Metadata != "" {
 		data["Meta"] = p.Metadata
 	}
@@ -2117,6 +2133,7 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := map[string]any{
+		pageTitleKey:          f.Title + " · " + repo.Name,
 		"F":                   f,
 		"HasDisclosureDraft":  strings.TrimSpace(f.DisclosureDraft) != "",
 		"Scan":                scan,
@@ -2242,9 +2259,20 @@ func (s *Server) repoFormError(w http.ResponseWriter, r *http.Request, alertTmpl
 
 // repoNew is the no-javascript fallback for the Add Repository dialog.
 func (s *Server) repoNew(w http.ResponseWriter, r *http.Request) {
+	bulk, org := r.FormValue("bulk") != "", r.FormValue("org") != ""
+	// The template shows the org form ahead of the bulk one, so the title
+	// follows the same precedence.
+	title := "Add repository"
+	switch {
+	case org:
+		title = "Import a GitHub organization"
+	case bulk:
+		title = "Bulk import repositories"
+	}
 	s.render(w, r, "repo_new.html", map[string]any{
-		"Bulk": r.FormValue("bulk") != "",
-		"Org":  r.FormValue("org") != "",
+		"Bulk":       bulk,
+		"Org":        org,
+		pageTitleKey: title,
 	})
 }
 
@@ -2479,6 +2507,7 @@ func (s *Server) repoShow(w http.ResponseWriter, r *http.Request) {
 	latest, tmScan := s.repoPrimaryScans(scans)
 	view := s.loadRepoShowView(repo, scans, latest, tmScan, r.URL.Query())
 	data := view.renderData()
+	data[pageTitleKey] = repo.Name
 	if convs, err := db.ConversationsFor(s.DB, repo.ID, nil); err != nil {
 		s.Log.Warn("load repo conversations", "repo", repo.ID, "err", err)
 	} else {
