@@ -1037,7 +1037,7 @@ paths:
             application/x-ndjson:
               schema: { $ref: '#/components/schemas/RepositoryExport' }
         '400':
-          description: Unsupported format query value, or `encrypt`/`scope`/`include` requested (`scope` is only valid on per-repository exports, `encrypt`/`include` on per-repository bundle exports).
+          description: Unsupported format query value, or `encrypt`/`scope`/`include` requested (`scope` is only valid on the per-repository and `/v1/findings` exports, `encrypt`/`include` on per-repository bundle exports).
         '403':
           description: Host header is not localhost
 
@@ -1144,8 +1144,8 @@ paths:
             bucket (deep-dive and vuln-scan audits plus operator imports),
             excluding per-repo scanner noise. It combines with `severity` and
             `status`. Any other value, or use on the cross-repo
-            `/v1/repositories`, `/v1/findings` and `/v1/scans` endpoints, gets
-            a 400. Omitted: the export carries every finding.
+            `/v1/repositories` and `/v1/scans` endpoints, gets a 400. Omitted:
+            the export carries every finding.
           schema: { type: string, enum: [findings] }
         - name: include
           in: query
@@ -1214,6 +1214,41 @@ paths:
           schema:
             type: string
             enum: [new, enriched, triaged, ready, reported, acknowledged, fixed, published, rejected, duplicate]
+        - name: sub_path
+          in: query
+          description: |
+            Restrict to findings under a single monorepo sub-package. `.`
+            selects root-scoped findings; empty includes all scopes.
+          schema: { type: string }
+        - name: scope
+          in: query
+          description: |
+            `findings` curates the export to the Findings bucket (deep-dive and
+            vuln-scan audits plus operator imports), excluding per-repo scanner
+            noise. It combines with the other filters. Any other nonempty value
+            gets a 400. Omitted: the export carries every finding.
+          schema: { type: string, enum: [findings] }
+        - name: repository_id
+          in: query
+          description: Restrict findings to this repository. A nonexistent ID returns an empty stream.
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: since
+          in: query
+          description: |
+            Include findings whose `created_at` is greater than or equal to this
+            RFC3339 timestamp. UTC and numeric offsets represent the same instant;
+            fractional seconds are preserved to nanosecond precision. Combine
+            with any other filters using AND. This filters creation time, so it
+            does not include older findings merely because they were updated later.
+          schema: { type: string, format: date-time }
+        - name: updated_since
+          in: query
+          description: |
+            Include findings whose `updated_at` is greater than or equal to this
+            RFC3339 timestamp. This covers both newly created findings and later
+            modifications of existing ones. Offsets and precision behave as for
+            `since`. Combine with any other filters using AND.
+          schema: { type: string, format: date-time }
       responses:
         '200':
           description: JSONL stream of FindingExport objects, one per line.
@@ -1221,7 +1256,7 @@ paths:
             application/x-ndjson:
               schema: { $ref: '#/components/schemas/FindingExport' }
         '400':
-          description: Unsupported format query value, or `encrypt`/`scope`/`include` requested (`scope` is only valid on per-repository exports, `encrypt`/`include` on per-repository bundle exports).
+          description: Invalid or empty repository_id, since or updated_since, unknown scope value, unsupported format query value, or `encrypt`/`include` requested (`encrypt`/`include` are only valid on per-repository bundle exports). Validation completes before streaming starts.
         '403':
           description: Host header is not localhost
 
@@ -1318,7 +1353,7 @@ paths:
             application/x-ndjson:
               schema: { $ref: '#/components/schemas/ScanExport' }
         '400':
-          description: Invalid or empty repository_id or since, unsupported format query value, or `encrypt`/`scope`/`include` requested (`scope` is only valid on per-repository exports, `encrypt`/`include` on per-repository bundle exports). Validation completes before streaming starts.
+          description: Invalid or empty repository_id or since, unsupported format query value, or `encrypt`/`scope`/`include` requested (`scope` is only valid on the per-repository and `/v1/findings` exports, `encrypt`/`include` on per-repository bundle exports). Validation completes before streaming starts.
         '403':
           description: Host header is not localhost
 

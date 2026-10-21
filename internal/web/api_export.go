@@ -243,8 +243,7 @@ func (s *Server) apiExportRepoFindings(w http.ResponseWriter, r *http.Request) {
 	// vuln-scan, imports), dropping per-repo scanner noise. Unknown values are
 	// rejected rather than silently returning the full set a caller asked to
 	// narrow.
-	if scope := r.URL.Query().Get("scope"); scope != "" && scope != "findings" {
-		writeAPIError(w, http.StatusBadRequest, "unsupported scope: findings")
+	if !validFindingScope(w, r) {
 		return
 	}
 	// include=all promotes the bundle to the archival superset (the operator's
@@ -654,11 +653,22 @@ func encryptBundle(plain []byte, recipients []age.Recipient) ([]byte, error) {
 }
 
 func (s *Server) apiExportFindings(w http.ResponseWriter, r *http.Request) {
-	if !validateExportFormat(w, r) {
+	if !validateExportQuery(w, r) || !validFindingScope(w, r) {
 		return
 	}
-	q := applyFindingFilters(s.DB.Model(&db.Finding{}).Order("id desc"), r)
-	streamJSONL(w, q, s.Log, findingExport)
+	q := s.DB.Model(&db.Finding{}).Order("id desc")
+	params := r.URL.Query()
+	q, ok := filterExportRepository(w, q, params)
+	if !ok {
+		return
+	}
+	if q, ok = filterExportTime(w, q, params, "since", "created_at"); !ok {
+		return
+	}
+	if q, ok = filterExportTime(w, q, params, "updated_since", "updated_at"); !ok {
+		return
+	}
+	streamJSONL(w, applyFindingFilters(q, r), s.Log, findingExport)
 }
 
 func (s *Server) apiExportScans(w http.ResponseWriter, r *http.Request) {
@@ -667,24 +677,15 @@ func (s *Server) apiExportScans(w http.ResponseWriter, r *http.Request) {
 	}
 	q := s.DB.Model(&db.Scan{}).Order("id desc")
 	params := r.URL.Query()
-	if params.Has("repository_id") {
-		id, err := strconv.ParseInt(params.Get("repository_id"), 10, 64)
-		if err != nil || id <= 0 {
-			writeAPIError(w, http.StatusBadRequest, "repository_id must be a positive integer")
-			return
-		}
-		q = q.Where("repository_id = ?", id)
+	q, ok := filterExportRepository(w, q, params)
+	if !ok {
+		return
 	}
 	if v := params.Get("kind"); v != "" {
 		q = q.Where("kind = ?", v)
 	}
-	if params.Has("since") {
-		since, err := time.Parse(time.RFC3339, params.Get("since"))
-		if err != nil {
-			writeAPIError(w, http.StatusBadRequest, "since must be an RFC3339 timestamp")
-			return
-		}
-		q = scanExportSince(q, since)
+	if q, ok = filterExportTime(w, q, params, "since", "created_at"); !ok {
+		return
 	}
 	if v := params.Get(statusKey); v != "" {
 		q = q.Where("status = ?", v)
@@ -695,14 +696,44 @@ func (s *Server) apiExportScans(w http.ResponseWriter, r *http.Request) {
 	streamJSONL(w, q, s.Log, scanExport)
 }
 
-func scanExportSince(q *gorm.DB, since time.Time) *gorm.DB {
+// filterExportRepository applies the repository_id filter, writing a 400 and
+// returning false when the value is not a positive integer.
+func filterExportRepository(w http.ResponseWriter, q *gorm.DB, params url.Values) (*gorm.DB, bool) {
+	if !params.Has("repository_id") {
+		return q, true
+	}
+	id, err := strconv.ParseInt(params.Get("repository_id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeAPIError(w, http.StatusBadRequest, "repository_id must be a positive integer")
+		return q, false
+	}
+	return q.Where("repository_id = ?", id), true
+}
+
+// filterExportTime applies an RFC3339 lower bound on column for the named
+// query parameter, writing a 400 and returning false when it does not parse.
+func filterExportTime(w http.ResponseWriter, q *gorm.DB, params url.Values, param, column string) (*gorm.DB, bool) {
+	if !params.Has(param) {
+		return q, true
+	}
+	t, err := time.Parse(time.RFC3339, params.Get(param))
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, param+" must be an RFC3339 timestamp")
+		return q, false
+	}
+	return exportSince(q, column, t), true
+}
+
+// exportSince keeps rows whose column is at or after since. column is always a
+// constant column name, never user input.
+func exportSince(q *gorm.DB, column string, since time.Time) *gorm.DB {
 	if q.Name() == string(db.DialectPostgres) {
-		return q.Where("created_at >= ?", since)
+		return q.Where(column+" >= ?", since)
 	}
 	// SQLite timestamps retain local offsets. Compare seconds and the fraction
 	// separately: text ordering ignores offsets, while julianday loses nanoseconds.
-	return q.Where(`(unixepoch(created_at),
-		CASE WHEN substr(created_at, 20, 1) = '.' THEN CAST(substr(created_at, 20) AS REAL) ELSE 0 END
+	return q.Where(`(unixepoch(`+column+`),
+		CASE WHEN substr(`+column+`, 20, 1) = '.' THEN CAST(substr(`+column+`, 20) AS REAL) ELSE 0 END
 	) >= (?, ?)`, since.Unix(), float64(since.Nanosecond())/float64(time.Second))
 }
 
@@ -737,7 +768,9 @@ func repositoryExport(row repositoryExportRow) map[string]any {
 	return out
 }
 
-func validateExportFormat(w http.ResponseWriter, r *http.Request) bool {
+// validateExportQuery rejects the format, encrypt and include values that the
+// JSONL exports and single-row reads do not support.
+func validateExportQuery(w http.ResponseWriter, r *http.Request) bool {
 	if v := r.URL.Query().Get("format"); v != "" && v != "jsonl" {
 		writeAPIError(w, http.StatusBadRequest, "unsupported format: only jsonl")
 		return false
@@ -749,15 +782,32 @@ func validateExportFormat(w http.ResponseWriter, r *http.Request) bool {
 		writeAPIError(w, http.StatusBadRequest, "encrypt is only supported on per-repository bundle exports")
 		return false
 	}
-	// scope is only accepted on the per-repository findings export; reject it
-	// here rather than silently ignore it.
-	if r.URL.Query().Get("scope") != "" {
-		writeAPIError(w, http.StatusBadRequest, "scope is only supported on per-repository exports")
-		return false
-	}
 	// include selects the archival bundle superset; like encrypt, bundle-only.
 	if r.URL.Query().Get("include") != "" {
 		writeAPIError(w, http.StatusBadRequest, "include is only supported on per-repository bundle exports")
+		return false
+	}
+	return true
+}
+
+// validateExportFormat is validateExportQuery for endpoints that do not take
+// scope; it rejects scope rather than silently ignoring it.
+func validateExportFormat(w http.ResponseWriter, r *http.Request) bool {
+	if !validateExportQuery(w, r) {
+		return false
+	}
+	if r.URL.Query().Get("scope") != "" {
+		writeAPIError(w, http.StatusBadRequest, "scope is only supported on findings exports")
+		return false
+	}
+	return true
+}
+
+// validFindingScope accepts an empty scope or scope=findings, writing a 400
+// and returning false for anything else.
+func validFindingScope(w http.ResponseWriter, r *http.Request) bool {
+	if scope := r.URL.Query().Get("scope"); scope != "" && scope != "findings" {
+		writeAPIError(w, http.StatusBadRequest, "unsupported scope: findings")
 		return false
 	}
 	return true
