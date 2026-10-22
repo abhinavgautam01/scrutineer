@@ -797,7 +797,7 @@ func validateExportFormat(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	if r.URL.Query().Get("scope") != "" {
-		writeAPIError(w, http.StatusBadRequest, "scope is only supported on findings exports")
+		writeAPIError(w, http.StatusBadRequest, "scope is only supported on /v1/findings and /v1/repositories/{id}/findings")
 		return false
 	}
 	return true
@@ -807,7 +807,7 @@ func validateExportFormat(w http.ResponseWriter, r *http.Request) bool {
 // and returning false for anything else.
 func validFindingScope(w http.ResponseWriter, r *http.Request) bool {
 	if scope := r.URL.Query().Get("scope"); scope != "" && scope != "findings" {
-		writeAPIError(w, http.StatusBadRequest, "unsupported scope: findings")
+		writeAPIError(w, http.StatusBadRequest, "unsupported scope: only findings")
 		return false
 	}
 	return true
