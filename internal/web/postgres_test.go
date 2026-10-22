@@ -116,6 +116,7 @@ func testDatabaseWeb(t *testing.T, gdb *gorm.DB, dialect queue.Dialect) {
 	if got := exportScanIDs(t, s, url.Values{"since": {scan.CreatedAt.Add(time.Hour).Format(time.RFC3339Nano)}}); len(got) != 0 {
 		t.Fatalf("future since export returned %v", got)
 	}
+	checkDatabaseFindingExport(t, s, gdb, repo.ID)
 
 	if err := gdb.Create(&db.AdvisoryAudit{RepositoryID: repo.ID, AdvisoryUUID: "uuid-1", Status: interchange.CertificateStatusFixed, Commit: "abc123"}).Error; err != nil {
 		t.Fatal(err)
@@ -137,5 +138,24 @@ func testDatabaseWeb(t *testing.T, gdb *gorm.DB, dialect queue.Dialect) {
 	var skipped db.Scan
 	if err := gdb.Where("repository_id = ? AND status = ?", scheduled.ID, db.ScanSkipped).First(&skipped).Error; err != nil || !strings.Contains(skipped.Error, "no new commits") {
 		t.Fatalf("scheduled scan not skipped as unchanged: %q, err %v", skipped.Error, err)
+	}
+}
+
+func checkDatabaseFindingExport(t *testing.T, s *Server, gdb *gorm.DB, repoID uint) {
+	t.Helper()
+	var finding db.Finding
+	if err := gdb.Where("title = ?", "Homebrew finding").First(&finding).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, param := range []string{"since", "updated_since"} {
+		filters := url.Values{"repository_id": {fmt.Sprint(repoID)}, "scope": {"findings"},
+			param: {finding.CreatedAt.Add(-time.Second).Format(time.RFC3339Nano)}}
+		if got := exportFindingIDs(t, s, filters); !slices.Equal(got, []uint{finding.ID}) {
+			t.Fatalf("%s findings export = %v, want [%d]", param, got, finding.ID)
+		}
+		filters.Set(param, finding.UpdatedAt.Add(time.Hour).Format(time.RFC3339Nano))
+		if got := exportFindingIDs(t, s, filters); len(got) != 0 {
+			t.Fatalf("future %s findings export returned %v", param, got)
+		}
 	}
 }

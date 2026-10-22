@@ -2071,18 +2071,22 @@ func assertExportRejects(t *testing.T, s *Server, keyword string, cases []struct
 }
 
 // TestExportBundle_scopeRejected pins the validation: an unknown scope value on
-// either per-repository format and scope on the cross-repo endpoints all 400.
+// either per-repository format or on /v1/findings gets a 400. So does any scope
+// on the repositories, scans and single-finding endpoints.
 func TestExportBundle_scopeRejected(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
 	repo := seedFindings(t, s)
 	id := strconv.FormatUint(uint64(repo.ID), 10)
 
-	assertExportRejects(t, s, "scope", []struct{ name, path string }{
+	assertExportRejects(t, s, "unsupported scope: only findings", []struct{ name, path string }{
 		{"unknown scope value on bundle", "/api/v1/repositories/" + id + "/findings?format=bundle&scope=bogus"},
 		{"unknown scope value on jsonl", "/api/v1/repositories/" + id + "/findings?scope=bogus"},
+		{"unknown scope value on global findings", "/api/v1/findings?scope=bogus"},
+	})
+	assertExportRejects(t, s, "scope is only supported on /v1/findings and /v1/repositories/{id}/findings", []struct{ name, path string }{
 		{"scope on repositories", "/api/v1/repositories?scope=findings"},
-		{"scope on global findings", "/api/v1/findings?scope=findings"},
+		{"scope on single finding", "/api/v1/findings/1?scope=findings"},
 		{"scope on global scans", "/api/v1/scans?scope=findings"},
 	})
 }

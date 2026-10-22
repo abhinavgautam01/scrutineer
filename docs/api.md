@@ -54,7 +54,9 @@ curl -H "Authorization: Bearer $(cat data/operator-token)" http://127.0.0.1:8080
 curl -H "Authorization: Bearer $(cat data/operator-token)" http://127.0.0.1:8080/api/v1/scans
 ```
 
-`GET /api/v1/repositories/{id}` and `GET /api/v1/findings/{id}` return a single row as JSON, with the same shape as a line of the matching JSONL export. A malformed ID returns `400` and an unknown one `404`. Like the cross-repository exports, they reject `encrypt`, `scope`, `include` and any `format` other than `jsonl` with `400` rather than returning plaintext.
+`GET /api/v1/findings` accepts `severity`, `status`, `sub_path`, `scope=findings`, `repository_id`, `since` (creation time) and `updated_since` (modification time) filters, combined with AND. See `openapi.yaml` for the exact semantics.
+
+`GET /api/v1/repositories/{id}` and `GET /api/v1/findings/{id}` return a single row as JSON, with the same shape as a line of the matching JSONL export. A malformed ID returns `400` and an unknown one `404`. They reject `encrypt`, `scope`, `include` and any `format` other than `jsonl` with `400` rather than returning plaintext, as do the repositories and scans exports. `scope=findings` is accepted only by the findings exports, `/api/v1/findings` and `/api/v1/repositories/{id}/findings`.
 
 This surface includes JSONL exports, repository finding bundles, report imports, operator delete operations, and instance-wide audit exports. Because these routes can read or modify data across the whole instance, they are kept outside the repository-scoped skill API.
 
