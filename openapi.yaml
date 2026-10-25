@@ -347,7 +347,7 @@ paths:
           schema: { type: string }
         - name: sub_path
           in: query
-          description: Only return findings for this monorepo sub-package (e.g. `activesupport`), so a repository can be exported or bundled one sub-package at a time.
+          description: Exact match on the monorepo sub-package; `.` selects repository-root findings. Omit to return all findings.
           schema: { type: string }
       responses:
         '200':
@@ -1786,6 +1786,7 @@ components:
         poc_capture_error: { type: string, description: "Present on streamed publication when the finding was saved but PoC capture failed." }
         sinks:         { type: string, description: Comma-joined sink ids. }
         title:         { type: string }
+        sub_path:      { type: string, description: "Monorepo sub-folder the producing scan was scoped to. The finding's location is relative to it; empty means the repo root." }
         severity:      { type: string, enum: [Critical, High, Medium, Low] }
         severity_caps: { type: array, items: { type: string }, description: "Deterministic reasons that currently cap severity, derived from the latest reconciled verification controls and typed attacker prerequisites." }
         severity_calibration_incomplete: { type: boolean, description: "True when an unknown severity, unknown or unattempted prerequisite, unavailable control resolution, or unresolved control assessment prevented complete calibration; unknown inputs never lower severity." }
@@ -1831,7 +1832,6 @@ components:
             exploited_in_wild_evidence: { type: string, description: "Evidence supporting the analyst's exploitation status." }
             mitigation:    { type: string, description: "Markdown body of operational mitigation guidance from the mitigate skill: workarounds, detection, optionally a semgrep rule (see mitigation_semgrep)." }
             mitigation_semgrep: { type: string, description: "Optional YAML semgrep rule from the mitigate skill. Empty when no rule was warranted." }
-            sub_path:         { type: string, description: "Monorepo sub-folder the producing scan was scoped to. The finding's location is relative to it; empty means the repo root." }
             verification:
               allOf:
                 - $ref: '#/components/schemas/FindingVerification'

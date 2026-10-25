@@ -451,6 +451,60 @@ func TestAPIFindingReadsAndFilters(t *testing.T) {
 	}
 }
 
+func TestAPIListFindingsSubPath(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	repo, scan := seedRunningScan(t, s)
+	for _, finding := range []db.Finding{
+		{ScanID: scan.ID, RepositoryID: repo.ID, FindingID: "sub", SubPath: "services/api"},
+		{ScanID: scan.ID, RepositoryID: repo.ID, FindingID: "root"},
+	} {
+		s.DB.Create(&finding)
+	}
+	otherRepo := db.Repository{URL: "https://example.com/other", Name: "other"}
+	s.DB.Create(&otherRepo)
+	s.DB.Create(&db.Finding{ScanID: scan.ID, RepositoryID: otherRepo.ID, FindingID: "other-root"})
+
+	for _, tc := range []struct {
+		query    string
+		wantIDs  []string
+		wantPath string
+	}{
+		{query: "", wantIDs: []string{"root", "sub"}},
+		{query: "?sub_path=services%2Fapi", wantIDs: []string{"sub"}, wantPath: "services/api"},
+		{query: "?sub_path=.", wantIDs: []string{"root"}},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			r := httptest.NewRequest("GET", fmt.Sprintf("/api/repositories/%d/findings%s", repo.ID, tc.query), nil)
+			asOperator(r)
+			r.Header.Set("Authorization", "Bearer "+scan.APIToken)
+			w := httptest.NewRecorder()
+			s.Handler().ServeHTTP(w, r)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status %d: %s", w.Code, w.Body.String())
+			}
+			var rows []map[string]any
+			if err := json.NewDecoder(w.Body).Decode(&rows); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if len(rows) != len(tc.wantIDs) {
+				t.Fatalf("findings: got %+v, want IDs %v", rows, tc.wantIDs)
+			}
+			for i, row := range rows {
+				if row["finding_id"] != tc.wantIDs[i] {
+					t.Errorf("finding %d: got %+v, want ID %q", i, row, tc.wantIDs[i])
+				}
+				if tc.query != "" && row["sub_path"] != tc.wantPath {
+					t.Errorf("finding %d: got sub_path %v, want %q", i, row["sub_path"], tc.wantPath)
+				}
+				if _, ok := row["sub_path"]; !ok {
+					t.Errorf("finding %d missing sub_path: %+v", i, row)
+				}
+			}
+		})
+	}
+}
+
 func TestAPIListDependencyFindings(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()

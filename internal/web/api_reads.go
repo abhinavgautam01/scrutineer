@@ -317,6 +317,7 @@ func (s *Server) apiListFindings(w http.ResponseWriter, r *http.Request) {
 	if status := r.URL.Query().Get(statusKey); status != "" {
 		q = q.Where("status = ?", status)
 	}
+	q = filterBySubPath(q, r.URL.Query().Get("sub_path"))
 	var rows []db.Finding
 	q.Select(findingSummaryColumns).Find(&rows)
 	out := make([]map[string]any, 0, len(rows))
@@ -372,9 +373,6 @@ func (s *Server) apiGetFinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	summary := findingSummary(f)
-	// Monorepo locations are relative to the producing scan's sub-folder;
-	// finding-scoped skills need it to rebuild repository-relative paths.
-	summary["sub_path"] = f.SubPath
 	summary["trace"] = f.Trace
 	summary["boundary"] = f.Boundary
 	summary["validation"] = f.Validation
@@ -424,7 +422,7 @@ func (s *Server) apiGetFinding(w http.ResponseWriter, r *http.Request) {
 // findingSummaryColumns lists what findingSummary reads, leaving out the prose
 // blobs it never emits. Keep in sync with findingSummary.
 var findingSummaryColumns = []string{
-	"id", "scan_id", "repository_id", "finding_id", "commit", "sinks", "title",
+	"id", "scan_id", "repository_id", "finding_id", "commit", "sinks", "title", "sub_path",
 	"severity", "severity_caps", "severity_calibration_incomplete", "status", "cwe", "location", "vid", "affected", "reachability",
 	"quality_tier", "cve_id", "ghsa_id", "cvss_vector", "cvss_score", "cvss_v4_vector", "cvss_v4_score",
 	"fix_version", "fix_commit", "resolution", "assignee", "missed_count",
@@ -442,6 +440,7 @@ func findingSummary(f db.Finding) map[string]any {
 		"commit":                          f.Commit,
 		"sinks":                           f.Sinks,
 		"title":                           f.Title,
+		"sub_path":                        f.SubPath,
 		"severity":                        f.Severity,
 		"severity_caps":                   f.SeverityCapList(),
 		"severity_calibration_incomplete": f.SeverityCalibrationIncomplete,
