@@ -13,7 +13,6 @@ import (
 
 const (
 	revalidateSkillName     = "revalidate"
-	historySkillName        = "history"
 	noveltyLogMaxCommits    = 20
 	noveltyLogMaxBytes      = 64 * 1024
 	noveltyUnavailableNoGit = "repository history is unavailable"

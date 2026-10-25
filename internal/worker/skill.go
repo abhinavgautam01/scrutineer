@@ -34,6 +34,7 @@ const (
 	refusalAuditMaxTurns      = 3
 	threatModelSkillName      = "threat-model"
 	reconSkillName            = "recon"
+	historySkillName          = "history"
 )
 
 // skillContext is the JSON document scrutineer writes to ./context.json in
