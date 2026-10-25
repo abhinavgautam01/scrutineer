@@ -473,8 +473,8 @@ paths:
                     Optional spend cap in USD for this scan. When the running cost estimate reaches it the
                     worker stops the run, asks the agent to write its report from the work so far and
                     records the scan as done with partial coverage and reason `cost_cap`. Omitted or 0
-                    means no cap. Negative values return 400. For the codex backend the estimate only
-                    updates when the run reports its result.
+                    means no cap. Negative values return 400. The cap does not apply to the codex
+                    backend, which emits no usage events.
       responses:
         '201':
           description: Scan enqueued
@@ -889,8 +889,8 @@ paths:
                     Optional spend cap in USD for this scan. When the running cost estimate reaches it the
                     worker stops the run, asks the agent to write its report from the work so far and
                     records the scan as done with partial coverage and reason `cost_cap`. Omitted or 0
-                    means no cap. Negative values return 400. For the codex backend the estimate only
-                    updates when the run reports its result.
+                    means no cap. Negative values return 400. The cap does not apply to the codex
+                    backend, which emits no usage events.
       responses:
         '201':
           description: Scan enqueued

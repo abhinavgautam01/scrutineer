@@ -80,6 +80,19 @@ func TestCostGuard_resultFoldsPending(t *testing.T) {
 	}
 }
 
+func TestCostGuard_resultDoesNotTrip(t *testing.T) {
+	scan := &db.Scan{}
+	ctx, cancel := context.WithCancelCause(context.Background())
+	g := newCostGuard(scan, 1.0, cancel)
+	emit := g.wrap(guardEmit(scan))
+
+	emit(Event{Kind: KindUsage, CostUSD: 0.4})
+	emit(Event{Kind: KindResult, CostUSD: 1.5})
+	if g.Tripped() || ctx.Err() != nil {
+		t.Fatalf("a result over the cap tripped the guard (tripped %v err %v)", g.Tripped(), ctx.Err())
+	}
+}
+
 func TestCostGuard_zeroCapNeverTrips(t *testing.T) {
 	scan := &db.Scan{}
 	ctx, cancel := context.WithCancelCause(context.Background())
@@ -235,6 +248,58 @@ func TestDoSkill_costCapWithoutSessionKeepsPartialReport(t *testing.T) {
 	if got.Status != db.ScanDone || !got.CostCapped || got.Report != `{"partial":"yes"}` {
 		t.Errorf("status %s capped %v report %q", got.Status, got.CostCapped, got.Report)
 	}
+}
+
+func assertFullReportKept(t *testing.T, runner *capRunner, got db.Scan) {
+	t.Helper()
+	if len(runner.jobs) != 1 {
+		t.Fatalf("RunSkill called %d times, want 1", len(runner.jobs))
+	}
+	if got.Status != db.ScanDone || got.CostCapped {
+		t.Errorf("status %s capped %v", got.Status, got.CostCapped)
+	}
+	if got.Report != `{"full":true}` {
+		t.Errorf("report %q", got.Report)
+	}
+	if got.Completeness == coverage.CompletenessPartial {
+		t.Errorf("completeness = %q", got.Completeness)
+	}
+}
+
+func TestDoSkill_resultOverCapKeepsFullReport(t *testing.T) {
+	w, scan := costCapFixture(t, 1.0)
+	runner := &capRunner{
+		first: func(_ context.Context, emit func(Event)) (SkillResult, error) {
+			emit(Event{Kind: KindSession, SessionID: "sess-1"})
+			emit(Event{Kind: KindUsage, CostUSD: 0.4})
+			emit(Event{Kind: KindResult, CostUSD: 1.5})
+			return SkillResult{Report: `{"full":true}`}, nil
+		},
+		finalize: func(SkillJob) (SkillResult, error) {
+			t.Error("finalize ran for a finished run")
+			return SkillResult{}, nil
+		},
+	}
+	w.Runner = runner
+	assertFullReportKept(t, runner, runCapScan(t, w, scan))
+}
+
+func TestDoSkill_usageTripAfterFinishKeepsFullReport(t *testing.T) {
+	w, scan := costCapFixture(t, 1.0)
+	runner := &capRunner{
+		first: func(_ context.Context, emit func(Event)) (SkillResult, error) {
+			emit(Event{Kind: KindUsage, CostUSD: 0.6})
+			emit(Event{Kind: KindUsage, CostUSD: 0.6})
+			emit(Event{Kind: KindResult, CostUSD: 1.2})
+			return SkillResult{Report: `{"full":true}`}, nil
+		},
+		finalize: func(SkillJob) (SkillResult, error) {
+			t.Error("finalize ran for a finished run")
+			return SkillResult{}, nil
+		},
+	}
+	w.Runner = runner
+	assertFullReportKept(t, runner, runCapScan(t, w, scan))
 }
 
 func TestDoSkill_operatorCancelIsNotACostCap(t *testing.T) {

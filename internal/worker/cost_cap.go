@@ -20,7 +20,8 @@ const costCapFinalizeMaxTurns = 3
 
 // costGuard watches a run's event stream and cancels the run context once the
 // estimated spend reaches the cap. scan.CostUSD only grows on KindResult, so
-// usage events are tracked in pending until the result folds them in.
+// usage events are tracked in pending until the result folds them in. It only
+// trips on usage events because a result means the run already finished.
 type costGuard struct {
 	mu      sync.Mutex
 	scan    *db.Scan
@@ -45,6 +46,9 @@ func (g *costGuard) wrap(emit func(Event)) func(Event) {
 			g.pending += e.CostUSD
 		case KindResult:
 			g.pending = 0
+		}
+		if e.Kind != KindUsage {
+			return
 		}
 		estimate := g.scan.CostUSD + g.pending
 		if g.cap <= 0 || g.tripped || estimate < g.cap {

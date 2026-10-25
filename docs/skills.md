@@ -197,10 +197,10 @@ metadata:
 
 ## Cost cap
 
-A scan can carry an optional spend cap in USD. Set it in the "No cost cap" field
-next to the Run skill menu on the repository page, or send `max_cost_usd` in the
-body of the skill run API calls. Empty or 0 means no cap and a negative value is
-refused.
+A scan can carry an optional spend cap in USD. Set it in the "Cost cap (USD)"
+field next to the Run skill menu on the repository page, or send `max_cost_usd`
+in the body of the skill run API calls. Empty or 0 means no cap and a negative
+value is refused.
 
 The worker tracks a running cost estimate from the agent's usage events. Once
 the estimate reaches the cap it stops the run at the next usage event, then
@@ -209,10 +209,11 @@ the agent to write its report from the work so far. The scan finishes as done
 with a "cost cap" badge, partial coverage and the reason `cost_cap`. Actual
 spend can exceed the cap by one call plus the finalize turn.
 
-The codex backend emits no usage events, so its estimate only updates when the
-run reports its result and the cap is checked then. Retrying a capped scan
-resumes the saved session with a fresh budget and keeps the same cap. Group
-budgets are not implemented yet.
+The cap does not apply to the codex backend because it emits no usage events,
+so a codex scan always runs to completion. A run whose final result pushes it
+past the cap is not treated as capped since it already finished. Retrying a
+capped scan resumes the saved session with a fresh budget and keeps the same
+cap. Group budgets are not implemented yet.
 
 ## Runtime capability preflight
 

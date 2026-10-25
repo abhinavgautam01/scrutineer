@@ -27,7 +27,7 @@
         {{range .ScanEgressPolicies}}<option value="{{.}}">{{.}}</option>{{end}}
       </select>
       {{end}}
-      <input type="number" name="max_cost_usd" min="0" step="0.01" inputmode="decimal" class="input text-xs w-28" placeholder="No cost cap" aria-label="Cost cap in USD">
+      <input type="number" name="max_cost_usd" min="0" step="0.01" inputmode="decimal" class="input text-xs w-28" placeholder="Cost cap (USD)" aria-label="Cost cap in USD">
       <div class="dropdown-menu">
         <button class="btn-outline" type="button" aria-haspopup="menu" aria-expanded="false"
                 aria-controls="skill-menu">
