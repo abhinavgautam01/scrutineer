@@ -366,7 +366,7 @@ func TestGitShowBlob_classifiesContent(t *testing.T) {
 	}
 }
 
-func TestGitShowBlob_doesNotRenderSplitUTF8Prefix(t *testing.T) {
+func TestGitShowBlob_rendersSplitUTF8PrefixAsText(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
@@ -382,11 +382,11 @@ func TestGitShowBlob_doesNotRenderSplitUTF8Prefix(t *testing.T) {
 	if !blob.Truncated {
 		t.Fatal("expected truncated=true")
 	}
-	if blob.Detection.Kind != magic.KindUnknown || blob.Detection.Reason != magic.ReasonNeedMore {
-		t.Errorf("Detection = %+v, want unknown needing more bytes", blob.Detection)
+	if blob.Detection.Kind != magic.KindText || blob.Detection.Encoding != magic.EncodingUTF8 || blob.Detection.Reason != magic.ReasonNeedMore {
+		t.Errorf("Detection = %+v, want utf-8 text needing more bytes", blob.Detection)
 	}
-	if renderableBlob(blob.Detection) {
-		t.Error("expected split UTF-8 prefix not to render")
+	if !renderableBlob(blob.Detection) {
+		t.Error("expected split UTF-8 prefix to render")
 	}
 }
 

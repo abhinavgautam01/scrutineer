@@ -195,7 +195,8 @@ func ownerDSN(t *testing.T) string {
 		must(t, err)
 		query := parsed.Query()
 		query.Set("options", "-c role="+role)
-		parsed.RawQuery = query.Encode()
+		// libpq percent-decodes URI values and keeps "+" literal.
+		parsed.RawQuery = strings.ReplaceAll(query.Encode(), "+", "%20")
 		return parsed.String()
 	}
 	return dsn + " options='-c role=" + role + "'"
