@@ -16,7 +16,7 @@ require (
 	github.com/git-pkgs/pom v0.1.8
 	github.com/git-pkgs/purl v0.1.21
 	github.com/git-pkgs/sarif v0.1.3
-	github.com/git-pkgs/sbom v0.1.6
+	github.com/git-pkgs/sbom v0.1.7
 	github.com/git-pkgs/skills v0.2.0
 	github.com/git-pkgs/vulns v0.2.4
 	github.com/glebarez/sqlite v1.11.0
@@ -41,7 +41,7 @@ require (
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/cyphar/filepath-securejoin v0.7.0 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
-	github.com/git-pkgs/registries v0.9.3 // indirect
+	github.com/git-pkgs/registries v0.10.0 // indirect
 	github.com/git-pkgs/spdx v0.3.3 // indirect
 	github.com/git-pkgs/vers v0.7.2 // indirect
 	github.com/github/go-spdx/v2 v2.7.1 // indirect
