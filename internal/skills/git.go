@@ -9,8 +9,8 @@ import (
 	"slices"
 	"strings"
 
-	harnessskills "github.com/alpha-omega-security/harness/skills"
 	"github.com/git-pkgs/clone"
+	agentskills "github.com/git-pkgs/skills"
 )
 
 const (
@@ -20,8 +20,8 @@ const (
 )
 
 // ParseRepoSpec splits a skills_repo spec (owner/repo[@ref] or a full https
-// URL) into a clone URL and optional ref. See harness/skills.ParseRepoSpec.
-var ParseRepoSpec = harnessskills.ParseRepoSpec
+// URL) into a clone URL and optional ref. See [agentskills.ParseRepoSpec].
+var ParseRepoSpec = agentskills.ParseRepoSpec
 
 // CloneOrPull prepares a local copy of a git repo at dst. On first call it
 // clones; on subsequent calls it fetches and resets to the requested ref so

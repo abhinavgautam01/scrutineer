@@ -4,7 +4,7 @@ import (
 	"slices"
 	"strings"
 
-	harnessskills "github.com/alpha-omega-security/harness/skills"
+	agentskills "github.com/git-pkgs/skills"
 )
 
 // BuiltinSkipPaths is the default skip list applied when a skill does not
@@ -33,12 +33,12 @@ var BuiltinSkipPaths = []string{
 }
 
 // The glob matcher and pattern round-tripping live in
-// github.com/alpha-omega-security/harness/skills.
+// github.com/git-pkgs/skills.
 var (
-	Match         = harnessskills.Match
-	ValidateGlob  = harnessskills.ValidateGlob
-	SplitPatterns = harnessskills.SplitPatterns
-	JoinPatterns  = harnessskills.JoinPatterns
+	Match         = agentskills.Match
+	ValidateGlob  = agentskills.ValidateGlob
+	SplitPatterns = agentskills.SplitPatterns
+	JoinPatterns  = agentskills.JoinPatterns
 )
 
 // DirAllExcluded reports whether every file under directory rel is

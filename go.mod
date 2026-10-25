@@ -6,7 +6,7 @@ toolchain go1.27.3
 
 require (
 	filippo.io/age v1.3.2
-	github.com/alpha-omega-security/harness v0.1.16
+	github.com/alpha-omega-security/harness v0.1.17
 	github.com/ecosyste-ms/ecosystems-go v0.5.0
 	github.com/git-pkgs/clone v0.7.5
 	github.com/git-pkgs/clone/gogit v0.1.2
@@ -17,6 +17,7 @@ require (
 	github.com/git-pkgs/purl v0.1.21
 	github.com/git-pkgs/sarif v0.1.3
 	github.com/git-pkgs/sbom v0.1.6
+	github.com/git-pkgs/skills v0.2.0
 	github.com/git-pkgs/vulns v0.2.4
 	github.com/glebarez/sqlite v1.11.0
 	github.com/google/uuid v1.6.0

@@ -1,8 +1,8 @@
 // Package skills loads claude-code skill directories from disk and upserts
 // them into the database. Frontmatter parsing, spec-field validation,
 // schema.json loading, and content hashing live in
-// github.com/alpha-omega-security/harness/skills; this package layers the
-// scrutineer.* metadata keys and gorm persistence on top.
+// github.com/git-pkgs/skills; this package layers the scrutineer.* metadata
+// keys and gorm persistence on top.
 //
 // agentskills.io spec violations (name format, field lengths) are lenient:
 // they log a warning and the skill loads anyway, per the client guide. The
@@ -18,7 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	harnessskills "github.com/alpha-omega-security/harness/skills"
+	agentskills "github.com/git-pkgs/skills"
 
 	"scrutineer/internal/db"
 )
@@ -135,10 +135,10 @@ var ProfileValidator func(string) bool
 
 // Parsed is a SKILL.md-plus-neighbours as extracted from disk. The
 // agentskills.io spec fields, Body, SchemaJSON, SourcePath, SourceHash, and
-// Warnings come from the embedded harness/skills.Skill; the fields below are
+// Warnings come from the embedded [agentskills.Skill]; the fields below are
 // the scrutineer.* metadata keys extracted from Metadata.
 type Parsed struct {
-	harnessskills.Skill
+	agentskills.Skill
 
 	OutputFile        string
 	OutputKind        string
@@ -169,7 +169,7 @@ func ParseFile(path string) (*Parsed, error) {
 }
 
 func parseFileWithin(path, collectionRoot string) (*Parsed, error) {
-	base, err := harnessskills.Parse(path)
+	base, err := agentskills.Parse(path)
 	if err != nil {
 		return nil, err
 	}
@@ -193,11 +193,6 @@ func parseFileWithin(path, collectionRoot string) (*Parsed, error) {
 		return nil, fmt.Errorf("%s: description is required", path)
 	}
 	p := &Parsed{Skill: *base}
-	// The module warns when name is missing but not when it disagrees with the
-	// directory; scrutineer flags that too so a copy-paste keeps the two in sync.
-	if dir := filepath.Base(p.SourcePath); p.Name != dir {
-		p.Warnings = append(p.Warnings, fmt.Sprintf("name %q does not match directory %q", p.Name, dir))
-	}
 	if err := p.validateMetadata(); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
@@ -210,11 +205,11 @@ func hashBundledSchema(sourceHash, schema string) string {
 }
 
 // validateMetadata checks the scrutineer.* keys strictly. agentskills.io
-// spec violations stay as warnings (attached by harness/skills.Parse);
+// spec violations stay as warnings (attached by [agentskills.Parse]);
 // scrutineer-specific keys are a closed set under our control so typos are
 // hard errors.
 func (p *Parsed) validateMetadata() error {
-	if err := harnessskills.ValidateNamespace(p.Metadata, "scrutineer.", scrutineerKeys); err != nil {
+	if err := agentskills.ValidateNamespace(p.Metadata, "scrutineer.", scrutineerKeys); err != nil {
 		return err
 	}
 	if v, ok := p.Metadata[metaVersion]; ok {
