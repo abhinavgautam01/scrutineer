@@ -361,20 +361,7 @@ func TestAPIFindingReadsAndFilters(t *testing.T) {
 	if len(findings) != 3 {
 		t.Fatalf("findings len=%d want=3", len(findings))
 	}
-	for _, finding := range findings {
-		if _, ok := finding["sub_path"]; !ok {
-			t.Errorf("list finding missing sub_path: %+v", finding)
-		}
-	}
-
-	findings = get("?sub_path=services%2Fapi")
-	if len(findings) != 1 || findings[0]["finding_id"] != "F1" || findings[0]["sub_path"] != "services/api" {
-		t.Errorf("sub_path filter: %+v", findings)
-	}
-	findings = get("?sub_path=.")
-	if len(findings) != 2 || findings[0]["finding_id"] != "F3" || findings[1]["finding_id"] != "F2" {
-		t.Errorf("root sub_path filter: %+v", findings)
-	}
+	assertSubPathFindingFilters(t, get, findings)
 
 	// Skill filter
 	findings = get("?skill=vuln-scan")
@@ -462,6 +449,24 @@ func TestAPIFindingReadsAndFilters(t *testing.T) {
 	attackPath, ok := detail["attack_path"].(map[string]any)
 	if !ok || attackPath["production_viability"] != db.ProductionViabilityNonViable {
 		t.Errorf("finding detail missing latest attack path: %+v", detail["attack_path"])
+	}
+}
+
+func assertSubPathFindingFilters(t *testing.T, get func(string) []map[string]any, findings []map[string]any) {
+	t.Helper()
+	for _, finding := range findings {
+		if _, ok := finding["sub_path"]; !ok {
+			t.Errorf("list finding missing sub_path: %+v", finding)
+		}
+	}
+
+	findings = get("?sub_path=services%2Fapi")
+	if len(findings) != 1 || findings[0]["finding_id"] != "F1" || findings[0]["sub_path"] != "services/api" {
+		t.Errorf("sub_path filter: %+v", findings)
+	}
+	findings = get("?sub_path=.")
+	if len(findings) != 2 || findings[0]["finding_id"] != "F3" || findings[1]["finding_id"] != "F2" {
+		t.Errorf("root sub_path filter: %+v", findings)
 	}
 }
 
