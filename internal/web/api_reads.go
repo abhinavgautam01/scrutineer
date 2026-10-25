@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"scrutineer/internal/db"
@@ -318,13 +317,7 @@ func (s *Server) apiListFindings(w http.ResponseWriter, r *http.Request) {
 	if status := r.URL.Query().Get(statusKey); status != "" {
 		q = q.Where("status = ?", status)
 	}
-	if subPath := strings.TrimSpace(r.URL.Query().Get("sub_path")); subPath != "" {
-		if subPath == "." {
-			q = q.Where("sub_path = '' OR sub_path IS NULL")
-		} else {
-			q = q.Where("sub_path = ?", subPath)
-		}
-	}
+	q = filterBySubPath(q, r.URL.Query().Get("sub_path"))
 	var rows []db.Finding
 	q.Select(findingSummaryColumns).Find(&rows)
 	out := make([]map[string]any, 0, len(rows))

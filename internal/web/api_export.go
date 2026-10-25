@@ -821,20 +821,24 @@ func applyFindingFilters(q *gorm.DB, r *http.Request) *gorm.DB {
 	if v := params.Get(statusKey); v != "" {
 		q = q.Where("status = ?", v)
 	}
-	// sub_path narrows an export to a single monorepo sub-package, so a repo
-	// like rails/rails can be exported (or bundled/encrypted) one gem at a
-	// time. "." selects root-scoped findings; empty includes all scopes.
-	if v := strings.TrimSpace(params.Get("sub_path")); v != "" {
-		if v == "." {
-			q = q.Where("sub_path = '' OR sub_path IS NULL")
-		} else {
-			q = q.Where("sub_path = ?", v)
-		}
-	}
+	q = filterBySubPath(q, params.Get("sub_path"))
 	// scope=findings curates to the bucket the Findings tab shows; the callers
 	// validate the value.
 	if params.Get("scope") == "findings" {
 		q = q.Where(nonScannerScanFilter)
+	}
+	return q
+}
+
+// filterBySubPath applies the shared findings-list and export semantics.
+// A dot selects repository-root findings; an empty value includes every scope.
+func filterBySubPath(q *gorm.DB, v string) *gorm.DB {
+	v = strings.TrimSpace(v)
+	if v == "." {
+		return q.Where("sub_path = '' OR sub_path IS NULL")
+	}
+	if v != "" {
+		return q.Where("sub_path = ?", v)
 	}
 	return q
 }

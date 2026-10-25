@@ -347,7 +347,7 @@ paths:
           schema: { type: string }
         - name: sub_path
           in: query
-          description: Only return findings for this monorepo sub-package (e.g. `activesupport`), so a repository can be exported or bundled one sub-package at a time.
+          description: Exact match on the monorepo sub-package; `.` selects repository-root findings. Omit to return all findings.
           schema: { type: string }
       responses:
         '200':
