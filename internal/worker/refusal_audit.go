@@ -40,8 +40,11 @@ func (w *Worker) auditSkillRefusals(ctx context.Context, skill *db.Skill, scan *
 	auditJob.ResumePrompt = buildRefusalAuditPrompt()
 	auditJob.OutputFile = refusalAuditOutputFile
 	auditJob.MaxTurns = refusalAuditMaxTurns
-	res, err := w.Runner.RunSkill(ctx, auditJob, emit)
-	w.applySkillResult(scan, res)
+	res, err := w.runFollowupSkill(ctx, scan, auditJob, emit)
+	if errors.Is(err, errCostCapped) {
+		emit(Event{Kind: KindText, Text: "refusal audit skipped or stopped at the cost cap; primary report retained"})
+		return
+	}
 	if err != nil {
 		emit(Event{Kind: KindError, Text: fmt.Sprintf("refusal audit failed: %v; primary report retained", err)})
 		return
