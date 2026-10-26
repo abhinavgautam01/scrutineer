@@ -19,6 +19,11 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+const scanListColumns = `scans.id, scans.repository_id, scans.skill_id, scans.skill_name,
+	scans.kind, scans.ref, scans.status, scans.max_turns_hit, scans.cost_capped,
+	scans.completeness, scans.sub_path, scans.focus_area, scans.scan_group,
+	scans.findings_count, scans.model, scans.cost_usd, scans.started_at, scans.finished_at`
+
 func (s *Server) jobs(w http.ResponseWriter, r *http.Request) {
 	completeness, err := parseScanCompletenessFilter(r.URL.Query().Get("completeness"))
 	if err != nil {
@@ -49,7 +54,7 @@ func (s *Server) jobs(w http.ResponseWriter, r *http.Request) {
 	case sortRepository:
 		// Backtick quoting is invalid on Postgres; let GORM quote the column.
 		const repositoryNameColumn = "name"
-		q = q.Joins("Repository").
+		q = q.Joins("Repository", s.DB.Select("id", "name")).
 			Order(clause.OrderByColumn{Column: clause.Column{Table: "Repository", Name: repositoryNameColumn}, Desc: wantDesc(dir, false)}).
 			Order("scans.id desc")
 	case "findings":
@@ -66,7 +71,9 @@ func (s *Server) jobs(w http.ResponseWriter, r *http.Request) {
 	page := paginate(r, total)
 
 	var scans []db.Scan
-	q.Preload("Repository").
+	q.Select(scanListColumns).Preload("Repository", func(tx *gorm.DB) *gorm.DB {
+		return tx.Select("id", "name")
+	}).
 		Limit(perPage).Offset((page.N - 1) * perPage).Find(&scans)
 
 	skillNames := s.scanSkillNames()
