@@ -441,3 +441,34 @@ func TestRepoScansFragment_plainVisitRedirectsToTheTab(t *testing.T) {
 		t.Errorf("a redirect must not touch the flash cookie: %v", cookies)
 	}
 }
+
+func TestRepoShow_findingLocationsLinkToCodeBrowser(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	repo := db.Repository{URL: "https://github.com/example/linked", Name: "linked"}
+	s.DB.Create(&repo)
+	deepDive := db.Scan{
+		RepositoryID: repo.ID, Kind: "skill", SkillName: deepDiveSkillName, Commit: "abc123",
+		Status: db.ScanDone, StatusPriority: db.StatusPriorityFor(db.ScanDone),
+	}
+	s.DB.Create(&deepDive)
+	scanner := db.Scan{
+		RepositoryID: repo.ID, Kind: "skill", SkillName: "semgrep", Commit: "def456",
+		Status: db.ScanDone, StatusPriority: db.StatusPriorityFor(db.ScanDone),
+	}
+	s.DB.Create(&scanner)
+	s.DB.Create(&db.Finding{RepositoryID: repo.ID, ScanID: deepDive.ID, Title: "deep", Severity: "High", Location: "lib/a.rb:7"})
+	s.DB.Create(&db.Finding{RepositoryID: repo.ID, ScanID: scanner.ID, Title: "tool", Severity: "Low", Location: "cmd/b.go:3"})
+
+	body := getRepoPage(t, s, repo.ID)
+	// The deep-dive finding renders on the Summary and Findings tabs, the
+	// scanner finding on the Scanners tab.
+	deepHref := fmt.Sprintf(`href="/repositories/%d/blob/abc123/lib/a.rb?line=7#L7"`, repo.ID)
+	if n := strings.Count(body, deepHref); n != 2 {
+		t.Errorf("deep-dive location links = %d, want 2 (Summary and Findings tabs)", n)
+	}
+	scannerHref := fmt.Sprintf(`href="/repositories/%d/blob/def456/cmd/b.go?line=3#L3"`, repo.ID)
+	if n := strings.Count(body, scannerHref); n != 1 {
+		t.Errorf("scanner location links = %d, want 1 (Scanners tab)", n)
+	}
+}
