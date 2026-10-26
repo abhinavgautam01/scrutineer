@@ -429,20 +429,7 @@ func New(gdb *gorm.DB, q *queue.Queue, log *slog.Logger, broker *Broker, w *work
 			}
 			return 0
 		},
-		"locurl": func(repoID, commit, loc any) string {
-			var id uint
-			switch v := repoID.(type) {
-			case uint:
-				id = v
-			case int:
-				id = uint(v)
-			case uint64:
-				id = uint(v)
-			}
-			c, _ := commit.(string)
-			l, _ := loc.(string)
-			return locationURL(id, c, l)
-		},
+		"locurl":         templateLocationURL,
 		"forgeBlobURL":   forgeBlobURL,
 		"forgeCommitURL": forgeCommitURL,
 		"domain": func(u string) string {

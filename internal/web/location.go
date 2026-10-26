@@ -26,6 +26,30 @@ func locationURL(repoID uint, commit, location string) string {
 	return u
 }
 
+// templateLocationURL is the locurl template func. A repoID that is not a
+// uint, int or uint64, such as the nil a dict call yields when it omits
+// RepoID, is an error so the page fails at render instead of silently
+// dropping every link.
+func templateLocationURL(repoID, commit, loc any) (string, error) {
+	var id uint
+	switch v := repoID.(type) {
+	case uint:
+		id = v
+	case int:
+		if v < 0 {
+			return "", fmt.Errorf("locurl: negative repoID %d", v)
+		}
+		id = uint(v)
+	case uint64:
+		id = uint(v)
+	default:
+		return "", fmt.Errorf("locurl: unsupported repoID type %T", repoID)
+	}
+	c, _ := commit.(string)
+	l, _ := loc.(string)
+	return locationURL(id, c, l), nil
+}
+
 // locRE splits a finding location into its file path and line spec. The
 // trailing column group is optional so importer-supplied locations that carry
 // a column ("file.js:42:7", as emitted by the SARIF parser) resolve to the
