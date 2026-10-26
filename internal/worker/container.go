@@ -853,8 +853,6 @@ func (d ContainerRunner) checkHardenedWorkspace(workRoot string) error {
 	return checkWorkspaceCap(workRoot, HardenedWorkspaceCapBytes)
 }
 
-// checkWorkspaceCap returns an error when the tree under workRoot is larger
-// than limit bytes.
 func checkWorkspaceCap(workRoot string, limit int64) error {
 	size, err := dirSize(workRoot)
 	if err != nil {
