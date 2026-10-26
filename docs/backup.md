@@ -1,30 +1,33 @@
 # Backup and restore
 
-All of scrutineer's unique state lives in one SQLite file, `data/scrutineer.db`:
-every repository, scan, finding, advisory, maintainer record, and edited skill.
-Lose it and the only rebuild path is to rescan everything, paying the wall-clock
-time and Anthropic spend again.
-
-Because the database runs in [WAL mode](database.md), a plain `cp` of it while a
-scan runs can capture an inconsistent, unrestorable copy: committed transactions
-may still sit in the `-wal` sidecar. Every method below handles that; do not
-substitute a bare file copy.
+Scrutineer stores repositories, scans, findings, advisories, maintainer records,
+chat messages, and edited skills in its database. The default is SQLite at
+`data/scrutineer.db`; installations configured for PostgreSQL must back up that
+database instead. Resumable agent sessions also need files outside the database.
 
 ## What to back up
 
-- **`data/scrutineer.db`** is the only state worth backing up.
-- **Do not back up `scrutineer.yaml`.** It carries credentials (the Anthropic API
-  key or OAuth token) that should not be copied into a backup destination.
-- The `data/scrutineer.db-wal` and `data/scrutineer.db-shm` sidecars only matter
-  for the stop-and-copy method below. The built-in command, `sqlite3 .backup`,
-  and Litestream all fold the WAL into a single consistent file for you.
+- Back up the configured database using one of the methods below.
+- To preserve container-backed scan and chat sessions, also save
+  `data/harness-state/` and the existing `data/scan-*/` and `data/chat-*/`
+  workspaces. Host-run Claude sessions use the host's Claude configuration
+  directory instead of `harness-state/`; include that session store if needed.
+- Preserve `scrutineer.yaml` and any separately configured credential files in
+  protected storage, or keep a way to recreate them. They can contain API keys,
+  OAuth tokens, and database credentials; exclude them from shared archives.
+
+Use your configured data directory in place of `data/`. Stop Scrutineer while
+taking a matching database and session-file backup, and restore both before
+restarting it. A database-only restore preserves application records and chat
+messages, but cannot restore native agent sessions. Repository clones in
+`data/repo-cache/` can be rebuilt from their remotes.
 
 ## Sensitivity
 
 A backup holds the same operator-sensitive data as the live database:
 pre-disclosure security findings, maintainer contact records, per-scan API
-bearer tokens, and Anthropic usage figures. Give a backup file the same trust
-handling as the live database:
+bearer tokens, and model usage figures. Session stores can also contain
+credentials and repository content. Protect backups as you would the source data:
 
 - keep it off shared paths,
 - encrypt it at rest whenever it is stored off-host (an S3 bucket, an SFTP
@@ -32,7 +35,28 @@ handling as the live database:
 - prefer destinations you already trust with vulnerability data over generic
   cloud storage.
 
-## Strategies
+## PostgreSQL
+
+For `database.driver: postgres`, use operator-managed database backups, such as
+a provider snapshot or [`pg_dump`](https://www.postgresql.org/docs/current/app-pgdump.html).
+Custom-format dumps can be restored with
+[`pg_restore`](https://www.postgresql.org/docs/current/app-pgrestore.html).
+Provision the required database roles separately; `pg_dump` covers one database
+and does not include cluster-wide roles. Stop Scrutineer before restoring, then
+set `database.dsn` to the restored database before restarting.
+
+The built-in `scrutineer backup` and `scrutineer restore` commands are SQLite-only
+and reject PostgreSQL configurations. PostgreSQL backups still need the session
+files described above if you want to preserve scan and chat resume state.
+
+## SQLite
+
+SQLite runs in [WAL mode](database.md), so a plain `cp` while a scan runs can
+capture an inconsistent copy: committed transactions may still sit in the
+`-wal` sidecar. The methods below handle that. The stop-and-copy method includes
+the `-wal` and `-shm` sidecars; the other methods produce a consistent database
+without copying those files separately. None includes the session files or
+configuration.
 
 ### 1. Built-in command (recommended)
 
@@ -112,8 +136,8 @@ occasional manual archives only.
 
 Copy the main file with its `-wal`/`-shm` sidecars: scrutineer holds the database
 open, so the `-wal` can carry committed transactions not yet folded into the
-`.db`, which alone would be an inconsistent copy. The glob takes whichever exist
-and skips the disposable `data/work/` workspaces:
+`.db`, which alone would be an inconsistent copy. The glob takes whichever exist;
+copy the session stores and workspaces separately if preserving resume state:
 
 ```sh
 # With the server stopped:
@@ -131,7 +155,8 @@ cp /backups/scrutineer-2026-06-05/scrutineer.db* data/
 
 ## Verify the first restore
 
-Before you trust a backup path, restore once and confirm the data survived:
+Restore once and confirm the data survived. These commands are for SQLite;
+run the same SQL through `psql` for PostgreSQL:
 
 - **Record counts per table** look right:
 
@@ -149,5 +174,7 @@ Before you trust a backup path, restore once and confirm the data survived:
 
 - **A known finding loads** in the UI: open it and confirm its notes and
   communications render.
+- If you backed up session files, resume a saved scan and continue a chat to
+  check that their native sessions are available.
 
 See [database.md](database.md) for the full schema these checks run against.
