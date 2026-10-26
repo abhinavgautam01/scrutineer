@@ -155,20 +155,42 @@ func (w *Worker) prepareRepoSrcWithOptions(
 	return commit, nil
 }
 
+// workspaceCapFor returns the workspace cap the runner for skillName enforces
+// after clone, or 0 when it enforces none. Host-split skills run on the host
+// where no cap applies.
+func (w *Worker) workspaceCapFor(skillName string) int64 {
+	r := w.Runner
+	if s, ok := r.(HostSplitRunner); ok {
+		r = s.runnerFor(skillName)
+	}
+	if c, ok := r.(ContainerRunner); ok && (c.Hardened || c.HardenedRuntimeOnly) {
+		return HardenedWorkspaceCapBytes
+	}
+	return 0
+}
+
+// prepareSkillRepoSrc prepares the scan source. A full-history request falls
+// back to a shallow clone both when the deepen fails and when the full-history
+// workspace is over workspaceCap (0 means no cap), since the runner would
+// otherwise refuse the scan.
 func (w *Worker) prepareSkillRepoSrc(
 	ctx context.Context,
 	url, ref, workRoot string,
 	options RepoSrcOptions,
+	workspaceCap int64,
 	emit func(Event),
 ) (string, error) {
 	commit, err := w.prepareSkillRepoSrcOnce(ctx, url, ref, workRoot, options, emit)
+	if err == nil && options.FullHistory && workspaceCap > 0 {
+		err = checkWorkspaceCap(workRoot, workspaceCap)
+	}
 	if err == nil || !options.FullHistory || ctx.Err() != nil ||
 		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return commit, err
 	}
 	emit(Event{Kind: KindText, Text: fmt.Sprintf("full history unavailable (%v); continuing with a shallow clone", err)})
 	if w.Log != nil {
-		w.Log.Warn("full history clone failed; falling back to shallow", "url", url, "err", err)
+		w.Log.Warn("full history unavailable; falling back to shallow", "url", url, "err", err)
 	}
 	options.FullHistory = false
 	return w.prepareSkillRepoSrcOnce(ctx, url, ref, workRoot, options, emit)

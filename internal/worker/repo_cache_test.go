@@ -523,7 +523,7 @@ func TestPrepareSkillRepoSrcFallsBackToShallow(t *testing.T) {
 	}
 	commit, err := w.prepareSkillRepoSrc(
 		context.Background(), "u", "", t.TempDir(),
-		RepoSrcOptions{FullHistory: true, RecurseSubmodules: true},
+		RepoSrcOptions{FullHistory: true, RecurseSubmodules: true}, 0,
 		func(e Event) { events = append(events, e.Text) },
 	)
 	if err != nil || commit != "abc" {
@@ -544,8 +544,106 @@ func TestPrepareSkillRepoSrcFallsBackToShallow(t *testing.T) {
 		return "", context.Canceled
 	}
 	if _, err := w.prepareSkillRepoSrc(
-		context.Background(), "u", "", t.TempDir(), RepoSrcOptions{FullHistory: true}, func(Event) {},
+		context.Background(), "u", "", t.TempDir(), RepoSrcOptions{FullHistory: true}, 0, func(Event) {},
 	); !errors.Is(err, context.Canceled) || len(calls) != 1 {
 		t.Errorf("cancellation retried: err %v calls %d", err, len(calls))
+	}
+}
+
+// capFakeWorker returns a Worker whose clone writes fullSize bytes for a full
+// history request and shallowSize bytes otherwise, recording each call.
+func capFakeWorker(calls *[]RepoSrcOptions, fullSize, shallowSize int) *Worker {
+	return &Worker{
+		PrepareRepoSrcWithOptions: func(
+			_ context.Context, _, _, workRoot string, options RepoSrcOptions, _ func(Event),
+		) (string, error) {
+			*calls = append(*calls, options)
+			dst := filepath.Join(workRoot, "src")
+			if err := os.RemoveAll(dst); err != nil {
+				return "", err
+			}
+			if err := os.MkdirAll(dst, 0o755); err != nil {
+				return "", err
+			}
+			size := shallowSize
+			if options.FullHistory {
+				size = fullSize
+			}
+			return "abc", os.WriteFile(filepath.Join(dst, "blob"), make([]byte, size), 0o600)
+		},
+	}
+}
+
+func TestPrepareSkillRepoSrcFallsBackWhenFullHistoryExceedsCap(t *testing.T) {
+	var calls []RepoSrcOptions
+	var events []string
+	w := capFakeWorker(&calls, 2048, 16)
+	workRoot := t.TempDir()
+	commit, err := w.prepareSkillRepoSrc(
+		context.Background(), "u", "", workRoot, RepoSrcOptions{FullHistory: true}, 1024,
+		func(e Event) { events = append(events, e.Text) },
+	)
+	if err != nil || commit != "abc" {
+		t.Fatalf("commit %q err %v", commit, err)
+	}
+	if len(calls) != 2 || !calls[0].FullHistory || calls[1].FullHistory {
+		t.Errorf("calls = %+v", calls)
+	}
+	if len(events) != 1 || !strings.Contains(events[0], "full history unavailable") ||
+		!strings.Contains(events[0], "hardening cap") {
+		t.Errorf("events = %q", events)
+	}
+	if err := checkWorkspaceCap(workRoot, 1024); err != nil {
+		t.Errorf("workspace still over cap: %v", err)
+	}
+}
+
+func TestPrepareSkillRepoSrcKeepsFullHistoryUnderCap(t *testing.T) {
+	var calls []RepoSrcOptions
+	var events []string
+	w := capFakeWorker(&calls, 2048, 16)
+	_, err := w.prepareSkillRepoSrc(
+		context.Background(), "u", "", t.TempDir(), RepoSrcOptions{FullHistory: true}, 1<<20,
+		func(e Event) { events = append(events, e.Text) },
+	)
+	if err != nil || len(calls) != 1 || !calls[0].FullHistory || len(events) != 0 {
+		t.Errorf("err %v calls %+v events %q", err, calls, events)
+	}
+}
+
+func TestPrepareSkillRepoSrcIgnoresCapWithoutFullHistory(t *testing.T) {
+	var calls []RepoSrcOptions
+	w := capFakeWorker(&calls, 2048, 2048)
+	_, err := w.prepareSkillRepoSrc(
+		context.Background(), "u", "", t.TempDir(), RepoSrcOptions{}, 1, func(Event) {},
+	)
+	if err != nil || len(calls) != 1 {
+		t.Errorf("err %v calls %+v", err, calls)
+	}
+}
+
+func TestWorkspaceCapFor(t *testing.T) {
+	split := HostSplitRunner{
+		Container:  ContainerRunner{Hardened: true},
+		HostSkills: []string{"history"},
+	}
+	tests := []struct {
+		name   string
+		runner SkillRunner
+		skill  string
+		want   int64
+	}{
+		{"nil runner", nil, "recon", 0},
+		{"plain container", ContainerRunner{}, "recon", 0},
+		{"hardened", ContainerRunner{Hardened: true}, "recon", HardenedWorkspaceCapBytes},
+		{"runtime only", ContainerRunner{HardenedRuntimeOnly: true}, "recon", HardenedWorkspaceCapBytes},
+		{"split host skill", split, "history", 0},
+		{"split container skill", split, "recon", HardenedWorkspaceCapBytes},
+	}
+	for _, tt := range tests {
+		w := &Worker{Runner: tt.runner}
+		if got := w.workspaceCapFor(tt.skill); got != tt.want {
+			t.Errorf("%s: workspaceCapFor(%q) = %d, want %d", tt.name, tt.skill, got, tt.want)
+		}
 	}
 }

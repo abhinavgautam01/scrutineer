@@ -192,7 +192,8 @@ func (w *Worker) doSkill(ctx context.Context, scan *db.Scan, emit func(Event)) (
 		w.prepareNoveltyHistory(ctx, scan, &skill)
 		cacheCommit, err := w.prepareSkillRepoSrc(
 			ctx, scan.Repository.URL, scan.Ref, workRoot,
-			RepoSrcOptions{RecurseSubmodules: skill.RecurseSubmodules, FullHistory: skill.FullHistory}, emit,
+			RepoSrcOptions{RecurseSubmodules: skill.RecurseSubmodules, FullHistory: skill.FullHistory},
+			w.workspaceCapFor(skill.Name), emit,
 		)
 		if err != nil {
 			if report, ok := w.handleCloneError(scan, err, emit); ok {
