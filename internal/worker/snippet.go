@@ -35,14 +35,11 @@ func readSnippet(srcDir, location string) string {
 		return ""
 	}
 	defer func() { _ = root.Close() }()
-	f, err := root.Open(path)
+	f, err := openSourceFile(root, path)
 	if err != nil {
 		return ""
 	}
 	defer func() { _ = f.Close() }()
-	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
-		return ""
-	}
 	data, err := io.ReadAll(f)
 	if err != nil {
 		return ""
