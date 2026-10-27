@@ -14,7 +14,7 @@ require (
 	github.com/git-pkgs/enrichment v0.7.2
 	github.com/git-pkgs/magic v0.5.0
 	github.com/git-pkgs/pom v0.1.8
-	github.com/git-pkgs/purl v0.1.21
+	github.com/git-pkgs/purl v0.1.22
 	github.com/git-pkgs/sarif v0.1.3
 	github.com/git-pkgs/sbom v0.1.7
 	github.com/git-pkgs/skills v0.2.0
