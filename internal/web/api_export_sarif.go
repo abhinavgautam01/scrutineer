@@ -84,24 +84,36 @@ func (s *Server) apiExportRepoSARIF(w http.ResponseWriter, r *http.Request, repo
 // refuses oversized SARIF exports before performing expensive lookups or
 // serializing a response. The extra row detects overflow without COUNT races.
 func (s *Server) apiExportGlobalSARIF(w http.ResponseWriter, r *http.Request, q *gorm.DB) {
-	var findings []db.Finding
-	if err := q.Select(sarifFindingColumns).Limit(globalSARIFMaxFindings + 1).Find(&findings).Error; err != nil {
+	// Do not load potentially huge finding evidence fields before enforcing
+	// the row cap. First select only IDs, then fetch full rows in batches.
+	// This also keeps SQL bind counts below SQLite's lower parameter limits.
+	var ids []uint
+	if err := q.Select("id").Limit(globalSARIFMaxFindings+1).Pluck("id", &ids).Error; err != nil {
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if len(findings) > globalSARIFMaxFindings {
+	if len(ids) > globalSARIFMaxFindings {
 		writeAPIError(w, http.StatusBadRequest, fmt.Sprintf("SARIF export exceeds %d findings; narrow the filters or use streaming JSONL", globalSARIFMaxFindings))
 		return
 	}
 
-	// Batch both lookups by the selected IDs, not by repository or revision.
-	// Chunks bound SQLite parameters while avoiding an N+1 query pattern.
+	var findings []db.Finding
+	for i := 0; i < len(ids); i += globalSARIFQueryBatch {
+		end := min(i+globalSARIFQueryBatch, len(ids))
+		var batch []db.Finding
+		if err := s.DB.Select(sarifFindingColumns).Where("id IN ?", ids[i:end]).Order("id desc").Find(&batch).Error; err != nil {
+			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		findings = append(findings, batch...)
+	}
+
+	// Batch verifications by the selected finding IDs, not by repository or
+	// revision, avoiding an N+1 query pattern.
 	latest := make(map[uint]db.FindingVerification)
-	ids := make([]uint, 0, len(findings))
 	repoIDs := make([]uint, 0)
 	seenRepos := make(map[uint]bool)
 	for _, f := range findings {
-		ids = append(ids, f.ID)
 		if !seenRepos[f.RepositoryID] {
 			seenRepos[f.RepositoryID] = true
 			repoIDs = append(repoIDs, f.RepositoryID)

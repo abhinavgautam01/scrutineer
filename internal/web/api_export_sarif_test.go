@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/git-pkgs/sarif"
+	"gorm.io/gorm"
 
 	"scrutineer/internal/db"
 )
@@ -503,7 +504,21 @@ func TestExportGlobalSARIFBound(t *testing.T) {
 		SELECT ?, ?, 'finding', 'High', 'new' FROM n`, globalSARIFMaxFindings+1, repo.ID, scan.ID).Error; err != nil {
 		t.Fatal(err)
 	}
+	// An oversized export must check IDs without materializing wide evidence
+	// columns (trace, validation, etc.) before returning HTTP 400.
+	var selects [][]string
+	if err := s.DB.Callback().Query().Before("gorm:query").Register("test:global_sarif_bound_columns", func(tx *gorm.DB) {
+		if tx.Statement.Table == "findings" {
+			selects = append(selects, append([]string(nil), tx.Statement.Selects...))
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.DB.Callback().Query().Remove("test:global_sarif_bound_columns") }()
 	w := getGlobalSARIF(t, s, "")
+	if len(selects) != 1 || !slices.Equal(selects[0], []string{"id"}) {
+		t.Errorf("oversized SARIF queried finding columns %v; want only IDs", selects)
+	}
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "10000") {
 		t.Fatalf("status %d, body=%s; want bounded 400", w.Code, w.Body)
 	}
