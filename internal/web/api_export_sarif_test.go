@@ -387,8 +387,16 @@ func TestExportGlobalSARIF(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	older := db.FindingVerification{FindingID: findings[2].ID, ScanID: scans[0].ID, Status: "inconclusive", Report: "{}"}
-	newer := db.FindingVerification{FindingID: findings[2].ID, ScanID: scans[1].ID, Status: "confirmed", Report: "{}"}
+	verifyOlder := db.Scan{RepositoryID: repos[1].ID, Kind: "skill", Status: db.ScanDone, SkillName: "verify"}
+	verifyNewer := db.Scan{RepositoryID: repos[1].ID, Kind: "skill", Status: db.ScanDone, SkillName: "verify"}
+	if err := s.DB.Create(&verifyOlder).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.Create(&verifyNewer).Error; err != nil {
+		t.Fatal(err)
+	}
+	older := db.FindingVerification{FindingID: findings[2].ID, ScanID: verifyOlder.ID, Status: "inconclusive", Report: "{}"}
+	newer := db.FindingVerification{FindingID: findings[2].ID, ScanID: verifyNewer.ID, Status: "confirmed", Report: "{}"}
 	if err := s.DB.Create(&older).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -426,8 +434,8 @@ func TestExportGlobalSARIF(t *testing.T) {
 		}
 	}
 	verification, _ := scrutineerProps(t, groups[key{repos[1].URL, "rev-old"}].Results[0])["verification"].(map[string]any)
-	if verification["status"] != "confirmed" || verification["verify_scan_id"] != float64(scans[1].ID) {
-		t.Errorf("latest verification = %+v, want confirmed from scan %d", verification, scans[1].ID)
+	if verification["status"] != "confirmed" || verification["verify_scan_id"] != float64(verifyNewer.ID) {
+		t.Errorf("latest verification = %+v, want confirmed from scan %d", verification, verifyNewer.ID)
 	}
 }
 
