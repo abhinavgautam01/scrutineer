@@ -661,16 +661,7 @@ func (s *Server) apiExportFindings(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "unsupported format: jsonl or sarif")
 		return
 	}
-	if format == "sarif" {
-		if r.URL.Query().Get("encrypt") != "" {
-			writeAPIError(w, http.StatusBadRequest, "encrypt is only supported on per-repository bundle exports")
-			return
-		}
-		if r.URL.Query().Get("include") != "" {
-			writeAPIError(w, http.StatusBadRequest, "include is only supported on per-repository bundle exports")
-			return
-		}
-	} else if !validateExportQuery(w, r) {
+	if !validateExportBundleParams(w, r) {
 		return
 	}
 	q := s.DB.Model(&db.Finding{}).Order("id desc")
@@ -686,7 +677,7 @@ func (s *Server) apiExportFindings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q = applyFindingFilters(q, r)
-	if params.Get("format") == "sarif" {
+	if format == "sarif" {
 		s.apiExportGlobalSARIF(w, r, q)
 		return
 	}
@@ -797,9 +788,12 @@ func validateExportQuery(w http.ResponseWriter, r *http.Request) bool {
 		writeAPIError(w, http.StatusBadRequest, "unsupported format: only jsonl")
 		return false
 	}
-	// encrypt is only meaningful for per-repository bundle exports. Rejecting
-	// it here stops a request that asked for encryption from silently
-	// streaming plaintext NDJSON off these endpoints.
+	return validateExportBundleParams(w, r)
+}
+
+// validateExportBundleParams rejects options that would imply a bundle export.
+func validateExportBundleParams(w http.ResponseWriter, r *http.Request) bool {
+	// Rejecting encryption on streaming exports avoids silently returning plaintext.
 	if r.URL.Query().Get("encrypt") != "" {
 		writeAPIError(w, http.StatusBadRequest, "encrypt is only supported on per-repository bundle exports")
 		return false

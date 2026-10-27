@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"fmt"
 	"maps"
 	"net/http"
@@ -21,10 +22,7 @@ import (
 )
 
 const (
-	// A global SARIF response is assembled and validated in memory. Never load
-	// the entire findings table into a single response.
 	globalSARIFMaxFindings = 10000
-	globalSARIFQueryBatch  = 500
 	sarifSchemaURI         = "https://json.schemastore.org/sarif-2.1.0.json"
 	sarifFallbackRuleID    = "scrutineer/finding"
 )
@@ -58,15 +56,7 @@ func (s *Server) apiExportRepoSARIF(w http.ResponseWriter, r *http.Request, repo
 		latest[v.FindingID] = v
 	}
 
-	repositoryURL := bundleRepositoryURL(r.Context(), repo)
-	if repo.IsLocal() && repositoryURL == repo.URL {
-		repositoryURL = sarifFileURI(repo.LocalPath())
-		if s.Log != nil {
-			s.Log.Warn("sarif export: local repository has no portable origin; repositoryUri carries the host path",
-				"repository_id", repo.ID)
-		}
-	}
-	report := buildSARIF(repositoryURL, s.Version, findings, latest)
+	report := buildSARIF(s.sarifRepositoryURL(r.Context(), repo), s.Version, findings, latest)
 	if err := sarif.Validate(report); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -80,13 +70,19 @@ func (s *Server) apiExportRepoSARIF(w http.ResponseWriter, r *http.Request, repo
 	_, _ = w.Write(buf.Bytes())
 }
 
-// apiExportGlobalSARIF preserves the global JSONL selection semantics, but
-// refuses oversized SARIF exports before performing expensive lookups or
-// serializing a response. The extra row detects overflow without COUNT races.
+func (s *Server) sarifRepositoryURL(ctx context.Context, repo *db.Repository) string {
+	repoURL := bundleRepositoryURL(ctx, repo)
+	if repo.IsLocal() && repoURL == repo.URL {
+		repoURL = sarifFileURI(repo.LocalPath())
+		if s.Log != nil {
+			s.Log.Warn("sarif export: local repository has no portable origin; repositoryUri carries the host path", "repository_id", repo.ID)
+		}
+	}
+	return repoURL
+}
+
 func (s *Server) apiExportGlobalSARIF(w http.ResponseWriter, r *http.Request, q *gorm.DB) {
-	// Do not load potentially huge finding evidence fields before enforcing
-	// the row cap. First select only IDs, then fetch full rows in batches.
-	// This also keeps SQL bind counts below SQLite's lower parameter limits.
+	// Select only IDs before loading wide finding evidence to enforce the cap.
 	var ids []uint
 	if err := q.Select("id").Limit(globalSARIFMaxFindings+1).Pluck("id", &ids).Error; err != nil {
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
@@ -98,63 +94,41 @@ func (s *Server) apiExportGlobalSARIF(w http.ResponseWriter, r *http.Request, q 
 	}
 
 	var findings []db.Finding
-	for i := 0; i < len(ids); i += globalSARIFQueryBatch {
-		end := min(i+globalSARIFQueryBatch, len(ids))
-		var batch []db.Finding
-		if err := s.DB.Select(sarifFindingColumns).Where("id IN ?", ids[i:end]).Order("id desc").Find(&batch).Error; err != nil {
-			writeAPIError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		findings = append(findings, batch...)
+	if err := s.DB.Select(sarifFindingColumns).Where("id IN ?", ids).Order("id desc").Find(&findings).Error; err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 
-	// Batch verifications by the selected finding IDs, not by repository or
-	// revision, avoiding an N+1 query pattern.
-	latest := make(map[uint]db.FindingVerification)
-	repoIDs := make([]uint, 0)
-	seenRepos := make(map[uint]bool)
+	selectedRepos := make(map[uint]struct{})
 	for _, f := range findings {
-		if !seenRepos[f.RepositoryID] {
-			seenRepos[f.RepositoryID] = true
-			repoIDs = append(repoIDs, f.RepositoryID)
-		}
+		selectedRepos[f.RepositoryID] = struct{}{}
 	}
-	for i := 0; i < len(ids); i += globalSARIFQueryBatch {
-		end := min(i+globalSARIFQueryBatch, len(ids))
-		var rows []db.FindingVerification
-		if err := s.DB.Select("finding_id, scan_id, status, score").
-			Where(`id IN (SELECT MAX(id) FROM finding_verifications
-                WHERE finding_id IN ? GROUP BY finding_id)`, ids[i:end]).
-			Find(&rows).Error; err != nil {
-			writeAPIError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		for _, v := range rows {
-			latest[v.FindingID] = v
-		}
+	repoIDs := slices.Collect(maps.Keys(selectedRepos))
+
+	var verifications []db.FindingVerification
+	if err := s.DB.Select("finding_id, scan_id, status, score").
+		Where(`id IN (SELECT MAX(id) FROM finding_verifications
+			WHERE finding_id IN ? GROUP BY finding_id)`, ids).
+		Find(&verifications).Error; err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
-	repositoryURLs := make(map[uint]string, len(repoIDs))
-	for i := 0; i < len(repoIDs); i += globalSARIFQueryBatch {
-		end := min(i+globalSARIFQueryBatch, len(repoIDs))
-		var repos []db.Repository
-		if err := s.DB.Where("id IN ?", repoIDs[i:end]).Find(&repos).Error; err != nil {
-			writeAPIError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		for j := range repos {
-			repo := &repos[j]
-			repoURL := bundleRepositoryURL(r.Context(), repo)
-			if repo.IsLocal() && repoURL == repo.URL {
-				repoURL = sarifFileURI(repo.LocalPath())
-				if s.Log != nil {
-					s.Log.Warn("sarif export: local repository has no portable origin; repositoryUri carries the host path", "repository_id", repo.ID)
-				}
-			}
-			repositoryURLs[repo.ID] = repoURL
-		}
+	latest := make(map[uint]db.FindingVerification, len(verifications))
+	for _, v := range verifications {
+		latest[v.FindingID] = v
 	}
-	// Missing repository metadata is an integrity error, not an excuse to
-	// silently attribute a finding to another repository's provenance.
+
+	var repos []db.Repository
+	if err := s.DB.Where("id IN ?", repoIDs).Find(&repos).Error; err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	repositoryURLs := make(map[uint]string, len(repos))
+	for i := range repos {
+		repo := &repos[i]
+		repositoryURLs[repo.ID] = s.sarifRepositoryURL(r.Context(), repo)
+	}
+	// Missing repository metadata is an integrity error.
 	if len(repositoryURLs) != len(repoIDs) {
 		writeAPIError(w, http.StatusInternalServerError, "SARIF export missing repository metadata")
 		return
@@ -187,13 +161,7 @@ func buildGlobalSARIF(version string, findings []db.Finding, urls map[uint]strin
 	}
 	keys := slices.Collect(maps.Keys(groups))
 	slices.SortFunc(keys, func(a, b groupKey) int {
-		if a.repositoryID < b.repositoryID {
-			return -1
-		}
-		if a.repositoryID > b.repositoryID {
-			return 1
-		}
-		return strings.Compare(a.revision, b.revision)
+		return cmp.Or(cmp.Compare(a.repositoryID, b.repositoryID), strings.Compare(a.revision, b.revision))
 	})
 	report := &sarif.Log{Version: "2.1.0", SchemaURI: sarifSchemaURI, Runs: []sarif.Run{}}
 	for _, key := range keys {
