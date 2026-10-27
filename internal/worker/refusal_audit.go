@@ -98,12 +98,13 @@ func parseRefusalAudit(raw string) (refusalAudit, error) {
 
 // isRepositoryRelativePath accepts slash-separated repository paths without
 // normalising them, so malformed agent output cannot escape or ambiguously
-// describe the repository root.
+// describe the repository root. A single trailing slash is allowed because
+// agents write skipped directories as "docs/".
 func isRepositoryRelativePath(path string) bool {
 	if path == "" || strings.ContainsRune(path, '\\') || strings.ContainsRune(path, 0) || strings.HasPrefix(path, "/") {
 		return false
 	}
-	segments := strings.Split(path, "/")
+	segments := strings.Split(strings.TrimSuffix(path, "/"), "/")
 	if isWindowsDrivePrefix(segments[0]) {
 		return false
 	}
