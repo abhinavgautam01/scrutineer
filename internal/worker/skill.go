@@ -192,7 +192,7 @@ func (w *Worker) doSkill(ctx context.Context, scan *db.Scan, emit func(Event)) (
 		w.prepareNoveltyHistory(ctx, scan, &skill)
 		cacheCommit, err := w.prepareSkillRepoSrc(
 			ctx, scan.Repository.URL, scan.Ref, workRoot,
-			RepoSrcOptions{RecurseSubmodules: skill.RecurseSubmodules, FullHistory: skill.FullHistory},
+			RepoSrcOptions{RecurseSubmodules: skill.RecurseSubmodules, FullHistory: w.FullClone || skill.FullHistory},
 			w.workspaceCapFor(skill.Name), emit,
 		)
 		if err != nil {

@@ -702,6 +702,7 @@ func newApp(f *flags, cfg *config.Config, log *slog.Logger, setup runnerSetup) (
 		ForkOrg:               f.forkOrg,
 		MetadataDir:           f.metadataDir,
 		Runner:                runner,
+		FullClone:             f.fullClone(),
 		ScanTimeout:           f.scanTimeout,
 		SchemaStrict:          f.schemaStrict,
 		DowngradeOnOverage:    f.downgradeOnOverage,
