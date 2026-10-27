@@ -21,7 +21,8 @@
   var wrap = code.parentElement.parentElement;
   var from = parseInt(wrap.getAttribute('data-hl-from'), 10) || 0;
   var to = parseInt(wrap.getAttribute('data-hl-to'), 10) || 0;
-  if (from > 0) {
+  if (from > 0 && from <= lines.length) {
+    to = Math.min(to, lines.length);
     for (var i = from; i <= to; i++) {
       var el = document.getElementById('L' + i);
       if (el) { el.classList.add('hl-on'); }
