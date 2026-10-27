@@ -71,7 +71,9 @@ type Worker struct {
 	// the default, `.scrutineer/`, when staging the skill context.
 	MetadataDir string
 	Runner      SkillRunner
-	OnEvent     func(scanID, repoID uint, name, data string) // optional SSE bridge
+	// FullClone applies the global -clone full setting to skill workspaces.
+	FullClone bool
+	OnEvent   func(scanID, repoID uint, name, data string) // optional SSE bridge
 	// OnFindingCreated, when non-nil, is called after a findings-emitting
 	// scan persists a fresh Finding row. The web layer wires it up to
 	// auto-enqueue a revalidate scan over High/Critical findings from
