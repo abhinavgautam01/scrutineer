@@ -53,15 +53,11 @@ func vidSinksFromRoot(root *os.Root, locations string) []string {
 		if path == "" || !filepath.IsLocal(path) {
 			continue
 		}
-		f, err := root.Open(path)
+		f, err := openSourceFile(root, path)
 		if err != nil {
 			continue
 		}
-		info, statErr := f.Stat()
 		_ = f.Close()
-		if statErr != nil || !info.Mode().IsRegular() {
-			continue
-		}
 		sink := path + ":" + line
 		if seen[sink] {
 			continue
@@ -143,18 +139,11 @@ func (w *Worker) computeVID(srcDir, locations string) string {
 }
 
 func stageVIDFile(sourceRoot, stageRoot *os.Root, path string) error {
-	in, err := sourceRoot.Open(path)
+	in, err := openSourceFile(sourceRoot, path)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = in.Close() }()
-	info, err := in.Stat()
-	if err != nil {
-		return err
-	}
-	if !info.Mode().IsRegular() {
-		return os.ErrInvalid
-	}
 	dir := filepath.Dir(path)
 	if dir != "." {
 		if err := stageRoot.MkdirAll(dir, vidStageDirMode); err != nil {
