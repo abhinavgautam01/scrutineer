@@ -39,8 +39,8 @@ github.com/git-pkgs/clone/gogit v0.1.2 h1:tIW3/xC4vW3V0t+OmwC1k5NwXhONbMTZnKb3Bm
 github.com/git-pkgs/clone/gogit v0.1.2/go.mod h1:Z9bKRaOb45bM9+IA/NWtwU2FHZ49d1SjIt/oCtggOfY=
 github.com/git-pkgs/cwe v0.1.1 h1:FTdif2t/pQCd8IFxJUt3fy4khoQ93djiw2sukqE8KiQ=
 github.com/git-pkgs/cwe v0.1.1/go.mod h1:6yUxEoA+3rI4W3ftqb7PZP1Z7zZFmV4/wfr7P46HtHU=
-github.com/git-pkgs/enrichment v0.7.2 h1:flD/M89HxkOegUi6tC8EOspFiIMsl7m0o576IQKOp48=
-github.com/git-pkgs/enrichment v0.7.2/go.mod h1:xGyc/iz7u1UnbrOHk8lIX5ZaNF3mKFDEZc3VqBJ/LOk=
+github.com/git-pkgs/enrichment v0.7.3 h1:l8bGVUP2Ncg3uyoZz7Gve+pyojUVcIQ3oJOFbYhWSOM=
+github.com/git-pkgs/enrichment v0.7.3/go.mod h1:ZN/cH4PnmzsapEVPvmAwREP7+ox+RX0yfR6KvoB8xKE=
 github.com/git-pkgs/magic v0.5.0 h1:Pm+4fkHR+K6kg9pwJM4hnwWUuBlkYdLmF1yIAI8lU9Q=
 github.com/git-pkgs/magic v0.5.0/go.mod h1:SXOqcsNmbmpZjJZHEEWnwxprbsFvpwWgTAZrgXp4Jm4=
 github.com/git-pkgs/pom v0.1.8 h1:mXCuWw6XkrKKZb6IurRZyIznYLPhV5AYg5ZO38Uj/l8=
