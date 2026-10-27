@@ -6,11 +6,26 @@
 curl -H "Authorization: Bearer $(cat data/operator-token)" -o scrutineer.sarif 'http://127.0.0.1:8080/api/v1/repositories/1/findings?format=sarif&scope=findings'
 ```
 
+`GET /api/v1/findings?format=sarif` exports findings across repositories in one log,
+with one run for each `(repository_id, last-seen revision)` pair and the
+appropriate repository URI on every run. The global export accepts the same
+`severity`, `status`, `sub_path`, `scope`, `repository_id`, `since` and
+`updated_since` filters as global JSONL. Unlike streaming JSONL, it assembles
+SARIF in memory, so a request matching more than 10,000 findings fails with
+HTTP 400 before producing a report. Narrow the filters or use JSONL when the
+result would be larger. With no matches, the global report has an empty `runs`
+array (the per-repository endpoint still returns one empty run).
+
+```sh
+curl -H "Authorization: Bearer $(cat data/operator-token)" -o global.sarif \
+  'http://127.0.0.1:8080/api/v1/findings?format=sarif&scope=findings&severity=High'
+```
+
 The `severity`, `status`, `sub_path` and `scope` filters apply as they do for JSONL. `encrypt` and `include` are bundle-only and get a 400.
 
 ## What the log carries
 
-Each distinct revision gets its own run, because SARIF records version control provenance per run. A finding's revision is the commit it was last observed at, falling back to the commit it was first seen at, since its location is refreshed on every re-observation. `versionControlProvenance` names the repository by the same portable URL a [sharing bundle](encrypted-sharing.md) uses, so a local checkout is exported under its HTTPS origin when it has one. Without one it is named by its `file:///` URI, with a Windows drive in the path (`file:///C:/src/widget`). A repository with no matching findings still yields one run with an empty `results` array.
+Each distinct revision gets its own run, because SARIF records version control provenance per run. A finding's revision is the commit it was last observed at, falling back to the commit it was first seen at, since its location is refreshed on every re-observation. `versionControlProvenance` names the repository by the same portable URL a [sharing bundle](encrypted-sharing.md) uses, so a local checkout is exported under its HTTPS origin when it has one. Without one it is named by its `file:///` URI, with a Windows drive in the path (`file:///C:/src/widget`). Because that fallback exposes a path on the exporting host, inspect or sanitize the SARIF before sharing it. A repository with no matching findings still yields one run with an empty `results` array.
 
 | SARIF field | Source |
 |---|---|

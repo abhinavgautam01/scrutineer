@@ -1213,17 +1213,21 @@ paths:
 
   /v1/findings:
     get:
-      summary: Export findings across all repositories as JSONL
+      summary: Export findings across all repositories (JSONL or SARIF)
       description: |
         Returns one JSON object per line (`application/x-ndjson`). Operator
         token; localhost-only. Each line is a `FindingExport` carrying the
-        full set of `db.Finding` columns.
+        full set of `db.Finding` columns. `format=sarif` returns a validated
+        SARIF 2.1.0 log with one run per repository and observed revision.
+        SARIF is built in memory, so exports with more than 10,000 findings
+        after filtering return 400; use filters or streaming JSONL instead.
+        An empty global SARIF selection produces an empty `runs` array.
       operationId: exportFindings
       security: [{ operatorToken: [] }]
       parameters:
         - name: format
           in: query
-          schema: { type: string, enum: [jsonl] }
+          schema: { type: string, enum: [jsonl, sarif] }
         - name: severity
           in: query
           schema: { type: string, enum: [Critical, High, Medium, Low] }
@@ -1269,12 +1273,16 @@ paths:
           schema: { type: string, format: date-time }
       responses:
         '200':
-          description: JSONL stream of FindingExport objects, one per line.
+          description: JSONL findings stream or bounded SARIF 2.1.0 log.
           content:
             application/x-ndjson:
               schema: { $ref: '#/components/schemas/FindingExport' }
+            application/json:
+              schema:
+                type: object
+                description: SARIF 2.1.0 log (`format=sarif`).
         '400':
-          description: Invalid or empty repository_id, since or updated_since, unknown scope value, unsupported format query value, or `encrypt`/`include` requested (`encrypt`/`include` are only valid on per-repository bundle exports). Validation completes before streaming starts.
+          description: Invalid or empty repository_id, since or updated_since, unknown scope value, unsupported format query value, `encrypt`/`include` requested, or SARIF selection exceeds 10,000 findings. Validation and SARIF bounds checking complete before the response is written.
         '403':
           description: Host header is not localhost
 

@@ -54,7 +54,7 @@ curl -H "Authorization: Bearer $(cat data/operator-token)" http://127.0.0.1:8080
 curl -H "Authorization: Bearer $(cat data/operator-token)" http://127.0.0.1:8080/api/v1/scans
 ```
 
-`GET /api/v1/findings` accepts `severity`, `status`, `sub_path`, `scope=findings`, `repository_id`, `since` (creation time) and `updated_since` (modification time) filters, combined with AND. See `openapi.yaml` for the exact semantics.
+`GET /api/v1/findings` defaults to streaming JSONL; `format=sarif` returns a bounded SARIF 2.1.0 log grouped by repository and revision (10,000-finding maximum; exceeding it returns 400). It accepts `severity`, `status`, `sub_path`, `scope=findings`, `repository_id`, `since` (creation time) and `updated_since` (modification time) filters, combined with AND. See `openapi.yaml` for the exact semantics.
 
 `GET /api/v1/repositories/{id}` and `GET /api/v1/findings/{id}` return a single row as JSON, with the same shape as a line of the matching JSONL export. A malformed ID returns `400` and an unknown one `404`. They reject `encrypt`, `scope`, `include` and any `format` other than `jsonl` with `400` rather than returning plaintext, as do the repositories and scans exports. `scope=findings` is accepted only by the findings exports, `/api/v1/findings` and `/api/v1/repositories/{id}/findings`.
 
@@ -64,7 +64,7 @@ Detailed workflows:
 
 - [Importing findings](import.md) covers `POST /api/v1/import`, accepted formats, repository resolution, and revalidation.
 - [Encrypted findings sharing](encrypted-sharing.md) covers repository bundles, archival exports, age encryption, and round trips through the import route.
-- [Exporting findings as SARIF](sarif-export.md) covers `format=sarif` on the repository findings export and handing the log to OSS-CRS as bug candidates.
+- [Exporting findings as SARIF](sarif-export.md) covers `format=sarif` on both the repository and global findings exports and handing the log to OSS-CRS as bug candidates.
 - The [OpenAPI document](../openapi.yaml) defines the JSONL exports, filters, delete operations, and audit endpoints.
 
 ## Federation claim check: `/claim-check`
