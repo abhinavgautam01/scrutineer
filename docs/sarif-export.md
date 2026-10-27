@@ -6,6 +6,27 @@
 curl -H "Authorization: Bearer $(cat data/operator-token)" -o scrutineer.sarif 'http://127.0.0.1:8080/api/v1/repositories/1/findings?format=sarif&scope=findings'
 ```
 
+`GET /api/v1/findings?format=sarif` exports findings across repositories in one log,
+with one run for each `(repository_id, last-seen revision)` pair and the
+appropriate repository URI on every run. The global export accepts the same
+`severity`, `status`, `sub_path`, `scope`, `repository_id`, `since` and
+`updated_since` filters as global JSONL. Unlike streaming JSONL, it assembles
+SARIF in memory, so a request matching more than **10,000 findings** fails with
+HTTP 400 before producing a report. Narrow the filters or use JSONL when the
+result would be larger. With no matches, the global report has an empty `runs`
+array (the per-repository endpoint still returns one empty run).
+
+```sh
+curl -H "Authorization: Bearer $(cat data/operator-token)" -o global.sarif \
+  'http://127.0.0.1:8080/api/v1/findings?format=sarif&scope=findings&severity=High'
+```
+
+**Host-path disclosure:** A local repository without a portable HTTPS origin
+appears as a `file:///` URI containing a path from the exporting host. This
+may expose host directory names to anyone who receives the SARIF file. Scrutineer
+logs one warning for each such repository; inspect and sanitize the export
+before sharing it outside the host.
+
 The `severity`, `status`, `sub_path` and `scope` filters apply as they do for JSONL. `encrypt` and `include` are bundle-only and get a 400.
 
 ## What the log carries

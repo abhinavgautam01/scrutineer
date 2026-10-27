@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -342,5 +343,191 @@ func TestSARIFLocation(t *testing.T) {
 		if _, ok := sarifLocation("", bad); ok {
 			t.Errorf("%q: got a location, want none", bad)
 		}
+	}
+}
+
+func getGlobalSARIF(t *testing.T, s *Server, qs string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest("GET", "/api/v1/findings?format=sarif"+qs, nil)
+	asOperator(r)
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	return w
+}
+
+// TestExportGlobalSARIF covers separate repositories, multiple revisions,
+// verification ID selection, and no disclosure of confidential columns.
+func TestExportGlobalSARIF(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repos := []db.Repository{
+		{URL: "https://github.com/acme/one", Name: "one"},
+		{URL: "https://github.com/acme/two", Name: "two"},
+	}
+	for i := range repos {
+		if err := s.DB.Create(&repos[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	scans := make([]db.Scan, 2)
+	for i := range repos {
+		scans[i] = db.Scan{RepositoryID: repos[i].ID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName}
+		if err := s.DB.Create(&scans[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	findings := []db.Finding{
+		{RepositoryID: repos[0].ID, ScanID: scans[0].ID, Title: "one-old", Commit: "initial", LastSeenCommit: "rev-old", Severity: "High", DisclosureDraft: "GLOBAL-SARIF-SECRET"},
+		{RepositoryID: repos[0].ID, ScanID: scans[0].ID, Title: "one-new", Commit: "initial", LastSeenCommit: "rev-new", Severity: "High"},
+		{RepositoryID: repos[1].ID, ScanID: scans[1].ID, Title: "two-old", Commit: "rev-old", Severity: "Low"},
+	}
+	for i := range findings {
+		if err := s.DB.Create(&findings[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	older := db.FindingVerification{FindingID: findings[2].ID, ScanID: scans[0].ID, Status: "inconclusive", Report: "{}"}
+	newer := db.FindingVerification{FindingID: findings[2].ID, ScanID: scans[1].ID, Status: "confirmed", Report: "{}"}
+	if err := s.DB.Create(&older).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.Create(&newer).Error; err != nil {
+		t.Fatal(err)
+	}
+	w := getGlobalSARIF(t, s, "")
+	if strings.Contains(w.Body.String(), "GLOBAL-SARIF-SECRET") {
+		t.Fatal("global SARIF leaked disclosure draft")
+	}
+	log := parseSARIFBody(t, w)
+	if len(log.Runs) != 3 {
+		t.Fatalf("runs = %d, want 3", len(log.Runs))
+	}
+	type key struct{ url, revision string }
+	groups := map[key]sarif.Run{}
+	for _, run := range log.Runs {
+		if len(run.VersionControlProvenance) != 1 {
+			t.Fatalf("provenance = %+v", run.VersionControlProvenance)
+		}
+		p := run.VersionControlProvenance[0]
+		groups[key{p.RepositoryURI, p.RevisionID}] = run
+	}
+	for _, want := range []struct {
+		k     key
+		title string
+	}{
+		{key{repos[0].URL, "rev-old"}, "one-old"},
+		{key{repos[0].URL, "rev-new"}, "one-new"},
+		{key{repos[1].URL, "rev-old"}, "two-old"},
+	} {
+		run, ok := groups[want.k]
+		if !ok || len(run.Results) != 1 || run.Results[0].Message.Text != want.title {
+			t.Errorf("group %+v = %+v, want one result %q", want.k, run.Results, want.title)
+		}
+	}
+	verification, _ := scrutineerProps(t, groups[key{repos[1].URL, "rev-old"}].Results[0])["verification"].(map[string]any)
+	if verification["status"] != "confirmed" || verification["verify_scan_id"] != float64(scans[1].ID) {
+		t.Errorf("latest verification = %+v, want confirmed from scan %d", verification, scans[1].ID)
+	}
+}
+
+func TestExportGlobalSARIFFilters(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	repo := seedScopedFindings(t, s)
+	for _, tc := range []struct {
+		qs   string
+		want []string
+	}{
+		{"", []string{"audit finding", "semgrep noise"}},
+		{"&scope=findings", []string{"audit finding"}},
+		{"&status=new", []string{"audit finding"}},
+		{"&sub_path=pkg", []string{"semgrep noise"}},
+		{"&severity=Low", nil},
+		{"&repository_id=" + strconv.FormatUint(uint64(repo.ID), 10), []string{"audit finding", "semgrep noise"}},
+		{"&repository_id=9999999", nil},
+		{"&since=2100-01-01T00:00:00Z", nil},
+		{"&updated_since=2100-01-01T00:00:00Z", nil},
+	} {
+		log := parseSARIFBody(t, getGlobalSARIF(t, s, tc.qs))
+		var got []string
+		for _, run := range log.Runs {
+			for _, res := range run.Results {
+				got = append(got, res.Message.Text)
+			}
+		}
+		slices.Sort(got)
+		slices.Sort(tc.want)
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%s: titles %v, want %v", tc.qs, got, tc.want)
+		}
+	}
+	for _, qs := range []string{"&encrypt=1", "&include=all", "&scope=everything", "&repository_id=oops", "&since=bad"} {
+		if w := getGlobalSARIF(t, s, qs); w.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400", qs, w.Code)
+		}
+	}
+}
+
+func TestExportGlobalSARIFEmpty(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	log := parseSARIFBody(t, getGlobalSARIF(t, s, ""))
+	if len(log.Runs) != 0 {
+		t.Errorf("empty global export has %d runs, want zero", len(log.Runs))
+	}
+}
+
+func TestExportGlobalSARIFBound(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	repo := db.Repository{URL: "https://github.com/acme/huge", Name: "huge"}
+	if err := s.DB.Create(&repo).Error; err != nil {
+		t.Fatal(err)
+	}
+	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName}
+	if err := s.DB.Create(&scan).Error; err != nil {
+		t.Fatal(err)
+	}
+	// One SQL statement avoids making this test slow by executing 10,001 INSERTs.
+	if err := s.DB.Exec(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < ?)
+		INSERT INTO findings (repository_id, scan_id, title, severity, status)
+		SELECT ?, ?, 'finding', 'High', 'new' FROM n`, globalSARIFMaxFindings+1, repo.ID, scan.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	w := getGlobalSARIF(t, s, "")
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "10000") {
+		t.Fatalf("status %d, body=%s; want bounded 400", w.Code, w.Body)
+	}
+	if strings.Contains(w.Header().Get("Content-Type"), "x-ndjson") {
+		t.Fatal("oversized SARIF wrote streaming output")
+	}
+}
+
+// A missing portable origin must retain the per-repository SARIF behavior:
+// an escaped file URI is emitted, not a malformed file://host/path URL.
+func TestExportGlobalSARIFLocalRepository(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	dir := filepath.Join(t.TempDir(), "local checkout")
+	repo := db.Repository{URL: LocalScheme + dir, Name: "local checkout"}
+	if err := s.DB.Create(&repo).Error; err != nil {
+		t.Fatal(err)
+	}
+	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName}
+	if err := s.DB.Create(&scan).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.Create(&db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "local finding"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	log := parseSARIFBody(t, getGlobalSARIF(t, s, ""))
+	if len(log.Runs) != 1 {
+		t.Fatalf("runs = %d, want 1", len(log.Runs))
+	}
+	uri := log.Runs[0].VersionControlProvenance[0].RepositoryURI
+	parsed, err := url.Parse(uri)
+	if err != nil || parsed.Scheme != "file" || parsed.Host != "" || parsed.Path != filepath.ToSlash(dir) {
+		t.Fatalf("local provenance %q parsed as %+v: %v", uri, parsed, err)
 	}
 }

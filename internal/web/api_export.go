@@ -653,7 +653,24 @@ func encryptBundle(plain []byte, recipients []age.Recipient) ([]byte, error) {
 }
 
 func (s *Server) apiExportFindings(w http.ResponseWriter, r *http.Request) {
-	if !validateExportQuery(w, r) || !validFindingScope(w, r) {
+	if !validFindingScope(w, r) {
+		return
+	}
+	format := r.URL.Query().Get("format")
+	if format != "" && format != "jsonl" && format != "sarif" {
+		writeAPIError(w, http.StatusBadRequest, "unsupported format: jsonl or sarif")
+		return
+	}
+	if format == "sarif" {
+		if r.URL.Query().Get("encrypt") != "" {
+			writeAPIError(w, http.StatusBadRequest, "encrypt is only supported on per-repository bundle exports")
+			return
+		}
+		if r.URL.Query().Get("include") != "" {
+			writeAPIError(w, http.StatusBadRequest, "include is only supported on per-repository bundle exports")
+			return
+		}
+	} else if !validateExportQuery(w, r) {
 		return
 	}
 	q := s.DB.Model(&db.Finding{}).Order("id desc")
@@ -668,7 +685,12 @@ func (s *Server) apiExportFindings(w http.ResponseWriter, r *http.Request) {
 	if q, ok = filterExportTime(w, q, params, "updated_since", "updated_at"); !ok {
 		return
 	}
-	streamJSONL(w, applyFindingFilters(q, r), s.Log, findingExport)
+	q = applyFindingFilters(q, r)
+	if params.Get("format") == "sarif" {
+		s.apiExportGlobalSARIF(w, r, q)
+		return
+	}
+	streamJSONL(w, q, s.Log, findingExport)
 }
 
 func (s *Server) apiExportScans(w http.ResponseWriter, r *http.Request) {
