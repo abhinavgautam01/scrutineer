@@ -12,6 +12,10 @@ import (
 // side of a finding's primary location.
 const snippetContextLines = 5
 
+// snippetMaxBytes caps how much of a source file is read when extracting a
+// snippet, since the path is reported by an untrusted runner.
+const snippetMaxBytes = 1 << 20
+
 // readSnippet returns the source lines around the finding's primary
 // location (file:line) read from srcDir, with snippetContextLines of
 // context on either side. It applies the same untrusted-path discipline as
@@ -40,7 +44,7 @@ func readSnippet(srcDir, location string) string {
 		return ""
 	}
 	defer func() { _ = f.Close() }()
-	data, err := io.ReadAll(f)
+	data, err := io.ReadAll(io.LimitReader(f, snippetMaxBytes))
 	if err != nil {
 		return ""
 	}

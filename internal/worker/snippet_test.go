@@ -99,6 +99,18 @@ func TestReadSnippet(t *testing.T) {
 	})
 }
 
+func TestReadSnippet_capsLargeFiles(t *testing.T) {
+	srcDir := t.TempDir()
+	content := make([]byte, snippetMaxBytes+6)
+	copy(content[snippetMaxBytes:], "\ntail\n")
+	if err := os.WriteFile(filepath.Join(srcDir, "big.go"), content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := readSnippet(srcDir, "big.go:2"); got != "" {
+		t.Errorf("readSnippet past size cap = %q, want \"\"", got)
+	}
+}
+
 func TestReadSnippet_allowsContainedSymlink(t *testing.T) {
 	srcDir := t.TempDir()
 	writeNumberedFile(t, srcDir, "a.go", 20)
