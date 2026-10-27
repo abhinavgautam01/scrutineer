@@ -550,7 +550,13 @@ func TestExportGlobalSARIFLocalRepository(t *testing.T) {
 	}
 	uri := log.Runs[0].VersionControlProvenance[0].RepositoryURI
 	parsed, err := url.Parse(uri)
-	if err != nil || parsed.Scheme != "file" || parsed.Host != "" || parsed.Path != filepath.ToSlash(dir) {
-		t.Fatalf("local provenance %q parsed as %+v: %v", uri, parsed, err)
+	// File URIs use an absolute URL path, including a leading slash before
+	// the drive letter on Windows (file:///C:/...), unlike filepath.ToSlash.
+	wantPath := filepath.ToSlash(dir)
+	if !strings.HasPrefix(wantPath, "/") {
+		wantPath = "/" + wantPath
+	}
+	if err != nil || parsed.Scheme != "file" || parsed.Host != "" || parsed.Path != wantPath {
+		t.Fatalf("local provenance %q parsed as %+v: %v (want path %q)", uri, parsed, err, wantPath)
 	}
 }
