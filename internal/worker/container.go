@@ -850,12 +850,16 @@ func (d ContainerRunner) checkHardenedWorkspace(workRoot string) error {
 	if !d.Hardened && !d.HardenedRuntimeOnly {
 		return nil
 	}
+	return checkWorkspaceCap(workRoot, HardenedWorkspaceCapBytes)
+}
+
+func checkWorkspaceCap(workRoot string, limit int64) error {
 	size, err := dirSize(workRoot)
 	if err != nil {
 		return fmt.Errorf("workspace size check: %w", err)
 	}
-	if size > HardenedWorkspaceCapBytes {
-		return fmt.Errorf("workspace exceeds the %d-byte hardening cap after clone (got %d)", HardenedWorkspaceCapBytes, size)
+	if size > limit {
+		return fmt.Errorf("workspace exceeds the %d-byte hardening cap after clone (got %d)", limit, size)
 	}
 	return nil
 }

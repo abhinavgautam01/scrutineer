@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -99,28 +100,46 @@ func (w *Worker) PrepareSrc(ctx context.Context, url, ref, workRoot string, emit
 // by default; the code browser unshallows on demand when a historical
 // commit is requested.
 func (w *Worker) prepareRepoSrc(ctx context.Context, url, ref, workRoot string, emit func(Event)) (string, error) {
-	return w.prepareRepoSrcWithOptions(ctx, url, ref, workRoot, false, emit)
+	return w.prepareRepoSrcWithOptions(ctx, url, ref, workRoot, RepoSrcOptions{}, emit)
+}
+
+// RepoSrcOptions selects how the shared clone cache is prepared for a scan.
+type RepoSrcOptions struct {
+	RecurseSubmodules bool
+	FullHistory       bool
+}
+
+// repoCacheDir picks the cache directory for the options. Full history gets
+// its own directory because CopyTree copies .git into every scan, so deepening
+// the default cache would make every other scan copy the whole history.
+func repoCacheDir(root string, options RepoSrcOptions) string {
+	switch {
+	case options.FullHistory && options.RecurseSubmodules:
+		return filepath.Join(root, "full-history-with-submodules")
+	case options.FullHistory:
+		return filepath.Join(root, "full-history")
+	case options.RecurseSubmodules:
+		return filepath.Join(root, "with-submodules")
+	}
+	return root
 }
 
 func (w *Worker) prepareRepoSrcWithOptions(
 	ctx context.Context,
 	url, ref, workRoot string,
-	recurseSubmodules bool,
+	options RepoSrcOptions,
 	emit func(Event),
 ) (string, error) {
 	mu := w.cacheMutex(url)
 	mu.Lock()
 	defer mu.Unlock()
 
-	cacheRoot := RepoCacheRoot(w.DataDir, url)
-	if recurseSubmodules {
-		cacheRoot = filepath.Join(cacheRoot, "with-submodules")
-	}
+	cacheRoot := repoCacheDir(RepoCacheRoot(w.DataDir, url), options)
 	if err := os.MkdirAll(cacheRoot, dirPerm); err != nil {
 		return "", err
 	}
 	cacheSrc, err := ensureCloneWithOptions(
-		ctx, db.Repository{URL: url}, cacheRoot, false, ref, recurseSubmodules, emit,
+		ctx, db.Repository{URL: url}, cacheRoot, options.FullHistory, ref, options.RecurseSubmodules, emit,
 	)
 	if err != nil {
 		return "", err
@@ -136,19 +155,60 @@ func (w *Worker) prepareRepoSrcWithOptions(
 	return commit, nil
 }
 
+// workspaceCapFor returns the workspace cap the runner for skillName enforces
+// after clone, or 0 when it enforces none. Host-split skills run on the host
+// where no cap applies.
+func (w *Worker) workspaceCapFor(skillName string) int64 {
+	r := w.Runner
+	if s, ok := r.(HostSplitRunner); ok {
+		r = s.runnerFor(skillName)
+	}
+	if c, ok := r.(ContainerRunner); ok && (c.Hardened || c.HardenedRuntimeOnly) {
+		return HardenedWorkspaceCapBytes
+	}
+	return 0
+}
+
+// prepareSkillRepoSrc prepares the scan source. A full-history request falls
+// back to a shallow clone both when the deepen fails and when the full-history
+// workspace is over workspaceCap (0 means no cap), since the runner would
+// otherwise refuse the scan.
 func (w *Worker) prepareSkillRepoSrc(
 	ctx context.Context,
 	url, ref, workRoot string,
-	recurseSubmodules bool,
+	options RepoSrcOptions,
+	workspaceCap int64,
+	emit func(Event),
+) (string, error) {
+	commit, err := w.prepareSkillRepoSrcOnce(ctx, url, ref, workRoot, options, emit)
+	if err == nil && options.FullHistory && workspaceCap > 0 {
+		err = checkWorkspaceCap(workRoot, workspaceCap)
+	}
+	if err == nil || !options.FullHistory || ctx.Err() != nil ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return commit, err
+	}
+	emit(Event{Kind: KindText, Text: fmt.Sprintf("full history unavailable (%v); continuing with a shallow clone", err)})
+	if w.Log != nil {
+		w.Log.Warn("full history unavailable; falling back to shallow", "url", url, "err", err)
+	}
+	options.FullHistory = false
+	return w.prepareSkillRepoSrcOnce(ctx, url, ref, workRoot, options, emit)
+}
+
+func (w *Worker) prepareSkillRepoSrcOnce(
+	ctx context.Context,
+	url, ref, workRoot string,
+	options RepoSrcOptions,
 	emit func(Event),
 ) (string, error) {
 	if w.PrepareRepoSrcWithOptions != nil {
-		return w.PrepareRepoSrcWithOptions(ctx, url, ref, workRoot, recurseSubmodules, emit)
+		return w.PrepareRepoSrcWithOptions(ctx, url, ref, workRoot, options, emit)
 	}
 	if w.PrepareRepoSrc != nil {
 		return w.PrepareRepoSrc(ctx, url, ref, workRoot, emit)
 	}
-	return w.prepareRepoSrcWithOptions(ctx, url, ref, workRoot, recurseSubmodules, emit)
+	return w.prepareRepoSrcWithOptions(ctx, url, ref, workRoot, options, emit)
 }
 
 // EnsureCommit deepens the per-URL cache so commit becomes reachable.

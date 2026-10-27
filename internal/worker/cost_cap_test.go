@@ -153,7 +153,7 @@ func costCapFixture(t *testing.T, maxCost float64) (*Worker, *db.Scan) {
 		DB:      gdb,
 		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		DataDir: t.TempDir(),
-		PrepareRepoSrcWithOptions: func(_ context.Context, _, _, workRoot string, _ bool, _ func(Event)) (string, error) {
+		PrepareRepoSrcWithOptions: func(_ context.Context, _, _, workRoot string, _ RepoSrcOptions, _ func(Event)) (string, error) {
 			return "abc", os.MkdirAll(filepath.Join(workRoot, "src"), 0o755)
 		},
 	}

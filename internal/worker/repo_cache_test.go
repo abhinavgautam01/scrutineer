@@ -3,11 +3,13 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -180,7 +182,7 @@ func TestPrepareRepoSrcWithOptionsKeepsSubmodulesOptIn(t *testing.T) {
 	// scan log; keep it for the failure message.
 	var events []string
 	if _, err := w.prepareRepoSrcWithOptions(
-		context.Background(), url, "", withSubmodules, true, func(e Event) { events = append(events, FormatEvent(e)) },
+		context.Background(), url, "", withSubmodules, RepoSrcOptions{RecurseSubmodules: true}, func(e Event) { events = append(events, FormatEvent(e)) },
 	); err != nil {
 		t.Fatalf("prepare with submodules: %v", err)
 	}
@@ -208,7 +210,7 @@ func TestEmbeddedNativeBriefSeesPreparedSubmodule(t *testing.T) {
 	w := &Worker{DataDir: t.TempDir()}
 	workRoot := t.TempDir()
 	if _, err := w.prepareRepoSrcWithOptions(
-		context.Background(), url, "", workRoot, true, func(Event) {},
+		context.Background(), url, "", workRoot, RepoSrcOptions{RecurseSubmodules: true}, func(Event) {},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -421,5 +423,227 @@ func TestEnsureCommit_unreachableNonShallowIsNoOp(t *testing.T) {
 	w := &Worker{DataDir: dataDir}
 	if err := w.EnsureCommit(context.Background(), url, "0000000000000000000000000000000000000000"); err != nil {
 		t.Errorf("EnsureCommit on non-shallow without commit should be no-op: %v", err)
+	}
+}
+
+func newHistoryOrigin(t *testing.T, commits int) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	originDir := t.TempDir()
+	testGit(t, originDir, "init", "--quiet", "-b", "main")
+	for i := range commits {
+		name := "f" + strings.Repeat("x", i) + ".txt"
+		if err := os.WriteFile(filepath.Join(originDir, name), []byte("data\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		testGit(t, originDir, "add", name)
+		testGit(t, originDir, "commit", "--quiet", "-m", "commit "+name)
+	}
+	url := "https://clone.test/history"
+	t.Setenv("GIT_CONFIG_COUNT", "2")
+	t.Setenv("GIT_CONFIG_KEY_0", "url.file://"+originDir+".insteadOf")
+	t.Setenv("GIT_CONFIG_VALUE_0", url)
+	t.Setenv("GIT_CONFIG_KEY_1", "protocol.file.allow")
+	t.Setenv("GIT_CONFIG_VALUE_1", "always")
+	t.Setenv("GIT_ALLOW_PROTOCOL", "https:file")
+	return url
+}
+
+func commitCount(t *testing.T, dir string) int {
+	t.Helper()
+	out, err := exec.Command("git", "-C", dir, "rev-list", "--count", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestPrepareRepoSrcFullHistoryUsesSeparateCache(t *testing.T) {
+	url := newHistoryOrigin(t, 3)
+	w := &Worker{DataDir: shortTempDir(t)}
+
+	full := t.TempDir()
+	if _, err := w.prepareRepoSrcWithOptions(
+		context.Background(), url, "", full, RepoSrcOptions{FullHistory: true}, func(Event) {},
+	); err != nil {
+		t.Fatalf("full prepare: %v", err)
+	}
+	if n := commitCount(t, filepath.Join(full, "src")); n != 3 {
+		t.Errorf("full-history src has %d commits, want 3", n)
+	}
+	if _, err := os.Stat(filepath.Join(RepoCacheRoot(w.DataDir, url), "full-history")); err != nil {
+		t.Errorf("full-history cache dir missing: %v", err)
+	}
+
+	shallow := t.TempDir()
+	if _, err := w.PrepareSrc(context.Background(), url, "", shallow, func(Event) {}); err != nil {
+		t.Fatalf("shallow prepare: %v", err)
+	}
+	if n := commitCount(t, filepath.Join(shallow, "src")); n != 1 {
+		t.Errorf("default cache src has %d commits, want 1", n)
+	}
+}
+
+func TestRepoCacheDir(t *testing.T) {
+	tests := []struct {
+		options RepoSrcOptions
+		want    string
+	}{
+		{RepoSrcOptions{}, "r"},
+		{RepoSrcOptions{RecurseSubmodules: true}, filepath.Join("r", "with-submodules")},
+		{RepoSrcOptions{FullHistory: true}, filepath.Join("r", "full-history")},
+		{RepoSrcOptions{FullHistory: true, RecurseSubmodules: true}, filepath.Join("r", "full-history-with-submodules")},
+	}
+	for _, tt := range tests {
+		if got := repoCacheDir("r", tt.options); got != tt.want {
+			t.Errorf("repoCacheDir(%+v) = %q, want %q", tt.options, got, tt.want)
+		}
+	}
+}
+
+func TestPrepareSkillRepoSrcFallsBackToShallow(t *testing.T) {
+	var calls []RepoSrcOptions
+	var events []string
+	w := &Worker{
+		PrepareRepoSrcWithOptions: func(
+			_ context.Context, _, _, _ string, options RepoSrcOptions, _ func(Event),
+		) (string, error) {
+			calls = append(calls, options)
+			if options.FullHistory {
+				return "", errors.New("unshallow failed")
+			}
+			return "abc", nil
+		},
+	}
+	commit, err := w.prepareSkillRepoSrc(
+		context.Background(), "u", "", t.TempDir(),
+		RepoSrcOptions{FullHistory: true, RecurseSubmodules: true}, 0,
+		func(e Event) { events = append(events, e.Text) },
+	)
+	if err != nil || commit != "abc" {
+		t.Fatalf("commit %q err %v", commit, err)
+	}
+	if len(calls) != 2 || calls[1].FullHistory || !calls[1].RecurseSubmodules {
+		t.Errorf("calls = %+v", calls)
+	}
+	if len(events) != 1 || !strings.Contains(events[0], "full history unavailable (unshallow failed)") {
+		t.Errorf("events = %q", events)
+	}
+
+	calls = nil
+	w.PrepareRepoSrcWithOptions = func(
+		ctx context.Context, _, _, _ string, options RepoSrcOptions, _ func(Event),
+	) (string, error) {
+		calls = append(calls, options)
+		return "", context.Canceled
+	}
+	if _, err := w.prepareSkillRepoSrc(
+		context.Background(), "u", "", t.TempDir(), RepoSrcOptions{FullHistory: true}, 0, func(Event) {},
+	); !errors.Is(err, context.Canceled) || len(calls) != 1 {
+		t.Errorf("cancellation retried: err %v calls %d", err, len(calls))
+	}
+}
+
+// capFakeWorker returns a Worker whose clone writes fullSize bytes for a full
+// history request and shallowSize bytes otherwise, recording each call.
+func capFakeWorker(calls *[]RepoSrcOptions, fullSize, shallowSize int) *Worker {
+	return &Worker{
+		PrepareRepoSrcWithOptions: func(
+			_ context.Context, _, _, workRoot string, options RepoSrcOptions, _ func(Event),
+		) (string, error) {
+			*calls = append(*calls, options)
+			dst := filepath.Join(workRoot, "src")
+			if err := os.RemoveAll(dst); err != nil {
+				return "", err
+			}
+			if err := os.MkdirAll(dst, 0o755); err != nil {
+				return "", err
+			}
+			size := shallowSize
+			if options.FullHistory {
+				size = fullSize
+			}
+			return "abc", os.WriteFile(filepath.Join(dst, "blob"), make([]byte, size), 0o600)
+		},
+	}
+}
+
+func TestPrepareSkillRepoSrcFallsBackWhenFullHistoryExceedsCap(t *testing.T) {
+	var calls []RepoSrcOptions
+	var events []string
+	w := capFakeWorker(&calls, 2048, 16)
+	workRoot := t.TempDir()
+	commit, err := w.prepareSkillRepoSrc(
+		context.Background(), "u", "", workRoot, RepoSrcOptions{FullHistory: true}, 1024,
+		func(e Event) { events = append(events, e.Text) },
+	)
+	if err != nil || commit != "abc" {
+		t.Fatalf("commit %q err %v", commit, err)
+	}
+	if len(calls) != 2 || !calls[0].FullHistory || calls[1].FullHistory {
+		t.Errorf("calls = %+v", calls)
+	}
+	if len(events) != 1 || !strings.Contains(events[0], "full history unavailable") ||
+		!strings.Contains(events[0], "hardening cap") {
+		t.Errorf("events = %q", events)
+	}
+	if err := checkWorkspaceCap(workRoot, 1024); err != nil {
+		t.Errorf("workspace still over cap: %v", err)
+	}
+}
+
+func TestPrepareSkillRepoSrcKeepsFullHistoryUnderCap(t *testing.T) {
+	var calls []RepoSrcOptions
+	var events []string
+	w := capFakeWorker(&calls, 2048, 16)
+	_, err := w.prepareSkillRepoSrc(
+		context.Background(), "u", "", t.TempDir(), RepoSrcOptions{FullHistory: true}, 1<<20,
+		func(e Event) { events = append(events, e.Text) },
+	)
+	if err != nil || len(calls) != 1 || !calls[0].FullHistory || len(events) != 0 {
+		t.Errorf("err %v calls %+v events %q", err, calls, events)
+	}
+}
+
+func TestPrepareSkillRepoSrcIgnoresCapWithoutFullHistory(t *testing.T) {
+	var calls []RepoSrcOptions
+	w := capFakeWorker(&calls, 2048, 2048)
+	_, err := w.prepareSkillRepoSrc(
+		context.Background(), "u", "", t.TempDir(), RepoSrcOptions{}, 1, func(Event) {},
+	)
+	if err != nil || len(calls) != 1 {
+		t.Errorf("err %v calls %+v", err, calls)
+	}
+}
+
+func TestWorkspaceCapFor(t *testing.T) {
+	split := HostSplitRunner{
+		Container:  ContainerRunner{Hardened: true},
+		HostSkills: []string{"history"},
+	}
+	tests := []struct {
+		name   string
+		runner SkillRunner
+		skill  string
+		want   int64
+	}{
+		{"nil runner", nil, "recon", 0},
+		{"plain container", ContainerRunner{}, "recon", 0},
+		{"hardened", ContainerRunner{Hardened: true}, "recon", HardenedWorkspaceCapBytes},
+		{"runtime only", ContainerRunner{HardenedRuntimeOnly: true}, "recon", HardenedWorkspaceCapBytes},
+		{"split host skill", split, "history", 0},
+		{"split container skill", split, "recon", HardenedWorkspaceCapBytes},
+	}
+	for _, tt := range tests {
+		w := &Worker{Runner: tt.runner}
+		if got := w.workspaceCapFor(tt.skill); got != tt.want {
+			t.Errorf("%s: workspaceCapFor(%q) = %d, want %d", tt.name, tt.skill, got, tt.want)
+		}
 	}
 }
