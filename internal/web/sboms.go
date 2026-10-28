@@ -316,22 +316,50 @@ func (s *Server) sbomDelete(w http.ResponseWriter, r *http.Request) {
 	s.redirect(w, r, "/sboms")
 }
 
-// resolveSBOMPackages walks every unresolved package in the upload, looks up
-// its source repository via packages.ecosyste.ms, FirstOrCreates the repo,
-// enqueues the default triage skill if the repo is new, and links the
-// package row. Runs in the background after the operator confirms import so the page can render
-// immediately.
+func (s *Server) autoResolveGeneratedSBOM(scan *db.Scan) {
+	if scan.Status != db.ScanDone || scan.SubPath != "" {
+		return
+	}
+	var uploads []db.SBOMUpload
+	if err := s.DB.Select("id").Where("scan_id = ? AND origin = ? AND current = ?", scan.ID, db.SBOMOriginGenerated, true).Find(&uploads).Error; err != nil {
+		s.Log.Error("find generated SBOM", "scan", scan.ID, "err", err)
+		return
+	}
+	for _, upload := range uploads {
+		s.goResolve(upload.ID)
+	}
+}
+
+// Generated snapshots discover repositories without scheduling scans.
 func (s *Server) resolveSBOMPackages(uploadID uint) {
 	ctx, cancel := context.WithTimeout(context.Background(), sbomResolveTimeout)
 	defer cancel()
 
+	var upload db.SBOMUpload
+	if err := s.DB.First(&upload, uploadID).Error; err != nil || upload.ImportPending {
+		return
+	}
 	var pkgs []db.SBOMPackage
-	s.DB.Where("sbom_upload_id = ? AND source_repository_id IS NULL", uploadID).Find(&pkgs)
+	if err := s.DB.Where("sbom_upload_id = ? AND source_repository_id IS NULL", uploadID).Order("id").Find(&pkgs).Error; err != nil {
+		s.Log.Error("load SBOM packages", "sbom", uploadID, "err", err)
+		return
+	}
+	purls := make([]string, 0, len(pkgs))
+	for _, p := range pkgs {
+		if p.PURL != "" {
+			purls = append(purls, p.PURL)
+		}
+	}
+	var resolved map[string]string
+	var lookupErr error
+	if s.ecosystemsEnrichment && len(purls) > 0 {
+		resolved, lookupErr = s.resolvePURLs(ctx, purls)
+	}
 
 	for i := range pkgs {
 		p := &pkgs[i]
 		if p.PURL == "" {
-			s.DB.Model(p).Update("resolve_error", noPURLError)
+			s.recordSBOMResolveError(p, noPURLError)
 			continue
 		}
 		if !s.ecosystemsEnrichment {
@@ -339,26 +367,39 @@ func (s *Server) resolveSBOMPackages(uploadID uint) {
 			// "the operator turned enrichment off", so a re-resolve with the
 			// setting flipped keeps it instead of overwriting it.
 			if p.ResolveError == "" {
-				s.DB.Model(p).Update("resolve_error", ecosystemsDisabled)
+				s.recordSBOMResolveError(p, ecosystemsDisabled)
 			}
 			continue
 		}
-		repoURL := s.resolvePURL(ctx, p.PURL)
+		if lookupErr != nil {
+			s.recordSBOMResolveError(p, "repository lookup failed: "+lookupErr.Error())
+			continue
+		}
+		repoURL := resolved[p.PURL]
 		if repoURL == "" {
-			s.DB.Model(p).Update("resolve_error", "no repository_url for purl")
+			s.recordSBOMResolveError(p, "no repository_url for purl")
 			continue
 		}
 		input, err := ParseRepoInput(repoURL)
 		if err != nil {
-			s.DB.Model(p).Update("resolve_error", err.Error())
+			s.recordSBOMResolveError(p, err.Error())
 			continue
 		}
-		repo, _, err := s.createOrTriageRepo(ctx, input, "", p.Scope != sbom.ScopeTransitive)
+		triage := upload.Origin == db.SBOMOriginUploaded && p.Scope != sbom.ScopeTransitive
+		repo, _, err := s.createOrTriageRepo(ctx, input, "", triage)
 		if err != nil {
-			s.DB.Model(p).Update("resolve_error", err.Error())
+			s.recordSBOMResolveError(p, err.Error())
 			continue
 		}
-		s.DB.Model(p).Updates(map[string]any{"source_repository_id": repo.ID, "resolve_error": ""})
+		if err := s.DB.Model(p).Updates(map[string]any{"source_repository_id": repo.ID, "resolve_error": ""}).Error; err != nil {
+			s.Log.Error("link SBOM package", "package", p.ID, "err", err)
+		}
+	}
+}
+
+func (s *Server) recordSBOMResolveError(pkg *db.SBOMPackage, reason string) {
+	if err := s.DB.Model(pkg).Update("resolve_error", reason).Error; err != nil {
+		s.Log.Error("save SBOM resolution error", "package", pkg.ID, "err", err)
 	}
 }
 

@@ -197,8 +197,9 @@ type Server struct {
 	// resolvePURL maps a Package URL to its source repository URL via
 	// packages.ecosyste.ms. Field rather than direct call so tests can
 	// stub the network lookup.
-	resolvePURL func(ctx context.Context, purl string) string
-	resolveSync bool
+	resolvePURL  func(ctx context.Context, purl string) string
+	resolvePURLs func(ctx context.Context, purls []string) (map[string]string, error)
+	resolveSync  bool
 
 	// listBranches enumerates a remote's branches for the add-repo branch
 	// picker. Field rather than a direct worker call so tests can stub the
@@ -484,6 +485,7 @@ func New(gdb *gorm.DB, q *queue.Queue, log *slog.Logger, broker *Broker, w *work
 	}
 	s := &Server{DB: gdb, Queue: q, Log: log, Broker: broker, Worker: w, tmpl: t,
 		resolvePURL: resolvePURLRepo, listBranches: worker.ListRemoteBranches,
+		resolvePURLs:      worker.ResolvePURLRepositoryURLs,
 		fetchOrgRepos:     fetchGitHubOrgRepos,
 		resolveRemoteHead: defaultResolveRemoteHead,
 		syncUpstream:      w.SyncUpstream}
@@ -518,6 +520,7 @@ func (s *Server) DisableEcosystems() {
 	s.ecosystemsEnrichment = false
 	s.prefetchEcosystems = nil
 	s.resolvePURL = func(context.Context, string) string { return "" }
+	s.resolvePURLs = func(context.Context, []string) (map[string]string, error) { return nil, nil }
 }
 
 // ecosystemsPrefetch warms the ecosyste.ms cache for a freshly added repo in a
