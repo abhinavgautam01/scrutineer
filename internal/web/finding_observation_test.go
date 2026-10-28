@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -142,5 +143,49 @@ func TestFindingShowCapsObservationsAtNewest(t *testing.T) {
 	rows, total, err := db.FindingContributions(s.DB, f.ID, 0)
 	if err != nil || len(rows) != n || total != int64(n) {
 		t.Fatalf("unlimited contributions = %d rows total %d err %v, want %d", len(rows), total, err, n)
+	}
+}
+
+func TestFindingShowReportsDisagreementBeyondPageCap(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	repo := db.Repository{URL: "https://github.com/example/obs-old-disagree", Name: "obs-old-disagree"}
+	s.DB.Create(&repo)
+	origin := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone}
+	s.DB.Create(&origin)
+	f := db.Finding{ScanID: origin.ID, RepositoryID: repo.ID, Title: "drift", Severity: "Low", Status: db.FindingNew}
+	if err := s.DB.Create(&f).Error; err != nil {
+		t.Fatal(err)
+	}
+	n := maxPageObservations + 5
+	for i := 1; i <= n; i++ {
+		severity := "Low"
+		if i <= n-maxPageObservations {
+			severity = "High"
+		}
+		scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone}
+		s.DB.Create(&scan)
+		if err := db.RecordFindingObservation(s.DB, db.ObservationFromFinding(&scan, &db.Finding{ID: f.ID, Title: "drift", Severity: severity})); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	view, err := loadFindingObservationViews(s.DB, f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range view.Rows {
+		if row.Severity != "Low" {
+			t.Fatalf("page row severity = %q, want only the newest Low rows shown", row.Severity)
+		}
+	}
+	if !slices.Equal(view.Disagreements, []string{"severity"}) {
+		t.Errorf("disagreements = %v, want [severity] from the older hidden rows", view.Disagreements)
+	}
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq(http.MethodGet, fmt.Sprintf("/findings/%d", f.ID)))
+	if !strings.Contains(w.Body.String(), "disagree on severity") {
+		t.Error("finding page missing the disagreement notice for hidden rows")
 	}
 }

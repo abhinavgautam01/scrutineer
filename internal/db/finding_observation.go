@@ -98,16 +98,14 @@ func RecordFindingObservation(gdb *gorm.DB, obs FindingObservation) error {
 	}).Create(&obs).Error
 }
 
-// FindingContributions returns the observations that make up a finding: its
-// own plus those of findings that finding-dedup merged into it (Status
-// duplicate with DuplicateOfID pointing into the set), followed transitively
-// and within the same repository. The walk is capped at maxContributionFindings
-// findings. A positive limit keeps only the newest limit rows. Rows are ordered
-// by creation time then id. total counts every contribution.
-func FindingContributions(gdb *gorm.DB, findingID uint, limit int) (rows []FindingObservation, total int64, err error) {
+// ContributionFindingIDs returns the finding plus the findings that
+// finding-dedup merged into it (Status duplicate with DuplicateOfID pointing
+// into the set), followed transitively and within the same repository. The
+// walk is capped at maxContributionFindings findings.
+func ContributionFindingIDs(gdb *gorm.DB, findingID uint) ([]uint, error) {
 	var root Finding
 	if err := gdb.Select("id", "repository_id").First(&root, findingID).Error; err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	ids := []uint{root.ID}
 	visited := map[uint]bool{root.ID: true}
@@ -117,7 +115,7 @@ func FindingContributions(gdb *gorm.DB, findingID uint, limit int) (rows []Findi
 		if err := gdb.Model(&Finding{}).
 			Where("repository_id = ? AND status = ? AND duplicate_of_id IN ?", root.RepositoryID, FindingDuplicate, frontier).
 			Order("id").Limit(maxContributionFindings).Pluck("id", &children).Error; err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		frontier = frontier[:0]
 		for _, id := range children {
@@ -129,6 +127,13 @@ func FindingContributions(gdb *gorm.DB, findingID uint, limit int) (rows []Findi
 			frontier = append(frontier, id)
 		}
 	}
+	return ids, nil
+}
+
+// ObservationsForFindings returns the observations of the given findings. A
+// positive limit keeps only the newest limit rows. Rows are ordered by
+// creation time then id. total counts every matching row.
+func ObservationsForFindings(gdb *gorm.DB, ids []uint, limit int) (rows []FindingObservation, total int64, err error) {
 	q := func() *gorm.DB { return gdb.Model(&FindingObservation{}).Where("finding_id IN ?", ids) }
 	if err := q().Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -142,4 +147,15 @@ func FindingContributions(gdb *gorm.DB, findingID uint, limit int) (rows []Findi
 	}
 	slices.Reverse(rows)
 	return rows, total, nil
+}
+
+// FindingContributions returns the observations that make up a finding: those
+// of every finding in ContributionFindingIDs, with ObservationsForFindings'
+// limit and ordering.
+func FindingContributions(gdb *gorm.DB, findingID uint, limit int) ([]FindingObservation, int64, error) {
+	ids, err := ContributionFindingIDs(gdb, findingID)
+	if err != nil {
+		return nil, 0, err
+	}
+	return ObservationsForFindings(gdb, ids, limit)
 }

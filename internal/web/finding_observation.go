@@ -12,8 +12,6 @@ import (
 	"scrutineer/internal/db"
 )
 
-// maxPageObservations caps how many observations the finding page loads; the
-// API returns all of them.
 const maxPageObservations = 20
 
 var observationEvidenceOrder = []string{
@@ -42,11 +40,22 @@ type findingObservationsView struct {
 }
 
 func loadFindingObservationViews(gdb *gorm.DB, findingID uint) (*findingObservationsView, error) {
-	rows, total, err := db.FindingContributions(gdb, findingID, maxPageObservations)
+	ids, err := db.ContributionFindingIDs(gdb, findingID)
+	if err != nil {
+		return nil, err
+	}
+	rows, total, err := db.ObservationsForFindings(gdb, ids, maxPageObservations)
 	if err != nil || len(rows) == 0 {
 		return nil, err
 	}
-	out := &findingObservationsView{Total: total, Disagreements: observationDisagreements(rows)}
+	// The page shows only the newest rows; compare every contribution so an
+	// older disagreement is not hidden by the cap.
+	var compared []db.FindingObservation
+	if err := gdb.Model(&db.FindingObservation{}).Select("severity", "reachability", "rating").
+		Where("finding_id IN ?", ids).Find(&compared).Error; err != nil {
+		return nil, err
+	}
+	out := &findingObservationsView{Total: total, Disagreements: observationDisagreements(compared)}
 	for _, row := range rows {
 		v := findingObservationView{FindingObservation: row}
 		var raw map[string]string
