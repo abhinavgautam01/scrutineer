@@ -931,12 +931,15 @@ git commit -m "fix: {{$f.Title}}"</pre>
   <details open class="group border-b">
     <summary class="w-full outline-none rounded-md focus-visible:ring-ring/50 focus-visible:ring-[3px]">
       <h3 class="flex flex-1 items-center justify-between gap-4 py-4 text-sm font-medium hover:underline">
-        Observations <span class="text-muted-foreground ml-auto mr-2 text-xs">{{len .Rows}}</span>
+        Observations <span class="text-muted-foreground ml-auto mr-2 text-xs">{{.Total}}</span>
         <i data-lucide="chevron-down" class="text-muted-foreground size-4 shrink-0 transition-transform duration-200 group-open:rotate-180"></i>
       </h3>
     </summary>
     <section class="pb-4 grid gap-4">
       <p class="text-xs text-muted-foreground">What each scan reported for this finding. Agreement between scans is not verification.</p>
+      {{if lt (len .Rows) .Total}}
+      <p class="text-xs text-muted-foreground">Showing the newest {{len .Rows}} of {{.Total}}. The full list is at <code>/api/findings/{{$f.ID}}/observations</code>.</p>
+      {{end}}
       {{if .Disagreements}}
       <div class="text-sm border rounded-md p-3" role="note">Observations disagree on {{range $i, $d := .Disagreements}}{{if $i}}, {{end}}{{$d}}{{end}}.</div>
       {{end}}

@@ -465,7 +465,7 @@ Append-only release-build assessments produced by finding-scoped `critic` scans.
 
 ## finding_observations
 
-Append-only record of each scan reporting a finding. The `findings` row is the analyst's mutable case and keeps the first report's content when a later scan rediscovers the same fingerprint, so this table preserves what every scan itself said (severity, rating, evidence) alongside the model and backend that produced it. Nothing edits a row after its scan finishes. Agreement between rows is never treated as verification. The finding page and `GET /api/findings/{id}/observations` also include the observations of findings merged into this one as duplicates (via `findings.duplicate_of_id`), so merging never discards reviewer evidence. The `evidence` and text columns are untrusted model output, stored and shown as data.
+Append-only record of each scan reporting a finding. The `findings` row is the analyst's mutable case and keeps the first report's content when a later scan rediscovers the same fingerprint, so this table preserves what every scan itself said (severity, rating, evidence) alongside the model and backend that produced it. Nothing edits a row after its scan finishes. Agreement between rows is never treated as verification. The finding page and `GET /api/findings/{id}/observations` also include the observations of findings merged into this one as duplicates (via `findings.duplicate_of_id`), so merging never discards reviewer evidence. The page shows the newest 20 while the API returns all of them. The `evidence` and text columns are untrusted model output, stored and shown as data.
 
 | Column | Type | Notes |
 |--------|------|-------|

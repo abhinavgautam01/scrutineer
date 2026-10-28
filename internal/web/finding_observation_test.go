@@ -101,3 +101,46 @@ func TestAPIListFindingObservations(t *testing.T) {
 		t.Fatalf("unknown finding status = %d, want 404", w.Code)
 	}
 }
+
+func TestFindingShowCapsObservationsAtNewest(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	repo := db.Repository{URL: "https://github.com/example/obs-cap", Name: "obs-cap"}
+	s.DB.Create(&repo)
+	origin := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone}
+	s.DB.Create(&origin)
+	f := db.Finding{ScanID: origin.ID, RepositoryID: repo.ID, Title: "busy", Severity: "High", Status: db.FindingNew}
+	if err := s.DB.Create(&f).Error; err != nil {
+		t.Fatal(err)
+	}
+	n := maxPageObservations + 5
+	for i := 1; i <= n; i++ {
+		scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, Model: fmt.Sprintf("model-%02d", i)}
+		s.DB.Create(&scan)
+		if err := db.RecordFindingObservation(s.DB, db.ObservationFromFinding(&scan, &db.Finding{ID: f.ID, Title: "busy"})); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	view, err := loadFindingObservationViews(s.DB, f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Rows) != maxPageObservations || view.Total != int64(n) {
+		t.Fatalf("rows = %d total = %d, want %d of %d", len(view.Rows), view.Total, maxPageObservations, n)
+	}
+	if first, last := view.Rows[0].Model, view.Rows[len(view.Rows)-1].Model; first != "model-06" || last != fmt.Sprintf("model-%02d", n) {
+		t.Errorf("page rows run %s..%s, want the newest oldest first", first, last)
+	}
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq(http.MethodGet, fmt.Sprintf("/findings/%d", f.ID)))
+	if body := w.Body.String(); !strings.Contains(body, fmt.Sprintf("Showing the newest %d of %d", maxPageObservations, n)) {
+		t.Error("finding page missing the truncation note")
+	}
+
+	rows, total, err := db.FindingContributions(s.DB, f.ID, 0)
+	if err != nil || len(rows) != n || total != int64(n) {
+		t.Fatalf("unlimited contributions = %d rows total %d err %v, want %d", len(rows), total, err, n)
+	}
+}

@@ -144,7 +144,7 @@ func TestObservations_dedupLinksDuplicateAndGathersContributions(t *testing.T) {
 	if got.Status != db.FindingDuplicate || got.DuplicateOfID != canonical.ID {
 		t.Fatalf("duplicate = status %s of %d, want duplicate of %d", got.Status, got.DuplicateOfID, canonical.ID)
 	}
-	contrib, err := db.FindingContributions(w.DB, canonical.ID)
+	contrib, _, err := db.FindingContributions(w.DB, canonical.ID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestObservations_dedupLinksDuplicateAndGathersContributions(t *testing.T) {
 		t.Errorf("duplicate's observation changed by dedup: %+v -> %+v", before, after)
 	}
 	// The duplicate's own page does not pull in the canonical's rows.
-	own, _ := db.FindingContributions(w.DB, dup.ID)
+	own, _, _ := db.FindingContributions(w.DB, dup.ID, 0)
 	if len(own) != 1 {
 		t.Errorf("duplicate contributions = %d, want only its own", len(own))
 	}

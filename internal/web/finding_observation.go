@@ -12,8 +12,10 @@ import (
 	"scrutineer/internal/db"
 )
 
-// observationEvidenceOrder fixes the display order of the evidence fields
-// stored in FindingObservation.Evidence.
+// maxPageObservations caps how many observations the finding page loads; the
+// API returns all of them.
+const maxPageObservations = 20
+
 var observationEvidenceOrder = []string{
 	"locations", "sinks", "trace", "boundary", "validation", "reach",
 	"affected", "quality_tier", "prior_art", "dup_check",
@@ -33,17 +35,18 @@ type findingObservationView struct {
 }
 
 type findingObservationsView struct {
-	Rows []findingObservationView
+	Rows  []findingObservationView
+	Total int64
 	// Disagreements names the fields on which observations differ.
 	Disagreements []string
 }
 
 func loadFindingObservationViews(gdb *gorm.DB, findingID uint) (*findingObservationsView, error) {
-	rows, err := db.FindingContributions(gdb, findingID)
+	rows, total, err := db.FindingContributions(gdb, findingID, maxPageObservations)
 	if err != nil || len(rows) == 0 {
 		return nil, err
 	}
-	out := &findingObservationsView{Disagreements: observationDisagreements(rows)}
+	out := &findingObservationsView{Total: total, Disagreements: observationDisagreements(rows)}
 	for _, row := range rows {
 		v := findingObservationView{FindingObservation: row}
 		var raw map[string]string
@@ -85,8 +88,7 @@ func observationDisagreements(rows []db.FindingObservation) []string {
 	return out
 }
 
-// findingObservationJSON is the API shape of one observation. Evidence is
-// decoded to an object when it parses and passed through as a string otherwise.
+// findingObservationJSON is the API shape of one observation.
 type findingObservationJSON struct {
 	ID              uint      `json:"id"`
 	FindingID       uint      `json:"finding_id"`
@@ -112,9 +114,7 @@ type findingObservationJSON struct {
 func findingObservationResponse(o *db.FindingObservation) findingObservationJSON {
 	var evidence any
 	if o.Evidence != "" {
-		if err := json.Unmarshal([]byte(o.Evidence), &evidence); err != nil {
-			evidence = o.Evidence
-		}
+		_ = json.Unmarshal([]byte(o.Evidence), &evidence)
 	}
 	return findingObservationJSON{
 		ID: o.ID, FindingID: o.FindingID, ScanID: o.ScanID, RepositoryID: o.RepositoryID,
@@ -125,8 +125,6 @@ func findingObservationResponse(o *db.FindingObservation) findingObservationJSON
 	}
 }
 
-// findingObservations loads the observation view for the finding page. A
-// failure is logged and hides the section rather than failing the page.
 func (s *Server) findingObservations(findingID uint) *findingObservationsView {
 	v, err := loadFindingObservationViews(s.DB, findingID)
 	if err != nil {
@@ -142,7 +140,7 @@ func (s *Server) apiListFindingObservations(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	rows, err := db.FindingContributions(s.DB.WithContext(r.Context()), id)
+	rows, _, err := db.FindingContributions(s.DB.WithContext(r.Context()), id, 0)
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "load observations")
 		return

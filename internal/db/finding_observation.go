@@ -2,30 +2,17 @@ package db
 
 import (
 	"encoding/json"
+	"slices"
 	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
-// maxContributionFindings bounds how many findings FindingContributions walks
-// so a pathological duplicate chain cannot turn one page load into an
-// unbounded scan.
 const maxContributionFindings = 64
 
 // FindingObservation is one immutable record of a scan reporting a finding.
-// The Finding row is the analyst's mutable case and keeps the content of the
-// first report across re-observation, so without this table the second and
-// later scans that rediscover the same fingerprint would lose their own
-// severity, rating and evidence. Rows are append-only history: nothing edits
-// them after the scan finishes. Agreement between rows is never treated as
-// verification. There is one row per (finding, scan) so parser retries stay
-// idempotent. A rewrite from the same scan refreshes the row because the final
-// report supersedes that scan's own streamed preview.
-//
-// The promoted columns support display and comparison. Evidence is a JSON
-// object snapshot of the remaining evidence fields (see ObservationFromFinding)
-// and is untrusted model output: it is stored and shown as data only.
+// Its text and Evidence are untrusted model output, stored and shown as data only.
 type FindingObservation struct {
 	ID              uint `gorm:"primarykey"`
 	FindingID       uint `gorm:"index;not null;uniqueIndex:idx_finding_observation_scan,priority:1"`
@@ -115,11 +102,12 @@ func RecordFindingObservation(gdb *gorm.DB, obs FindingObservation) error {
 // own plus those of findings that finding-dedup merged into it (Status
 // duplicate with DuplicateOfID pointing into the set), followed transitively
 // and within the same repository. The walk is capped at maxContributionFindings
-// findings. Rows are ordered by creation time then id.
-func FindingContributions(gdb *gorm.DB, findingID uint) ([]FindingObservation, error) {
+// findings. A positive limit keeps only the newest limit rows. Rows are ordered
+// by creation time then id. total counts every contribution.
+func FindingContributions(gdb *gorm.DB, findingID uint, limit int) (rows []FindingObservation, total int64, err error) {
 	var root Finding
 	if err := gdb.Select("id", "repository_id").First(&root, findingID).Error; err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	ids := []uint{root.ID}
 	visited := map[uint]bool{root.ID: true}
@@ -128,8 +116,8 @@ func FindingContributions(gdb *gorm.DB, findingID uint) ([]FindingObservation, e
 		var children []uint
 		if err := gdb.Model(&Finding{}).
 			Where("repository_id = ? AND status = ? AND duplicate_of_id IN ?", root.RepositoryID, FindingDuplicate, frontier).
-			Order("id").Pluck("id", &children).Error; err != nil {
-			return nil, err
+			Order("id").Limit(maxContributionFindings).Pluck("id", &children).Error; err != nil {
+			return nil, 0, err
 		}
 		frontier = frontier[:0]
 		for _, id := range children {
@@ -141,7 +129,17 @@ func FindingContributions(gdb *gorm.DB, findingID uint) ([]FindingObservation, e
 			frontier = append(frontier, id)
 		}
 	}
-	var rows []FindingObservation
-	err := gdb.Where("finding_id IN ?", ids).Order("created_at, id").Find(&rows).Error
-	return rows, err
+	q := func() *gorm.DB { return gdb.Model(&FindingObservation{}).Where("finding_id IN ?", ids) }
+	if err := q().Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if limit <= 0 {
+		err = q().Order("created_at, id").Find(&rows).Error
+		return rows, total, err
+	}
+	if err := q().Order("created_at DESC, id DESC").Limit(limit).Find(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	slices.Reverse(rows)
+	return rows, total, nil
 }

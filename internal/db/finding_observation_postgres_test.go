@@ -6,9 +6,7 @@ import (
 	"scrutineer/internal/testutil"
 )
 
-// TestPostgresFindingObservations runs the observation upsert (which writes
-// the reserved "commit" column in its ON CONFLICT update) plus the duplicate
-// walk against PostgreSQL.
+// TestPostgresFindingObservations runs the upsert and duplicate walk on PostgreSQL.
 func TestPostgresFindingObservations(t *testing.T) {
 	gdb, err := OpenBackend(Options{Dialect: DialectPostgres, DSN: testutil.PostgresDSN(t)})
 	if err != nil {
@@ -46,7 +44,7 @@ func TestPostgresFindingObservations(t *testing.T) {
 		}
 	}
 
-	rows, err := FindingContributions(gdb, canonical.ID)
+	rows, _, err := FindingContributions(gdb, canonical.ID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
