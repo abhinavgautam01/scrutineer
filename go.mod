@@ -14,7 +14,7 @@ require (
 	github.com/git-pkgs/enrichment v0.7.3
 	github.com/git-pkgs/magic v0.6.0
 	github.com/git-pkgs/pom v0.1.8
-	github.com/git-pkgs/purl v0.1.22
+	github.com/git-pkgs/purl v0.1.23
 	github.com/git-pkgs/sarif v0.1.3
 	github.com/git-pkgs/sbom v0.1.7
 	github.com/git-pkgs/skills v0.2.0
@@ -44,7 +44,7 @@ require (
 	github.com/git-pkgs/registries v0.11.0 // indirect
 	github.com/git-pkgs/spdx v0.3.3 // indirect
 	github.com/git-pkgs/vers v0.7.2 // indirect
-	github.com/github/go-spdx/v2 v2.7.1 // indirect
+	github.com/github/go-spdx/v2 v2.8.0 // indirect
 	github.com/glebarez/go-sqlite v1.23.0 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
 	github.com/go-git/go-billy/v5 v5.9.2 // indirect
@@ -66,7 +66,7 @@ require (
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
-	modernc.org/libc v1.79.0 // indirect
+	modernc.org/libc v1.79.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 	modernc.org/sqlite v1.61.0 // indirect
