@@ -831,6 +831,28 @@ func TestBuildEgressAllow_hardenedDropsConfigKeepsHarness(t *testing.T) {
 	}
 }
 
+func TestBuildEgressAllow_defaultIncludesPackageRepositoryHosts(t *testing.T) {
+	cfg := &config.Config{PackageRepositories: config.PackageRepositories{
+		GitPkgsProxy: "https://pkgs.example.com",
+		NPM:          "https://npm.example.org/",
+	}}
+	allow := buildEgressAllow(worker.ClaudeHarness{}.EgressHosts(), false, cfg, "", quietLog())
+	if !slices.Contains(allow, "pkgs.example.com") || !slices.Contains(allow, "npm.example.org") {
+		t.Errorf("default mode did not add package repository hosts: %v", allow)
+	}
+}
+
+func TestBuildEgressAllow_hardenedExcludesPackageRepositoryHosts(t *testing.T) {
+	cfg := &config.Config{PackageRepositories: config.PackageRepositories{
+		GitPkgsProxy: "https://pkgs.example.com",
+		NPM:          "https://npm.example.org/",
+	}}
+	allow := buildEgressAllow(worker.ClaudeHarness{}.EgressHosts(), true, cfg, "", quietLog())
+	if slices.Contains(allow, "pkgs.example.com") || slices.Contains(allow, "npm.example.org") {
+		t.Errorf("hardened added package repository hosts: %v", allow)
+	}
+}
+
 func TestBuildEgressAllow_hardenedNilConfig(t *testing.T) {
 	harnessHosts := worker.ClaudeHarness{}.EgressHosts()
 	allow := buildEgressAllow(harnessHosts, true, nil, "", quietLog())

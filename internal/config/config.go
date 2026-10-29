@@ -102,6 +102,10 @@ type Config struct {
 	// extra hostnames. Entries are appended to worker.DefaultEgressAllow,
 	// not replacing it. "*.example.com" matches subdomains.
 	EgressAllow []string `yaml:"egress_allow"`
+	// PackageRepositories points scan package managers at an existing package
+	// repository or caching proxy. Hosts join the egress allowlist unless
+	// --hardened is set. See docs/package-repositories.md.
+	PackageRepositories PackageRepositories `yaml:"package_repositories"`
 	// EgressPolicies grants extra egress to named skills only, keyed by skill
 	// name. Each allow entry is "host:port" and the port is mandatory: the
 	// granted host is reachable on that port alone. Grants need --hardened so
@@ -642,6 +646,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	if err := ValidateScanEgressPolicies(c.ScanEgressPolicies); err != nil {
+		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	if err := ValidatePackageRepositories(c.PackageRepositories); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	if c.VINCE.Enabled() {
