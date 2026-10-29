@@ -215,7 +215,7 @@ RUN set -eux; \
         *) echo >&2 "unsupported architecture for rust: $arch"; exit 1;; \
     esac; \
     url="https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${rustArch}/rustup-init"; \
-    wget --progress=dot:giga "$url"; \
+    wget --progress=dot:giga --timeout=30 --tries=4 "$url"; \
     echo "${rustupSha256} *rustup-init" | sha256sum -c -; \
     chmod +x rustup-init; \
     ./rustup-init -y --no-modify-path --profile minimal --default-toolchain ${RUST_STABLE_VERSION} --default-host ${rustArch}; \
