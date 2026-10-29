@@ -68,7 +68,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 python3-venv python3-jsonschema \
         libstdc++6 ripgrep \
  && install -d -m 0755 /etc/apt/keyrings \
- && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+ && curl -fsSL --connect-timeout 30 --max-time 300 --retry 3 --retry-all-errors https://cli.github.com/packages/githubcli-archive-keyring.gpg \
         -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
  && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
  && echo "deb [signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
@@ -116,7 +116,7 @@ RUN set -eux; \
     esac; \
     tag="${lock%@*}"; \
     sha="${lock#*@sha256:}"; \
-    curl -fsSL -o /tmp/claude.tgz \
+    curl -fsSL --connect-timeout 30 --max-time 300 --retry 3 --retry-all-errors -o /tmp/claude.tgz \
       "https://github.com/anthropics/claude-code/releases/download/${tag}/claude-linux-${arch}.tar.gz"; \
     echo "${sha}  /tmp/claude.tgz" | sha256sum -c -; \
     tar -xzf /tmp/claude.tgz -C /usr/local/bin claude && rm /tmp/claude.tgz
@@ -131,7 +131,7 @@ RUN set -eux; \
     esac; \
     tag="${lock%@*}"; \
     sha="${lock#*@sha256:}"; \
-    curl -fsSL -o /tmp/codex.tgz \
+    curl -fsSL --connect-timeout 30 --max-time 300 --retry 3 --retry-all-errors -o /tmp/codex.tgz \
       "https://github.com/openai/codex/releases/download/${tag}/codex-package-${triple}.tar.gz"; \
     echo "${sha}  /tmp/codex.tgz" | sha256sum -c -; \
     tar -xzf /tmp/codex.tgz -C /tmp bin/codex bin/codex-code-mode-host; \
@@ -152,7 +152,7 @@ RUN set -eux; \
     esac; \
     tag="${lock%@*}"; \
     sha="${lock#*@sha256:}"; \
-    curl -fsSL -o /tmp/opencode.tgz \
+    curl -fsSL --connect-timeout 30 --max-time 300 --retry 3 --retry-all-errors -o /tmp/opencode.tgz \
       "https://github.com/anomalyco/opencode/releases/download/${tag}/opencode-linux-${ocarch}.tar.gz"; \
     echo "${sha}  /tmp/opencode.tgz" | sha256sum -c -; \
     tar -xzf /tmp/opencode.tgz -C /usr/local/bin opencode; \
@@ -182,7 +182,7 @@ RUN set -eux; \
     esac; \
     tag="${lock%@*}"; \
     sha="${lock#*@sha256:}"; \
-    curl -fsSL -o /tmp/copilot.tgz \
+    curl -fsSL --connect-timeout 30 --max-time 300 --retry 3 --retry-all-errors -o /tmp/copilot.tgz \
       "https://github.com/github/copilot-cli/releases/download/${tag}/copilot-linux-${cparch}.tar.gz"; \
     echo "${sha}  /tmp/copilot.tgz" | sha256sum -c -; \
     tar -xzf /tmp/copilot.tgz -C /usr/local/bin copilot; \
