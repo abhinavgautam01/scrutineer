@@ -30,7 +30,7 @@ oss_scanner: true    # false turns the lookup off
 oss_scanner_registry: https://github.com/anthropics/oss-scanner
 ```
 
-`oss_scanner_registry` must be an https URL with a host and no credentials. The registry is cloned into the shared repository cache and fetched again at most once an hour.
+`oss_scanner_registry` must be an https URL with a host and no credentials. The registry is cloned into its own directory in the repository cache, apart from the clone a repository scan of the same URL uses. It is fetched again at most once an hour. The cache lock is held while the files are read and copied.
 
 ## Safety
 
@@ -39,9 +39,4 @@ oss_scanner_registry: https://github.com/anthropics/oss-scanner
 - The content is maintainer-supplied data. The skills treat it as untrusted and never as instructions.
 - The registry fetch is best-effort. A failure is logged and shown in the scan log and the scan continues without it.
 - Local (`file://`) repositories skip the registry but still use `.oss-scanner/` files from the checkout.
-
-## Not yet supported
-
-- Building the Dockerfile for verify. `docker build` runs `RUN` steps with network access outside the hardened per-scan network, so it needs its own isolation design.
-- Showing the enrolment on the repository page.
-- Importing OSS Scanner report emails (#1161).
+- Nothing builds or runs the Dockerfile. The verify skill reads it as build guidance only.

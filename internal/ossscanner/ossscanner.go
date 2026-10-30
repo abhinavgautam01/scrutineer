@@ -1,9 +1,5 @@
 // Package ossscanner resolves a repository against Anthropic's OSS Scanner
-// registry (https://github.com/anthropics/oss-scanner). Each enrolled project
-// is a projects/<name>/ directory holding project.yaml and optionally a
-// Dockerfile and threat_model.md. The package is pure: callers supply the
-// registry checkout and the scanned source tree. Nothing here touches the
-// network or the database.
+// registry (https://github.com/anthropics/oss-scanner).
 package ossscanner
 
 import (

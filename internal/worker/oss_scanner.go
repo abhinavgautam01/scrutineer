@@ -20,37 +20,47 @@ const (
 	// ossScannerRefresh bounds how often the registry clone is fetched, since
 	// every verify scan consults it.
 	ossScannerRefresh = time.Hour
+	// ossScannerCacheDir keeps the registry clone apart from the default-branch
+	// clone a repository scan of the same URL fetches and resets to its own ref.
+	ossScannerCacheDir = "oss-scanner-registry"
 )
 
 // ossScannerRegistryRoot returns the registry checkout, or "" when the lookup
-// is disabled. The cache clone is read in place, never copied.
-func (w *Worker) ossScannerRegistryRoot(ctx context.Context, emit func(Event)) (string, error) {
+// is disabled. The cache clone is read in place, so the caller must keep it
+// locked until it has finished reading and then call release.
+func (w *Worker) ossScannerRegistryRoot(ctx context.Context, emit func(Event)) (root string, release func(), err error) {
+	release = func() {}
 	url := w.OSSScannerRegistry
 	if url == "" {
-		return "", nil
+		return "", release, nil
 	}
 	if w.PrepareOSSScannerRegistry != nil {
-		return w.PrepareOSSScannerRegistry(ctx, url, emit)
+		root, err = w.PrepareOSSScannerRegistry(ctx, url, emit)
+		return root, release, err
 	}
 	mu := w.cacheMutex(url)
 	mu.Lock()
-	defer mu.Unlock()
-	cacheRoot := RepoCacheRoot(w.DataDir, url)
+	defer func() {
+		if err != nil {
+			mu.Unlock()
+		}
+	}()
+	cacheRoot := filepath.Join(RepoCacheRoot(w.DataDir, url), ossScannerCacheDir)
 	src := filepath.Join(cacheRoot, "src")
 	if fetched, ok := w.ossScannerFetched.Load(url); ok && time.Since(fetched.(time.Time)) < ossScannerRefresh {
-		if _, err := os.Stat(filepath.Join(src, ".git")); err == nil {
-			return src, nil
+		if _, statErr := os.Stat(filepath.Join(src, ".git")); statErr == nil {
+			return src, mu.Unlock, nil
 		}
 	}
-	if err := os.MkdirAll(cacheRoot, dirPerm); err != nil {
-		return "", err
+	if err = os.MkdirAll(cacheRoot, dirPerm); err != nil {
+		return "", release, err
 	}
 	dir, err := ensureCloneWithOptions(ctx, db.Repository{URL: url}, cacheRoot, false, "", false, emit)
 	if err != nil {
-		return "", err
+		return "", release, err
 	}
 	w.ossScannerFetched.Store(url, time.Now())
-	return dir, nil
+	return dir, mu.Unlock, nil
 }
 
 // attachOSSScanner stages the OSS Scanner files and records them in the
@@ -87,7 +97,8 @@ func (w *Worker) stageOSSScanner(
 	}
 	registryRoot := ""
 	if !scan.Repository.IsLocal() {
-		root, err := w.ossScannerRegistryRoot(ctx, emit)
+		root, release, err := w.ossScannerRegistryRoot(ctx, emit)
+		defer release()
 		if err != nil {
 			w.ossScannerWarn(emit, "registry unavailable", err)
 		} else {
