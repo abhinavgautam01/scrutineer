@@ -2083,6 +2083,7 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.Log.Warn("load finding attack paths", "finding", f.ID, "err", err)
 	}
+	observations := s.findingObservations(f.ID)
 	remediationAttempts, err := loadRemediationAttemptViews(s.DB, f.ID)
 	if err != nil {
 		s.Log.Warn("load remediation attempts", "finding", f.ID, "err", err)
@@ -2153,6 +2154,7 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 		"Reviews":             reviews,
 		"Verifications":       verifications,
 		"AttackPaths":         attackPaths,
+		"Observations":        observations,
 		"RemediationAttempts": remediationAttempts,
 		"ReattackInFlight":    reattackInFlight,
 		"LatestRevalidate":    latestRevalidate,
@@ -3324,7 +3326,7 @@ func findingChildModels() []any {
 	return []any{
 		&db.FindingNote{}, &db.FindingCommunication{}, &db.FindingReference{},
 		&db.FindingHistory{}, &db.FindingDependent{}, &db.FindingReview{}, &db.FeedbackConfirmation{}, &db.DisclosureSubmission{},
-		&db.FindingVerification{}, &db.FindingAttackPath{}, &db.FindingPoC{},
+		&db.FindingVerification{}, &db.FindingAttackPath{}, &db.FindingObservation{}, &db.FindingPoC{},
 		&db.RemediationValidation{}, &db.RemediationAttempt{},
 	}
 }

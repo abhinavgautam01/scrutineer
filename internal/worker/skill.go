@@ -672,6 +672,9 @@ func (w *Worker) persistFinding(scan *db.Scan, f *db.Finding) (created bool, err
 			return false, uerr
 		}
 		f.ID = existing.ID
+		if oerr := db.RecordFindingObservation(w.DB, db.ObservationFromFinding(scan, f)); oerr != nil {
+			return false, fmt.Errorf("record finding observation: %w", oerr)
+		}
 		if err := w.captureFindingPoC(scan, f); err != nil {
 			return false, &PoCCaptureError{err}
 		}
@@ -679,6 +682,9 @@ func (w *Worker) persistFinding(scan *db.Scan, f *db.Finding) (created bool, err
 	}
 	if cerr := w.DB.Create(f).Error; cerr != nil {
 		return false, fmt.Errorf("save finding: %w", cerr)
+	}
+	if oerr := db.RecordFindingObservation(w.DB, db.ObservationFromFinding(scan, f)); oerr != nil {
+		return false, fmt.Errorf("record finding observation: %w", oerr)
 	}
 	captureErr := w.captureFindingPoC(scan, f)
 	if w.OnFindingCreated != nil {

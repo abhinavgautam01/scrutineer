@@ -927,6 +927,51 @@ git commit -m "fix: {{$f.Title}}"</pre>
   </details>
   {{end}}
 
+  {{with .Observations}}
+  <details open class="group border-b">
+    <summary class="w-full outline-none rounded-md focus-visible:ring-ring/50 focus-visible:ring-[3px]">
+      <h3 class="flex flex-1 items-center justify-between gap-4 py-4 text-sm font-medium hover:underline">
+        Observations <span class="text-muted-foreground ml-auto mr-2 text-xs">{{.Total}}</span>
+        <i data-lucide="chevron-down" class="text-muted-foreground size-4 shrink-0 transition-transform duration-200 group-open:rotate-180"></i>
+      </h3>
+    </summary>
+    <section class="pb-4 grid gap-4">
+      <p class="text-xs text-muted-foreground">What each scan reported for this finding. Agreement between scans is not verification.</p>
+      {{if lt (len .Rows) .Total}}
+      <p class="text-xs text-muted-foreground">Showing the newest {{len .Rows}} of {{.Total}}. The full list is at <code>/api/findings/{{$f.ID}}/observations</code>.</p>
+      {{end}}
+      {{if .Disagreements}}
+      <div class="text-sm border rounded-md p-3" role="note">Observations disagree on {{range $i, $d := .Disagreements}}{{if $i}}, {{end}}{{$d}}{{end}}.</div>
+      {{end}}
+      {{range .Rows}}
+      <article class="border-b pb-4 last:border-b-0">
+        <div class="flex flex-wrap items-center gap-2 text-sm mb-2">
+          <a href="/scans/{{.ScanID}}" class="font-medium hover:underline">scan #{{.ScanID}}</a>
+          {{if .SkillName}}<span class="badge-outline">{{.SkillName}}</span>{{end}}
+          {{if .Backend}}<span class="text-xs text-muted-foreground">{{.Backend}}</span>{{end}}
+          {{if .Model}}<span class="text-xs text-muted-foreground">{{.Model}}</span>{{end}}
+          {{if .Commit}}<code class="text-xs text-muted-foreground">@{{short .Commit}}</code>{{end}}
+          {{if .Severity}}{{template "severity-badge" .Severity}}{{end}}
+          {{if .Confidence}}<span class="text-xs text-muted-foreground">confidence {{.Confidence}}</span>{{end}}
+          {{if .Reachability}}<span class="text-xs text-muted-foreground">{{.Reachability}}</span>{{end}}
+          {{if ne .FindingID $f.ID}}<a href="/findings/{{.FindingID}}" class="text-xs hover:underline">from finding #{{.FindingID}}</a>{{end}}
+        </div>
+        {{if .Title}}<div class="text-sm">{{.Title}}</div>{{end}}
+        {{if .Rating}}<div class="text-sm text-muted-foreground mt-1">{{.Rating}}</div>{{end}}
+        {{if .Evidence}}
+        <details class="mt-2">
+          <summary class="text-xs text-muted-foreground cursor-pointer">Evidence</summary>
+          <dl class="grid gap-2 text-sm mt-2">
+            {{range .Evidence}}<div><dt class="text-muted-foreground">{{.Name}}</dt><dd class="whitespace-pre-wrap">{{.Value}}</dd></div>{{end}}
+          </dl>
+        </details>
+        {{end}}
+      </article>
+      {{end}}
+    </section>
+  </details>
+  {{end}}
+
   {{if .AttackPaths}}
   <details open class="group border-b">
     <summary class="w-full outline-none rounded-md focus-visible:ring-ring/50 focus-visible:ring-[3px]">

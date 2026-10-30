@@ -1877,6 +1877,9 @@ func (w *Worker) applyDedupHeaded(repoID uint, verb string, flipStatus bool, gro
 				if err := db.WriteFindingField(w.DB, member.ID, "status", string(db.FindingDuplicate), db.SourceModel, findingDedupSkill); err != nil {
 					return n, fmt.Errorf("mark finding %d duplicate: %w", member.ID, err)
 				}
+				if err := w.DB.Model(&db.Finding{}).Where("id = ?", member.ID).Update("duplicate_of_id", head.ID).Error; err != nil {
+					return n, fmt.Errorf("link finding %d to canonical %d: %w", member.ID, head.ID, err)
+				}
 			}
 			if err := w.addRelationNote(member.ID, verb, []uint{head.ID}, g.Reason); err != nil {
 				return n, err
