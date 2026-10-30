@@ -88,10 +88,14 @@ func (w *Worker) ossScannerWarn(emit func(Event), what string, err error) {
 // stageOSSScanner looks the scanned repository up in the OSS Scanner registry
 // and copies the maintainer threat model and Dockerfile into
 // workRoot/oss_scanner/ for the threat-model and verify skills. It never fails
-// the scan and returns nil when nothing applies.
+// the scan and returns nil when nothing applies. An empty OSSScannerRegistry
+// disables it entirely, including the repository's own .oss-scanner/ files.
 func (w *Worker) stageOSSScanner(
 	ctx context.Context, workRoot string, scan *db.Scan, skill *db.Skill, emit func(Event),
 ) *skillContextOSSScanner {
+	if w.OSSScannerRegistry == "" {
+		return nil
+	}
 	if skill.Name != threatModelSkillName && skill.Name != verifySkillName {
 		return nil
 	}

@@ -106,6 +106,7 @@ func TestStageOSSScannerRegistryErrorKeepsFallback(t *testing.T) {
 
 func TestStageOSSScannerDisabledAddsNothing(t *testing.T) {
 	work := t.TempDir()
+	writeOSSFile(t, work, "src/.oss-scanner/threat_model.md", "repo tm")
 	w := &Worker{}
 	doc := skillContext{}
 	w.attachOSSScanner(t.Context(), work, "", ossScan(), &db.Skill{Name: "threat-model"}, &doc, noEmit)
@@ -152,6 +153,65 @@ func TestOSSScannerRegistryRootUnlocksOnError(t *testing.T) {
 		t.Fatal("registry cache lock still held after a failed fetch")
 	}
 	mu.Unlock()
+}
+
+func TestLocalThreatModelScanHonoursOSSScannerSwitch(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		registry string
+		staged   bool
+	}{
+		{"enabled", "https://example.test/registry", true},
+		{"disabled", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gdb := dbtest.Open(t)
+			local := t.TempDir()
+			writeOSSFile(t, local, ".oss-scanner/threat_model.md", "repo tm")
+			repo := db.Repository{URL: "file://" + local, Name: "local"}
+			skill := db.Skill{Name: threatModelSkillName, Body: "threat model", OutputFile: "report.json", Active: true}
+			for _, row := range []any{&repo, &skill} {
+				if err := gdb.Create(row).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			w := &Worker{DB: gdb, DataDir: t.TempDir(), Log: slog.New(slog.NewTextHandler(io.Discard, nil)), OSSScannerRegistry: tc.registry}
+			w.PrepareOSSScannerRegistry = func(context.Context, string, func(Event)) (string, error) {
+				t.Error("local scan consulted the registry")
+				return "", nil
+			}
+			ran := false
+			w.Runner = pocTestRunner{run: func(job SkillJob) SkillResult {
+				ran = true
+				_, err := os.Stat(filepath.Join(job.WorkRoot, "oss_scanner", "threat_model.md"))
+				if staged := err == nil; staged != tc.staged {
+					t.Errorf("staged threat model = %v, want %v (%v)", staged, tc.staged, err)
+				}
+				data, err := os.ReadFile(filepath.Join(fakeRunner{}.SkillDir(job.WorkRoot, job.Name), "context.json"))
+				if err != nil {
+					t.Errorf("skill dir context.json: %v", err)
+					return SkillResult{Report: "{}"}
+				}
+				var stored struct {
+					Scrutineer struct {
+						OSSScanner map[string]any `json:"oss_scanner"`
+					} `json:"scrutineer"`
+				}
+				if err := json.Unmarshal(data, &stored); err != nil {
+					t.Errorf("context.json: %v", err)
+				}
+				if got := stored.Scrutineer.OSSScanner != nil; got != tc.staged {
+					t.Errorf("oss_scanner in context = %v, want %v", stored.Scrutineer.OSSScanner, tc.staged)
+				}
+				return SkillResult{Report: "{}"}
+			}}
+			scan := db.Scan{RepositoryID: repo.ID, Kind: JobSkill, Status: db.ScanQueued, SkillID: &skill.ID}
+			runPoCTestJob(t, w, &scan)
+			if !ran {
+				t.Fatalf("runner not invoked, status=%s: %s", scan.Status, scan.Error)
+			}
+		})
+	}
 }
 
 func TestThreatModelScanStagesOSSScannerThroughDoSkill(t *testing.T) {

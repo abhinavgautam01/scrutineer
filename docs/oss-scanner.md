@@ -30,7 +30,7 @@ oss_scanner: true    # false turns the lookup off
 oss_scanner_registry: https://github.com/anthropics/oss-scanner
 ```
 
-`oss_scanner_registry` must be an https URL with a host and no credentials. The registry is cloned into its own directory in the repository cache, apart from the clone a repository scan of the same URL uses. It is fetched again at most once an hour. The cache lock is held while the files are read and copied.
+`oss_scanner: false` turns off the registry fetch and the repository's own `.oss-scanner/` files, so nothing is staged. `oss_scanner_registry` must be an https URL with a host and no credentials. The registry is cloned into its own directory in the repository cache, apart from the clone a repository scan of the same URL uses. It is fetched again at most once an hour. The cache lock is held while the files are read and copied.
 
 ## Safety
 
