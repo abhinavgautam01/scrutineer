@@ -194,8 +194,8 @@ type Server struct {
 	FederationImportFeeds []string
 	FederationPeers       []string
 
-	// resolvePURL maps a Package URL to its source repository URL via
-	// packages.ecosyste.ms. Field rather than direct call so tests can
+	// resolvePURL and resolvePURLs map Package URLs to source repository URLs
+	// via packages.ecosyste.ms. Field rather than direct call so tests can
 	// stub the network lookup.
 	resolvePURL  func(ctx context.Context, purl string) string
 	resolvePURLs func(ctx context.Context, purls []string) (map[string]string, error)

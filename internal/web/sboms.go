@@ -330,7 +330,7 @@ func (s *Server) autoResolveGeneratedSBOM(scan *db.Scan) {
 	}
 }
 
-// Generated snapshots discover repositories without scheduling scans.
+// Uploaded snapshots triage direct dependencies; generated ones only link repositories.
 func (s *Server) resolveSBOMPackages(uploadID uint) {
 	ctx, cancel := context.WithTimeout(context.Background(), sbomResolveTimeout)
 	defer cancel()
