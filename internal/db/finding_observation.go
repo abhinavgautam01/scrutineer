@@ -149,9 +149,7 @@ func ObservationsForFindings(gdb *gorm.DB, ids []uint, limit int) (rows []Findin
 	return rows, total, nil
 }
 
-// FindingContributions returns the observations that make up a finding: those
-// of every finding in ContributionFindingIDs, with ObservationsForFindings'
-// limit and ordering.
+// FindingContributions returns the observations that make up a finding.
 func FindingContributions(gdb *gorm.DB, findingID uint, limit int) ([]FindingObservation, int64, error) {
 	ids, err := ContributionFindingIDs(gdb, findingID)
 	if err != nil {
