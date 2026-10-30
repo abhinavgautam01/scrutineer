@@ -21,10 +21,15 @@ package_repositories:
 | `pypi` | `PIP_INDEX_URL`, `UV_DEFAULT_INDEX` | `/pypi/simple/` |
 | `go` | `GOPROXY` | `/go` |
 | `pub` | `PUB_HOSTED_URL` | `/pub` |
-| `hex` | `HEX_MIRROR` | `/hex` |
+| `hex` | `HEX_MIRROR` | none, set `hex:` explicitly |
 
 An explicit per-ecosystem key always beats the `git_pkgs_proxy` preset. A
 trailing slash on the proxy base URL is ignored.
+
+The preset leaves Hex alone. When git-pkgs/proxy filters a Hex release for
+cooldown it re-encodes the signed payload without a signature, so `mix deps.get`
+fails origin verification for any package with a release inside the cooldown
+window. Set `hex:` only for a mirror that keeps releases signed.
 
 Go gets the bare URL as `GOPROXY`, with no `,direct` suffix, so a miss never
 silently falls back to the public upstream. Checksum verification through
@@ -33,9 +38,10 @@ silently falls back to the public upstream. Checksum verification through
 ## Egress
 
 Without `--hardened` the repository hosts are added to the egress allowlist
-automatically. Under `--hardened` they are not. Grant `host:443` with
-`egress_policies` or `scan_egress_policies` instead (see
-[egress-policies.md](egress-policies.md)).
+automatically. Under `--hardened` they are not. Grant `host:port` for each
+repository with `egress_policies` or `scan_egress_policies` instead, using 443
+when the URL has no port (see [egress-policies.md](egress-policies.md)).
+Scrutineer logs the exact pairs at startup.
 
 ## Validation
 
@@ -54,7 +60,6 @@ repositories could never be reached. Credentials must stay out of config URLs.
 
 - Credentials
 - Custom CA certificates
-- Explicit upstream fallback
 - Cargo, Bundler/RubyGems, Maven/Gradle, NuGet and Composer
 - Internally hosted repositories on private addresses
 - The `--no-container` runner (a warning is logged)

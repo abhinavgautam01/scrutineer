@@ -11,9 +11,11 @@ import (
 )
 
 // PackageRepositories points scan runner package managers at existing package
-// repositories or caching proxies. GitPkgsProxy derives every ecosystem URL
-// from one git-pkgs/proxy base URL. An explicit per-ecosystem URL wins over
-// the derived one. URLs must be https and carry no credentials.
+// repositories or caching proxies. GitPkgsProxy derives the npm, PyPI, Go and
+// pub URLs from one git-pkgs/proxy base URL. Hex is never derived because the
+// proxy strips signatures from cooldown-filtered releases. An explicit
+// per-ecosystem URL wins over the derived one. URLs must be https and carry no
+// credentials.
 type PackageRepositories struct {
 	GitPkgsProxy string `yaml:"git_pkgs_proxy"`
 	NPM          string `yaml:"npm"`
@@ -32,7 +34,6 @@ func (p PackageRepositories) Resolve() map[string]string {
 		out["pypi"] = base + "/pypi/simple/"
 		out["go"] = base + "/go"
 		out["pub"] = base + "/pub"
-		out["hex"] = base + "/hex"
 	}
 	for eco, v := range map[string]string{"npm": p.NPM, "pypi": p.PyPI, "go": p.Go, "pub": p.Pub, "hex": p.Hex} {
 		if v != "" {
@@ -45,13 +46,32 @@ func (p PackageRepositories) Resolve() map[string]string {
 // Hosts returns the sorted, deduplicated lowercase hostnames of every
 // resolved repository URL.
 func (p PackageRepositories) Hosts() []string {
+	return p.collectHosts(false)
+}
+
+// HostPorts returns the sorted, deduplicated lowercase host:port pairs of
+// every resolved repository URL, with 443 when the URL has no port. These are
+// the grants a --hardened egress policy needs.
+func (p PackageRepositories) HostPorts() []string {
+	return p.collectHosts(true)
+}
+
+func (p PackageRepositories) collectHosts(withPort bool) []string {
 	var hosts []string
 	for _, raw := range p.Resolve() {
 		u, err := url.Parse(raw)
 		if err != nil || u.Hostname() == "" {
 			continue
 		}
-		hosts = append(hosts, strings.ToLower(u.Hostname()))
+		host := strings.ToLower(u.Hostname())
+		if withPort {
+			port := u.Port()
+			if port == "" {
+				port = "443"
+			}
+			host = net.JoinHostPort(host, port)
+		}
+		hosts = append(hosts, host)
 	}
 	slices.Sort(hosts)
 	return slices.Compact(hosts)

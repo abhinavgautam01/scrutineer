@@ -2,6 +2,7 @@ package worker
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -46,7 +47,7 @@ func TestBuildContainerBaseArgs_PackageEnv(t *testing.T) {
 	}
 
 	for _, a := range (ContainerRunner{}).buildContainerBaseArgs("/work/abs", hardenedNet{}, "/work") {
-		if len(a) > 19 && a[:19] == "npm_config_registry" {
+		if strings.HasPrefix(a, "npm_config_registry=") {
 			t.Errorf("unexpected package env without PackageEnv: %q", a)
 		}
 	}

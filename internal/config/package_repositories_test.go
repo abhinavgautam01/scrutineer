@@ -13,10 +13,12 @@ func TestPackageRepositoriesResolvePreset(t *testing.T) {
 		"pypi": "https://pkgs.example.com/pypi/simple/",
 		"go":   "https://pkgs.example.com/go",
 		"pub":  "https://pkgs.example.com/pub",
-		"hex":  "https://pkgs.example.com/hex",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("Resolve = %v, want %v", got, want)
+	}
+	if _, ok := got["hex"]; ok {
+		t.Errorf("preset set hex = %q, Hex must only come from an explicit key", got["hex"])
 	}
 	for k, v := range want {
 		if got[k] != v {
@@ -60,6 +62,18 @@ func TestPackageRepositoriesHosts(t *testing.T) {
 	want := []string{"npm.example.org", "pkgs.example.com"}
 	if !slices.Equal(got, want) {
 		t.Errorf("Hosts = %v, want %v", got, want)
+	}
+}
+
+func TestPackageRepositoriesHostPorts(t *testing.T) {
+	got := PackageRepositories{
+		GitPkgsProxy: "https://Pkgs.Example.com:8443",
+		NPM:          "https://npm.example.org/",
+		Hex:          "https://[2001:db8::1]/hex",
+	}.HostPorts()
+	want := []string{"[2001:db8::1]:443", "npm.example.org:443", "pkgs.example.com:8443"}
+	if !slices.Equal(got, want) {
+		t.Errorf("HostPorts = %v, want %v", got, want)
 	}
 }
 

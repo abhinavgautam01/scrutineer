@@ -1668,8 +1668,10 @@ func buildEgressAllow(harnessHosts []string, hardened bool, cfg *config.Config, 
 			allow = append(allow, cfg.PackageRepositories.Hosts()...)
 		}
 	}
-	if hardened && cfg != nil && len(cfg.PackageRepositories.Resolve()) > 0 {
-		log.Info("package repository hosts are not added under --hardened; grant them with egress_policies or scan_egress_policies (docs/package-repositories.md)")
+	if hardened && cfg != nil {
+		if grants := cfg.PackageRepositories.HostPorts(); len(grants) > 0 {
+			log.Info("package repository hosts are not added under --hardened; grant these host:port pairs with egress_policies or scan_egress_policies", "grants", grants)
+		}
 	}
 	if h := baseURLHost(modelBaseURL); h != "" {
 		allow = append(allow, h)
