@@ -197,6 +197,15 @@
 #   - artifactory.internal
 #   - "*.mycorp.net"
 
+# Point scan package managers (npm, pip, uv, Go, pub, Hex) at an existing
+# package repository or caching proxy. git_pkgs_proxy derives the npm, PyPI, Go
+# and pub URLs; Hex needs an explicit hex key. An explicit key overrides the
+# derived one. HTTPS only, no credentials in the URL. The hosts join the egress
+# allowlist unless hardened. See docs/package-repositories.md.
+# package_repositories:
+#   git_pkgs_proxy: https://pkgs.example.com
+#   npm: https://npm.mycorp.net/repository/npm/
+
 # Per-skill egress under --hardened. egress_allow is ignored there, so grant a
 # named skill exact host:port pairs instead. The port is required and enforced;
 # every other skill keeps the strict allowlist. Needs hardened: true. See

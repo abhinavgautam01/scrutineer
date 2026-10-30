@@ -831,6 +831,40 @@ func TestBuildEgressAllow_hardenedDropsConfigKeepsHarness(t *testing.T) {
 	}
 }
 
+func TestBuildEgressAllow_defaultIncludesPackageRepositoryHosts(t *testing.T) {
+	cfg := &config.Config{PackageRepositories: config.PackageRepositories{
+		GitPkgsProxy: "https://pkgs.example.com",
+		NPM:          "https://npm.example.org/",
+	}}
+	allow := buildEgressAllow(worker.ClaudeHarness{}.EgressHosts(), false, cfg, "", quietLog())
+	if !slices.Contains(allow, "pkgs.example.com") || !slices.Contains(allow, "npm.example.org") {
+		t.Errorf("default mode did not add package repository hosts: %v", allow)
+	}
+}
+
+func TestBuildEgressAllow_hardenedExcludesPackageRepositoryHosts(t *testing.T) {
+	cfg := &config.Config{PackageRepositories: config.PackageRepositories{
+		GitPkgsProxy: "https://pkgs.example.com",
+		NPM:          "https://npm.example.org/",
+	}}
+	allow := buildEgressAllow(worker.ClaudeHarness{}.EgressHosts(), true, cfg, "", quietLog())
+	if slices.Contains(allow, "pkgs.example.com") || slices.Contains(allow, "npm.example.org") {
+		t.Errorf("hardened added package repository hosts: %v", allow)
+	}
+}
+
+func TestBuildEgressAllow_hardenedLogsPackageRepositoryGrants(t *testing.T) {
+	cfg := &config.Config{PackageRepositories: config.PackageRepositories{
+		GitPkgsProxy: "https://pkgs.example.com:8443",
+		NPM:          "https://npm.example.org/",
+	}}
+	var buf bytes.Buffer
+	buildEgressAllow(worker.ClaudeHarness{}.EgressHosts(), true, cfg, "", slog.New(slog.NewTextHandler(&buf, nil)))
+	if out := buf.String(); !strings.Contains(out, "npm.example.org:443") || !strings.Contains(out, "pkgs.example.com:8443") {
+		t.Errorf("hardened log missing host:port grants: %s", out)
+	}
+}
+
 func TestBuildEgressAllow_hardenedNilConfig(t *testing.T) {
 	harnessHosts := worker.ClaudeHarness{}.EgressHosts()
 	allow := buildEgressAllow(harnessHosts, true, nil, "", quietLog())

@@ -1137,6 +1137,7 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 		if len(f.hostSkills) > 0 {
 			log.Warn("host_skills has no effect with --no-container (every skill already runs on the host)")
 		}
+		warnPackageRepositoriesIgnored(cfg, log)
 		log.Info("--no-container set, using local runner (no isolation)")
 		return local, hostBase, nil
 	}
@@ -1249,6 +1250,7 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 	// Skills inside the container reach the host via the runtime's host endpoint,
 	// which the egress proxy rewrites to 127.0.0.1 when dialing the app.
 	apiBase := "http://" + net.JoinHostPort(apiHost, addrPort(f.addr)) + "/api"
+	packageEnv := packageRepositoryEnv(cfg, log)
 	runner := worker.ContainerRunner{
 		Image:               f.runnerImage,
 		Effort:              f.effort,
@@ -1273,6 +1275,7 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 		},
 		EgressPolicies:     policies,
 		ScanEgressPolicies: scanPolicies,
+		PackageEnv:         packageEnv,
 		OpencodeProviders:  opencodeProviders,
 		OpencodeReadiness:  worker.NewOpencodeReadinessCache(),
 		CodexAccountAuth:   worker.NewCodexAccountAuth(f.codexAuthFile),
@@ -1662,6 +1665,12 @@ func buildEgressAllow(harnessHosts []string, hardened bool, cfg *config.Config, 
 		allow = append(allow, worker.DefaultEgressAllow...)
 		if cfg != nil {
 			allow = append(allow, cfg.EgressAllow...)
+			allow = append(allow, cfg.PackageRepositories.Hosts()...)
+		}
+	}
+	if hardened && cfg != nil {
+		if grants := cfg.PackageRepositories.HostPorts(); len(grants) > 0 {
+			log.Info("package repository hosts are not added under --hardened; grant these host:port pairs with egress_policies or scan_egress_policies", "grants", grants)
 		}
 	}
 	if h := baseURLHost(modelBaseURL); h != "" {
@@ -1669,6 +1678,26 @@ func buildEgressAllow(harnessHosts []string, hardened bool, cfg *config.Config, 
 		log.Info("added model base URL host to egress allowlist", "host", h)
 	}
 	return allow
+}
+
+func warnPackageRepositoriesIgnored(cfg *config.Config, log *slog.Logger) {
+	if cfg != nil && len(cfg.PackageRepositories.Resolve()) > 0 {
+		log.Warn("package_repositories applies only to container scans and has no effect with --no-container")
+	}
+}
+
+// packageRepositoryEnv builds the container package manager settings from
+// cfg, or nil when none are configured.
+func packageRepositoryEnv(cfg *config.Config, log *slog.Logger) []string {
+	if cfg == nil {
+		return nil
+	}
+	repos := cfg.PackageRepositories.Resolve()
+	if len(repos) == 0 {
+		return nil
+	}
+	log.Info("package repositories configured", "ecosystems", slices.Sorted(maps.Keys(repos)))
+	return worker.PackageRepositoryEnv(repos)
 }
 
 func baseURLHost(raw string) string {

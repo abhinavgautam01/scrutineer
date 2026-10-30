@@ -95,6 +95,9 @@ type ContainerRunner struct {
 	// attach to one scan, keyed by policy name. SkillJob.EgressPolicy selects
 	// one and its grants are added to the skill's own.
 	ScanEgressPolicies map[string][]EgressGrant
+	// PackageEnv is KEY=VALUE package manager settings from
+	// package_repositories, applied to every scan container.
+	PackageEnv []string
 	// OpencodeProviders contains provider-scoped images, credentials, state,
 	// config, and egress resolved from the operator's YAML configuration.
 	OpencodeProviders map[string]OpencodeProviderConfig
@@ -643,6 +646,9 @@ func (d ContainerRunner) buildContainerBaseArgs(absWork string, hnet hardenedNet
 		"-v", bindMount(absWork, "/work", d.SELinuxRelabel),
 		"-w", workdir,
 	)
+	for _, entry := range d.PackageEnv {
+		args = append(args, "-e", entry)
+	}
 	if supportsHostGatewayAddHost(d.Runtime) {
 		args = append(args, "--add-host", HostGatewayAlias+":"+gwTarget)
 	}
