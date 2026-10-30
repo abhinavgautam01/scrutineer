@@ -438,7 +438,7 @@ func (w *Worker) parseDependenciesOutput(scan *db.Scan, report string, emit func
 				Update("current", false).Error; err != nil {
 				return fmt.Errorf("clear current snapshot: %w", err)
 			}
-			if err := tx.Create(up).Error; err != nil {
+			if err := tx.Session(&gorm.Session{CreateBatchSize: insertBatchSize}).Create(up).Error; err != nil {
 				return fmt.Errorf("save generated sbom: %w", err)
 			}
 		}

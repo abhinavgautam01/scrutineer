@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	sbomMaxUploadBytes = 32 << 20
-	sbomResolveTimeout = 10 * time.Minute
+	sbomMaxUploadBytes  = 32 << 20
+	sbomResolveTimeout  = 10 * time.Minute
+	sbomInsertBatchSize = 50
 )
 
 func (s *Server) registerSBOMRoutes(mux *http.ServeMux) {
@@ -105,7 +106,7 @@ func (s *Server) sbomUpload(w http.ResponseWriter, r *http.Request) {
 			Scope:     scope[p.ID],
 		})
 	}
-	if err := s.DB.Create(&up).Error; err != nil {
+	if err := s.DB.Session(&gorm.Session{CreateBatchSize: sbomInsertBatchSize}).Create(&up).Error; err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
